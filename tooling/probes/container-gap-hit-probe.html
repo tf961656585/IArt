@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>container-gap-hit-probe</title>
+<!--
+  container-gap-hit-probe：核验「容器内空隙（成员之间的空白）命中谁」这一类交互故障。
+
+  背景：画布容器节点（节点组 / Agent 节点容器）用「围栏模型」——容器背板与内部空隙是纯视觉层，
+  命中要穿透到画布（单击不选中容器、拖拽平移视口），容器自身的可点/可拖区域只有容器头交互条
+  （展开态）与折叠卡片（折叠态）。口径见 docs/runtime/画布节点组.md「选择」/ AG-CN-016。
+
+  穿透由投影层（apps/editor/src/features/canvas/components/canvas/nodeCanvasFlowProjection.ts 的
+  CONTAINER_FLOW_NODE_STYLE）在节点包裹层上注入内联 pointer-events:none 实现——React Flow 自己也在
+  包裹层上内联注入 pointerEvents（hasPointerEvents ? 'all' : 'none'，节点自带 style 在其后展开覆盖），
+  内联值压过任何样式表规则：只写 CSS 规则（.react-flow__node-agent { pointer-events: none }）不生效，
+  整个容器矩形仍是实心命中区（Agent 容器空隙单击会选中容器、拖拽会搬走容器，2026-09-23 实测缺陷）。
+
+  jsdom 不实现命中测试（fireEvent.click 直接投递目标节点），单测对此静态绿，故需要本探针。
+
+  用法：用 browser 工具打开本页（无需 viewport 参数）→ 对每个用例调
+  __PROBE.points() 取 gap / header 的屏幕坐标 → 用 clickAt / mouseDown+mouseMove+mouseUp（**必须真实鼠标
+  输入**，用 evaluate 派发合成事件会绕开命中语义、得出假的绿色）→ __PROBE.events() 读事件序列，
+  __PROBE.reset() 清空。
+  判据：空隙点点击/按下时出现 `pane: ...` 且不出现 `node: ...` 才算穿透成立；容器头点必须出现 `node: ...`。
+
+  局限：只验证浏览器命中/cascade 语义，不覆盖 React 装配与真实画布（投影层的接线由
+  apps/editor/src/features/canvas/components/canvas/__tests__/groupDerivedSize.container.test.ts 兜住）。
+-->
+<style>
+  body { font: 13px system-ui; margin: 0; padding: 12px; }
+  .case { margin-bottom: 14px; }
+  .react-flow { position: relative; width: 420px; height: 220px; border: 1px dashed #bbb; }
+  .react-flow__pane { position: absolute; inset: 0; background: #f3f4f6; }
+  .rf-node { position: absolute; left: 20px; top: 20px; width: 380px; height: 180px; }
+  .container-root { position: absolute; inset: 0; pointer-events: none; }
+  .container-surface { position: absolute; inset: 0; pointer-events: none; border: 1px solid #9aa; border-radius: 8px; background: rgba(120, 150, 255, .08); }
+  .container-header { position: absolute; left: 0; right: 0; top: 0; height: 32px; pointer-events: auto; background: rgba(120, 150, 255, .35); }
+  .member { position: absolute; pointer-events: auto; background: #fff; border: 1px solid #9aa; border-radius: 6px; }
+  /* A 复现形态：穿透只写在样式表里（不生效） */
+  .react-flow .react-flow__node-agent { pointer-events: none; }
+  pre { background: #f4f4f4; padding: 6px; min-height: 40px; }
+</style>
+</head>
+<body>
+<div class="case">
+  <strong>A 修复前形态：Agent 容器包裹层只有 CSS 规则 + 内联 all（空隙命中容器，复现）</strong>
+  <div class="react-flow" id="rfA"><div class="react-flow__pane" id="paneA"></div>
+    <div class="react-flow__node react-flow__node-agent rf-node" id="nodeA"
+         style="pointer-events: all; left: 20px; top: 20px;">
+      <div class="container-root">
+        <div class="container-surface"></div>
+        <div class="container-header" id="headerA"></div>
+        <div class="member" style="left: 24px; top: 56px; width: 140px; height: 100px;"></div>
+        <div class="member" style="left: 216px; top: 56px; width: 140px; height: 100px;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="case">
+  <strong>B 修复后形态：Agent 容器包裹层内联 none（投影层注入；空隙穿透到画布）</strong>
+  <div class="react-flow" id="rfB"><div class="react-flow__pane" id="paneB"></div>
+    <div class="react-flow__node react-flow__node-agent rf-node" id="nodeB"
+         style="pointer-events: none; left: 20px; top: 20px;">
+      <div class="container-root">
+        <div class="container-surface"></div>
+        <div class="container-header" id="headerB"></div>
+        <div class="member" style="left: 24px; top: 56px; width: 140px; height: 100px;"></div>
+        <div class="member" style="left: 216px; top: 56px; width: 140px; height: 100px;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="case">
+  <strong>C 节点组（既有口径对照：包裹层内联 none）</strong>
+  <div class="react-flow" id="rfC"><div class="react-flow__pane" id="paneC"></div>
+    <div class="react-flow__node react-flow__node-group iart-canvas-group-node rf-node" id="nodeC"
+         style="pointer-events: none; left: 20px; top: 20px;">
+      <div class="container-root">
+        <div class="container-surface"></div>
+        <div class="container-header" id="headerC"></div>
+        <div class="member" style="left: 24px; top: 56px; width: 140px; height: 100px;"></div>
+        <div class="member" style="left: 216px; top: 56px; width: 140px; height: 100px;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<pre id="log"></pre>
+<script>
+  const events = [];
+  const logEl = document.getElementById('log');
+
+  const cases = { A: 'A', B: 'B', C: 'C' };
+  for (const key of Object.keys(cases)) {
+    const pane = document.getElementById('pane' + key);
+    const node = document.getElementById('node' + key);
+    pane.addEventListener('mousedown', (e) => record(key, 'pane', 'mousedown', e));
+    pane.addEventListener('click', (e) => record(key, 'pane', 'click', e));
+    node.addEventListener('mousedown', (e) => record(key, 'node', 'mousedown', e));
+    node.addEventListener('click', (e) => record(key, 'node', 'click', e));
+  }
+
+  function record(caseKey, surface, type, e) {
+    const target = e.target === null ? null : e.target.id || e.target.className;
+    events.push(`${caseKey}: ${surface}: ${type} (target=${target})`);
+    logEl.textContent = events.join('\n');
+  }
+
+  window.__PROBE = {
+    events: () => events.slice(),
+    reset: () => { events.length = 0; logEl.textContent = ''; },
+    /** 各用例的命中点屏幕坐标：gap = 两个成员之间的空隙，header = 容器头交互条 */
+    points: () => {
+      const out = {};
+      for (const key of Object.keys(cases)) {
+        const rf = document.getElementById('rf' + key).getBoundingClientRect();
+        out[key] = {
+          gap: { x: rf.left + 190, y: rf.top + 115 },     // 两成员之间（x=190 位于 164..236 的空隙带）
+          header: { x: rf.left + 190, y: rf.top + 36 },   // 容器头交互条内
+          member: { x: rf.left + 94, y: rf.top + 106 },   // 成员实体
+        };
+      }
+      return out;
+    },
+  };
+</script>
+</body>
+</html>

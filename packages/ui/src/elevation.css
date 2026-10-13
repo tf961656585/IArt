@@ -1,0 +1,25 @@
+/* ============================================================
+   海拔层级令牌（docs/editor/elevation-z-model.md「层级阶梯」节）
+   Editor / Hub 全部浮层 z-index 的唯一事实源。@iart/ui 浮层组件
+   （dialog/tooltip/popover/select/dropdown-menu/context-menu 等）
+   与两个 app 的业务浮层共同消费；由各 app 的 globals.css @import
+   本文件，Tailwind v4 的 --z-index-* 命名空间令牌生成 z-dock /
+   z-modal 等语义工具类，原生 CSS 消费 var(--z-index-dock)。
+   禁止业务层书写数字散值（guard:elevation-z 阻断）。关键序关系：
+   - z-modal(800) > z-dock(120)：工具弹窗必须盖过 PromptDock。
+   - z-popover(900) > z-modal(800)：弹层经 Radix portal 到 body 后
+     z 直接比较，弹窗内嵌下拉必须盖过弹窗本身。
+   ============================================================ */
+@theme {
+  --z-index-surface-inner: 10;  /* 节点/卡片内部叠层（徽章、状态条、hover 工具行） */
+  --z-index-canvas-overlay: 30; /* 画布内交互覆盖（注释渲染层、框选矩形） */
+  --z-index-canvas-chrome: 40;  /* 画布节点选中态 chrome（加工工具栏、路由动作栏） */
+  --z-index-canvas-banner: 100; /* 画布顶部流程横幅（放置/绑定引导）、角色 dock、低缩放概览 */
+  --z-index-dock: 120;          /* PromptDock 创作面卡片 */
+  --z-index-drawer: 140;        /* 画布侧缘抽屉（写作抽屉） */
+  --z-index-dock-popover: 200;  /* Dock 卡片自身的弹出层（模型选择、参数面板） */
+  --z-index-feedback: 600;      /* 非阻塞去向反馈（ghost chip） */
+  --z-index-modal: 800;         /* 模态弹窗（工具弹窗、确认弹窗）及其遮罩 */
+  --z-index-tooltip: 850;       /* 全局 tooltip（最轻提示，须浮于弹窗） */
+  --z-index-popover: 900;       /* 通用弹出层（下拉/弹出菜单/候选浮层，含弹窗内嵌场景） */
+}

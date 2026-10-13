@@ -1,0 +1,70 @@
+{
+  "fields": {
+    "firstFrameImage": {
+      "label": "First frame image",
+      "description": "Image used as the opening frame; 720p or higher and a 16:9 or 9:16 frame is recommended."
+    },
+    "lastFrameImage": {
+      "label": "Last frame image",
+      "description": "Image used as the closing frame; must be provided together with the first frame image."
+    },
+    "aspectRatio": {
+      "label": "Aspect ratio",
+      "description": "Only 16:9 and 9:16 are supported.",
+      "options": {
+        "ratio_16_9": {
+          "label": "Landscape 16:9"
+        },
+        "ratio_9_16": {
+          "label": "Portrait 9:16"
+        }
+      }
+    },
+    "durationSeconds": {
+      "label": "Duration",
+      "description": "Must be 8 seconds for 1080p.",
+      "options": {
+        "duration_4": {
+          "label": "4 seconds"
+        },
+        "duration_6": {
+          "label": "6 seconds"
+        },
+        "duration_8": {
+          "label": "8 seconds"
+        }
+      }
+    },
+    "resolution": {
+      "label": "Resolution",
+      "description": "1080p is only available with an 8 second duration.",
+      "options": {
+        "resolution_720p": {
+          "label": "720p"
+        },
+        "resolution_1080p": {
+          "label": "1080p"
+        }
+      }
+    },
+    "seed": {
+      "label": "Seed",
+      "description": "Random seed for repeat generation; output is not guaranteed to be identical."
+    }
+  },
+  "ports": {
+    "inputs": {
+      "firstFrameImage": {
+        "name": "First frame"
+      },
+      "lastFrameImage": {
+        "name": "Last frame"
+      }
+    },
+    "outputs": {
+      "video": {
+        "name": "Video"
+      }
+    }
+  }
+}

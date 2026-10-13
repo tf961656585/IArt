@@ -1,0 +1,76 @@
+diff --git a/dist/esm/index.js b/dist/esm/index.js
+index 94e74f12d6785e8c5cb2671667727a69d109713f..a7aec786a973a32fed71ffc586517a99858f2376 100644
+--- a/dist/esm/index.js
++++ b/dist/esm/index.js
+@@ -2019,17 +2019,32 @@ function useResizeObserver() {
+         if (typeof ResizeObserver === 'undefined') {
+             return null;
+         }
++        const lastDimensionsByElement = new WeakMap();
+         return new ResizeObserver((entries) => {
+             const updates = new Map();
+             entries.forEach((entry) => {
+                 const id = entry.target.getAttribute('data-id');
++                if (!id) {
++                    return;
++                }
++                const width = entry.contentRect.width;
++                const height = entry.contentRect.height;
++                const previousDimensions = lastDimensionsByElement.get(entry.target);
++                if (previousDimensions &&
++                    previousDimensions.width === width &&
++                    previousDimensions.height === height) {
++                    return;
++                }
++                lastDimensionsByElement.set(entry.target, { width, height });
+                 updates.set(id, {
+                     id,
+                     nodeElement: entry.target,
+                     force: true,
+                 });
+             });
+-            updateNodeInternals(updates);
++            if (updates.size > 0) {
++                updateNodeInternals(updates);
++            }
+         });
+     });
+     useEffect(() => {
+diff --git a/dist/esm/index.mjs b/dist/esm/index.mjs
+index 94e74f12d6785e8c5cb2671667727a69d109713f..a7aec786a973a32fed71ffc586517a99858f2376 100644
+--- a/dist/esm/index.mjs
++++ b/dist/esm/index.mjs
+@@ -2019,17 +2019,32 @@ function useResizeObserver() {
+         if (typeof ResizeObserver === 'undefined') {
+             return null;
+         }
++        const lastDimensionsByElement = new WeakMap();
+         return new ResizeObserver((entries) => {
+             const updates = new Map();
+             entries.forEach((entry) => {
+                 const id = entry.target.getAttribute('data-id');
++                if (!id) {
++                    return;
++                }
++                const width = entry.contentRect.width;
++                const height = entry.contentRect.height;
++                const previousDimensions = lastDimensionsByElement.get(entry.target);
++                if (previousDimensions &&
++                    previousDimensions.width === width &&
++                    previousDimensions.height === height) {
++                    return;
++                }
++                lastDimensionsByElement.set(entry.target, { width, height });
+                 updates.set(id, {
+                     id,
+                     nodeElement: entry.target,
+                     force: true,
+                 });
+             });
+-            updateNodeInternals(updates);
++            if (updates.size > 0) {
++                updateNodeInternals(updates);
++            }
+         });
+     });
+     useEffect(() => {

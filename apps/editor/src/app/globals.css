@@ -1,0 +1,996 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+/* 海拔层级令牌（唯一事实源在 @iart/ui 源码包）：z-dock/z-modal 等语义
+   工具类与 var(--z-index-*) 的定义点，规格见 docs/editor/elevation-z-model.md。 */
+@import "../../../../packages/ui/src/elevation.css";
+
+/* 滚动条口径（唯一事实源 @iart/ui scrollbar.css，滑块色本地主题注入；spec docs/hub/visual-design.md §5.6） */
+@import "../../../../packages/ui/src/scrollbar.css";
+
+/* streamdown（对话消息 markdown 渲染）内置样式扫描入口。
+   globals.css 位于 apps/editor/src/app/，需回退 4 层到仓库根 node_modules。 */
+@source "../../../../node_modules/streamdown/dist/*.js";
+
+/* @iart/ui 是 workspace 包（dev 直发 dist、桌面构建 alias 到 src），文件位于
+   apps/editor 之外，Tailwind v4 文件系统扫描基准扫不到。显式 @source 扩展扫描
+   边界，让 Dialog 等共享组件 variant 里的工具类（top-[50%] / translate-y-[-50%]
+   / sm:max-w-[42rem] 等）被生成——缺失时 DialogContent 居中定位整体失效，
+   内容层掉到视口外只剩遮罩变暗（与 Hub globals.css 同款注释同款修法）。 */
+@source "../../../../packages/ui/src/**/*.tsx";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Global CSS Reset & Base Typography */
+/* Global CSS Reset & Base Typography */
+/* 1. Modern CSS reset (subset) */
+*,*::before,*::after { box-sizing: border-box; }
+html,body { margin:0; padding:0; height:100%; overflow:hidden; }
+body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+img,video,canvas { display:block; max-width:100%; }
+/* SVG 默认样式，但 React Flow 容器内的 SVG 由库自己管理 */
+svg { display:block; max-width:100%; }
+.react-flow svg, .react-flow__renderer svg, .react-flow__edges svg { display:initial; max-width:initial; }
+/* React Flow：组节点（type=group）由项目自定义 SVG 绘制边框，关闭库默认的 padding/border/background，避免出现双边框相交 */
+.react-flow__node-group.iart-canvas-group-node {
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+  box-shadow: none;
+}
+.react-flow__node-group.iart-canvas-group-node.selectable:hover {
+  box-shadow: none;
+}
+.react-flow__node-group.iart-canvas-group-node.selectable.selected,
+.react-flow__node-group.iart-canvas-group-node.selectable:focus,
+.react-flow__node-group.iart-canvas-group-node.selectable:focus-visible {
+  box-shadow: none;
+}
+/* React Flow：Flow 层隐藏态
+   - 保留节点树挂载，避免缩放切换时“重新加载”体感
+   - 通过隐藏 nodes/edges 的绘制与命中，配合 CanvasOverviewLayer 做低缩放兜底 */
+.iart-canvas--flow-hidden .react-flow__nodes,
+.iart-canvas--flow-hidden .react-flow__edges {
+  visibility: hidden;
+  pointer-events: none;
+}
+/* 兜底：避免边/节点残留命中 */
+.iart-canvas--flow-hidden .react-flow__node,
+.iart-canvas--flow-hidden .react-flow__edge {
+  pointer-events: none;
+}
+/* React Flow：隐藏 companion edge（视觉不可见 + 不可命中） */
+.react-flow__edge.iart-canvas-edge--hidden,
+.react-flow__edge.iart-canvas-edge--hidden * {
+  pointer-events: none !important;
+}
+.react-flow__edge .react-flow__edge-path {
+  stroke: #888;
+  stroke-width: 1.5;
+}
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #3b82f6;
+  stroke-width: 2;
+}
+/* React Flow：MiniMap / attribution 跟随应用主题。
+   库默认令牌是固定浅色（--xy-minimap-background-color-default: #fff 等），
+   库自带深色档只认 .react-flow.dark（应用主题 class 挂在 <html> 上，命中不到），
+   导致深色主题下小地图与右下角 attribution 仍是浅色底。此处改绑应用主题令牌；
+   字符串型 maskColor 等 prop 会以内联 -props 变量压过这里的绑定，JSX 侧不得再传。 */
+.react-flow__minimap {
+  --xy-minimap-background-color: var(--color-bg-alt);
+  --xy-minimap-mask-background-color: rgb(0 0 0 / 0.12);
+}
+[data-theme='dark'] .react-flow__minimap {
+  --xy-minimap-mask-background-color: rgb(255 255 255 / 0.12);
+}
+.react-flow__attribution {
+  --xy-attribution-background-color: rgb(0 0 0 / 0.04);
+}
+[data-theme='dark'] .react-flow__attribution {
+  --xy-attribution-background-color: rgb(255 255 255 / 0.06);
+}
+/* 表单控件 font:inherit 由 Tailwind preflight（base 层）承担，不再重复声明——
+   未分层规则会以 layer 优先级压过 utilities 层的字号工具类（button 上的
+   text-[11px]/text-xs 全部静默失效，PromptDock 画幅 popover 文字溢出即此根因）。
+   cursor:pointer 是 preflight 没有的默认值，下沉进 base 层保留默认、不挡 utilities。 */
+@layer base {
+  button { cursor:pointer; }
+}
+:root {
+  /* color-scheme 缺省时 Chromium 原生控件按浅色渲染（深色白条根因）；滑块色本地注入，spec docs/hub/visual-design.md §5.6 */
+  color-scheme: light;
+  --scrollbar-thumb: oklch(0 0 0 / 0.22);
+  --scrollbar-thumb-hover: oklch(0 0 0 / 0.38);
+  /* Light theme defaults */
+  --color-brand: #1f2430;
+  --color-brand-accent: #3a3f52;
+  --color-bg: #ffffff;
+  --color-bg-alt: #f5f7fa;
+  --color-bg-muted: #f0f2f8;
+  --color-fg: #1f2430;
+  --color-fg-muted: #5a6275;
+  --color-border: #dfe3e8;
+  --color-danger: #d32f2f;
+  --color-warning: #ed6c02;
+  --color-success: #2e7d32;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-sm: 0 1px 2px rgba(5,9,15,.28);
+  --shadow-md: 0 6px 14px -4px rgba(11,16,26,.35);
+  --shadow-lg: 0 16px 38px -8px rgba(10,18,34,.4);
+  --transition-fast: .15s cubic-bezier(.4,0,.2,1);
+  --transition-base: .25s cubic-bezier(.4,0,.2,1);
+  --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  --container-max: 1280px;
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.5 0 0);
+  /* 阴影梯度（docs/editor/visual-design.md §5.9：浅色冷调低 alpha ≤0.14） */
+  --shadow-sm: 0 1px 2px 0 oklch(0.21 0.025 277 / 0.10);
+  --shadow-md: 0 6px 14px -4px oklch(0.21 0.025 277 / 0.12);
+  --shadow-lg: 0 16px 38px -8px oklch(0.21 0.025 277 / 0.14);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  /* 语义状态色（docs/editor/visual-design.md §5.5：六态三档明度翻转）。
+     浅色档锚定值对齐 prototypes/shared/node-prototype.css；状态文字用 -text 后缀令牌，
+     禁止直接复用 500 档做浅色文字色（白底不达 4.5:1）。 */
+  --st-submitting: #0284c7;
+  --st-generating: #2563eb;
+  --st-polling: #ca8a04;
+  --st-succeeded: #047857;
+  --st-failed: #dc2626;
+  --st-cancelled: #4b5563;
+  --st-generating-text: #2563eb;
+  --st-failed-text: #b91c1c;
+  /* 危险确认填充底（700 档两主题固定，白字达标；文字令牌禁止反作填充底） */
+  --st-failed-fill: #b91c1c;
+  --st-failed-fill-hover: #dc2626;
+  /* pip 状态点 / badge 徽章（非文本 ≥3:1） */
+  --pip-configured: #047857;
+  --pip-invalid: #dc2626;
+  --pip-unbound: #b45309;
+  --pip-provider-missing: #7c3aed;
+  --badge-configured: #047857;
+  --badge-invalid: #dc2626;
+  --badge-unbound: #b45309;
+  --badge-provider-missing: #7c3aed;
+  /* chrome 环（焦点指示 · 非文本 ≥3:1，WCAG 1.4.11；
+     docs/editor/visual-design.md §5.8，与系统 --ring 分离）。
+     2026-08-28 起只承载焦点语义：节点选中态改走 --select-ring / --select-glow。 */
+  --chrome-ring: oklch(0.5 0 0);
+  /* 节点选中态令牌（对齐设计层 prototypes/shared/node-prototype.css D28：
+     Apple 式 accent 细环 + 柔光晕，选中与焦点语义分离）。
+     --select-ring 实心细环：非文本对比浅 #2563eb ≈5.2:1 / 深 #3b82f6 ≈4.9:1 ≥3:1；
+     --select-glow 同色低透明度光晕填充环外缝隙，box-shadow 参与 transition 淡入。 */
+  --select-ring: #2563eb;
+  --select-glow: rgb(37 99 235 / 0.18);
+  /* Agent 容器身份色（CN-V-01/08，消费方 AgentNode 容器背板/chip/徽章；与 --select-ring 同源蓝系，非文本 ≥3:1；文字档浅 700 / 深 300，禁 500 档直出文字；--agent-surface-nested = 被组包裹 4% 嵌套底档，三层总 tint ≤10%） */
+  --agent-accent: #2563eb;
+  --agent-accent-text: #1d4ed8;
+  --agent-surface-nested: color-mix(in srgb, var(--agent-accent) 4%, transparent);
+  /* 孵化态令牌（明暗分叉，docs/editor/visual-design.md §5.4）：
+     浅色 = 去罩描边（hatch 透明 + 品牌色描边，scrim 子元素改实色卡片，§5.4.2）；
+     深色 = 近黑孵化暗室（令牌在 [data-theme='dark'] 显式定义，保持现状，§5.4.1）。
+     对齐原型层事实源 prototypes/shared/node-prototype.css。 */
+  --hatch-bg: transparent;
+  --hatch-bg-2: transparent;
+  --hatch-glow: transparent;
+  --hatch-border: color-mix(in srgb, var(--st-generating) 38%, transparent);
+  --hatch-sheen: transparent;
+  --hatch-hairline-track: oklch(0 0 0 / 0.08);
+  --hatch-hairline-fill: var(--st-generating);
+  /* scrim 令牌（仅深色暗室消费；浅色子元素实色卡片化，不用 scrim） */
+  --scrim-55: oklch(0 0 0 / 0.55);
+  --scrim-70: oklch(0 0 0 / 0.70);
+  --scrim-text: #fff;
+  --scrim-white: #ffffff;
+  --scrim-danger-text: #fecaca;
+  /* 白 pill 徽章文字（白底恒定 → 700 档固定） */
+  --task-badge-text-submitting: #0369a1;
+  --task-badge-text-generating: #1d4ed8;
+  --task-badge-text-polling: #b45309;
+  --task-badge-text-downloading: #0e7490;
+  --task-badge-text-failed: #b91c1c;
+  --task-badge-text-cancelled: #4b5563;
+  /* 白 pill 内状态点（白底上非文本对比 ≥3:1 → 600 档） */
+  --task-dot-submitting: #0284c7;
+  --task-dot-generating: #2563eb;
+  --task-dot-downloading: #0891b2;
+  --task-dot-polling: #ea580c;
+  /* 媒体表面运行底（任务孵化期 image/video 面，docs/editor/visual-design.md §5.6；
+     对齐原型 2026-08-25 裁定：彩色运行底为「任务运行中」节点背景的内容替身，
+     真实编辑器有媒体位图处显示实际媒体，此令牌供孵化面无内容时消费。两主题同值。） */
+  --media-content-image: linear-gradient(135deg, #667eea 0%, #764ba2 45%, #f093fb 100%);
+  --media-content-video: linear-gradient(135deg, #1a2a6c 0%, #4a5a9c 55%, #7a4ab8 100%);
+  --media-generating-image: linear-gradient(135deg, #667eea 0%, #764ba2 45%, #f093fb 100%);
+  --media-generating-video: linear-gradient(135deg, #1a2a6c 0%, #4a5a9c 55%, #7a4ab8 100%);
+  /* 中性媒体占位（§5.6：中性低饱和，两主题分叉） */
+  --media-placeholder-image: linear-gradient(135deg, oklch(0.92 0.01 277), oklch(0.88 0.015 277));
+  --media-placeholder-video: linear-gradient(135deg, oklch(0.90 0.012 264), oklch(0.85 0.018 264));
+  --media-placeholder-audio: linear-gradient(135deg, oklch(0.92 0.015 185), oklch(0.88 0.02 175));
+}
+
+/* Explicit theme overrides */
+[data-theme='dark'] {
+  /* color-scheme 须随主题块重复声明（.dark class 与 data-theme 属性生效时机不同）；滑块色同 spec §5.6 */
+  color-scheme: dark;
+  --scrollbar-thumb: oklch(1 0 0 / 0.16);
+  --scrollbar-thumb-hover: oklch(1 0 0 / 0.30);
+  --color-brand: #f5f5f5;
+  --color-brand-accent: #e8e8e8;
+  --color-bg: #0f0f10;
+  --color-bg-alt: #161618;
+  --color-bg-muted: #1f1f21;
+  --color-fg: #f5f5f5;
+  --color-fg-muted: #a3a3a8;
+  --color-border: #262628;
+  --color-danger: #ff6b6b;
+  --color-warning: #ff9c54;
+  --color-success: #36d17c;
+  /* 语义状态色（深色档：明度翻转，docs/editor/visual-design.md §5.5） */
+  --st-submitting: #0ea5e9;
+  --st-generating: #3b82f6;
+  --st-polling: #eab308;
+  --st-succeeded: #10b981;
+  --st-failed: #ef4444;
+  --st-cancelled: #6b7280;
+  --st-generating-text: #60a5fa;
+  --st-failed-text: #f87171;
+  --st-failed-fill: #b91c1c;
+  --st-failed-fill-hover: #dc2626;
+  --pip-configured: #10b981;
+  --pip-invalid: #ef4444;
+  --pip-unbound: #f59e0b;
+  --pip-provider-missing: #a855f7;
+  --badge-configured: #047857;
+  --badge-invalid: #dc2626;
+  --badge-unbound: #b45309;
+  --badge-provider-missing: #7c3aed;
+  --chrome-ring: oklch(0.6 0 0);
+  --select-ring: #3b82f6;
+  --select-glow: rgb(59 130 246 / 0.28);
+  /* Agent 容器身份色深色档（随 --select-ring 同源蓝明度翻转；文字 300 档。--agent-surface-nested 在 :root 单点定义，var(--agent-accent) 于 html 元素处随本块解析为深档） */
+  --agent-accent: #3b82f6;
+  --agent-accent-text: #93c5fd;
+  /* 深色孵化暗室令牌（保持现状，显式定义以防继承浅色透明值；§5.4.1）。
+     深色媒体占位同步中性低饱和（被暗室遮盖，无观感影响）。 */
+  --hatch-bg: oklch(0.16 0 0);
+  --hatch-bg-2: oklch(0.22 0 0);
+  --hatch-glow: oklch(0.5 0 0 / 0.14);
+  --hatch-border: oklch(1 0 0 / 0.12);
+  --hatch-sheen: oklch(1 0 0 / 0.06);
+  --hatch-hairline-track: oklch(1 0 0 / 0.10);
+  --hatch-hairline-fill: oklch(1 0 0 / 0.55);
+  --media-placeholder-image: linear-gradient(135deg, oklch(0.26 0.015 277), oklch(0.22 0.02 277));
+  --media-placeholder-video: linear-gradient(135deg, oklch(0.24 0.015 264), oklch(0.20 0.02 264));
+  --media-placeholder-audio: linear-gradient(135deg, oklch(0.25 0.018 180), oklch(0.20 0.02 175));
+  /* 深色阴影（§5.9：顶部 1px 亮边 + 底部克制暗影配方在浮层组件按需叠加） */
+  --shadow-sm: 0 1px 2px 0 oklch(0 0 0 / 0.3);
+  --shadow-md: 0 4px 12px -2px oklch(0 0 0 / 0.4), 0 2px 4px -1px oklch(0 0 0 / 0.3);
+  --shadow-lg: 0 16px 32px -8px oklch(0 0 0 / 0.5), 0 4px 8px -2px oklch(0 0 0 / 0.35);
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+  --scrollbar-thumb: oklch(0 0 0 / 0.22);
+  --scrollbar-thumb-hover: oklch(0 0 0 / 0.38);
+  --color-brand: #1f2430;
+  --color-brand-accent: #3a3f52;
+  --color-bg: #ffffff;
+  --color-bg-alt: #f5f7fa;
+  --color-bg-muted: #f0f2f8;
+  --color-fg: #1f2430;
+  --color-fg-muted: #5a6275;
+  --color-border: #dfe3e8;
+  --color-danger: #d32f2f;
+  --color-warning: #ed6c02;
+  --color-success: #2e7d32;
+}
+
+body { font-family: var(--font-sans); background: var(--color-bg); color: var(--color-fg); line-height:1.55; }
+
+/* Typography scale */
+h1,h2,h3,h4,h5,h6 { font-weight:600; line-height:1.2; margin: 1.2em 0 .5em; }
+p { margin: 0 0 1em; }
+small { font-size: .875em; }
+a:not([data-slot="button"]):not([data-slot="button"] *) { color: var(--color-brand); text-decoration:none; transition: color var(--transition-fast); }
+a:not([data-slot="button"]):not([data-slot="button"] *):hover { color: var(--color-brand-accent); }
+
+/* Utilities (avoid overriding Tailwind core classes) */
+/* NOTE: 删除与 Tailwind 同名的工具类，避免覆盖其断点行为（如 md:hidden/md:flex）。
+   如确需自定义，请使用独立前缀（例如 .u-flex/.u-container）。*/
+.text-muted { color: var(--color-fg-muted); }
+
+/* Responsive helpers */
+@media (max-width: 899px) { .hide-md-down { display:none !important; } }
+@media (min-width: 900px) { .hide-md-up { display:none !important; } }
+
+/* Form Grid（用于模型工作台表单的响应式栅格布局）
+   - 默认行为：repeat(auto-fit, minmax(240px, 1fr))，允许窄控件并排，宽控件占整行
+   - 自定义控件可通过 data-col-span 或响应式 props 覆盖列跨度
+*/
+.form-grid {
+  --form-grid-min-column: 240px;
+  --form-grid-gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--form-grid-min-column), 1fr));
+  gap: var(--form-grid-gap);
+  grid-auto-flow: row dense;
+}
+
+/* 单个表单项在栅格内的默认样式
+   保持与 .form-field 类似的内部结构以兼容现有控件样式
+*/
+.form-item {
+  --form-item-gap: .4rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--form-item-gap);
+}
+
+.form-item[data-preset='compact'] {
+  --form-item-gap: .25rem;
+}
+
+.form-item[data-preset='tall'] {
+  --form-item-gap: .6rem;
+}
+
+/* 确保表单控件在栅格项内撑满宽度 */
+.form-item .form-control,
+.form-item input,
+.form-item textarea,
+.form-item select,
+.form-item .u-select-root {
+  width: 100%;
+}
+
+/* Button framework */
+.u-btn { --btn-bg: var(--color-brand); --btn-fg:#fff; --btn-radius: var(--radius-md); --btn-padding:.55rem 1.1rem; --btn-border:none; --btn-shadow:var(--shadow-sm); --btn-bg-hover: var(--color-brand-accent); display:inline-flex; align-items:center; gap:.5rem; background:var(--btn-bg); color:var(--btn-fg); border:var(--btn-border); border-radius:var(--btn-radius); font-weight:500; line-height:1.2; font-size:.95rem; padding:var(--btn-padding); box-shadow:var(--btn-shadow); transition: background var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast); }
+.u-btn:hover { background:var(--btn-bg-hover); box-shadow:var(--shadow-md); }
+.u-btn:active { transform:translateY(1px); }
+.u-btn:disabled { opacity:.55; cursor:not-allowed; box-shadow:none; }
+.u-btn-outline { --btn-bg:transparent; --btn-fg:var(--color-brand); --btn-border:1px solid var(--color-border); --btn-bg-hover: var(--color-bg-alt); }
+.u-btn-danger { --btn-bg: var(--color-danger); --btn-bg-hover:#ff8282; }
+.u-btn-ghost { --btn-bg:transparent; --btn-fg:var(--color-fg); --btn-bg-hover: var(--color-bg-alt); box-shadow:none; }
+.u-btn-size-sm { font-size:.8rem; padding:.4rem .8rem; }
+.u-btn-size-lg { font-size:1.05rem; padding:.75rem 1.25rem; }
+
+/* Form elements (scoped)
+   将原先对原生元素的全局皮肤收敛到自家表单容器，避免影响外部组件库。
+   仅在 .form-field 包裹下的原生控件应用统一外观；其它位置不再覆盖。 */
+.form-field :is(input[type='text'], input[type='search'], input[type='email'], input[type='number'], textarea, select) {
+  width: 100%;
+  background: var(--color-bg-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: .55rem .75rem;
+  color: var(--color-fg);
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.form-field :is(input, textarea, select):focus {
+  outline: 2px solid var(--color-brand-accent);
+  outline-offset: 2px;
+}
+.form-field :is(input, textarea, select):disabled {
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+/* Form field wrapper */
+.form-field { margin-bottom:1rem; display:flex; flex-direction:column; gap:.4rem; }
+.form-label { font-size:.85rem; font-weight:500; color:var(--color-fg-muted); display:flex; align-items:center; gap:.35rem; }
+.form-optional { font-weight:400; font-size:.75rem; color:var(--color-fg-muted); }
+.form-control { position:relative; }
+.form-input { width:100%; background:var(--color-bg-alt); border:1px solid var(--color-border); border-radius:var(--radius-sm); padding:.6rem .75rem; font-size:.9rem; line-height:1.3; transition:border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast); }
+.form-input:focus { outline:2px solid var(--color-brand-accent); outline-offset:2px; }
+.form-input.is-error { border-color: var(--color-danger); }
+.form-input.is-valid { border-color: var(--color-success); }
+.form-message { font-size:.7rem; line-height:1.2; min-height: .9rem; color: var(--color-fg-muted); }
+.form-message.error { color: var(--color-danger); }
+.form-message.success { color: var(--color-success); }
+.form-description { font-size:.7rem; color: var(--color-fg-muted); }
+
+/* Select component */
+.u-select-root { position:relative; font-size:.9rem; }
+.u-select-trigger { width:100%; text-align:left; background:var(--color-bg-alt); border:1px solid var(--color-border); border-radius:var(--radius-sm); padding:.55rem .75rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; min-height:2.4rem; cursor:pointer; }
+.u-select-trigger:focus { outline:2px solid var(--color-brand-accent); outline-offset:2px; }
+.u-select-placeholder { color: var(--color-fg-muted); }
+.u-select-badge { background:var(--color-brand); color:#fff; padding:.2rem .5rem; border-radius:var(--radius-sm); font-size:.7rem; display:flex; align-items:center; gap:.25rem; animation: u-badge-enter .2s ease; }
+@keyframes u-badge-enter { from { transform:scale(.85); opacity:0; } to { transform:scale(1); opacity:1; } }
+.u-select-clear { margin-left:auto; color:var(--color-fg-muted); font-size:.8rem; border:none; background:transparent; cursor:pointer; }
+.u-select-divider { height:1px; background:var(--color-border); margin:.25rem 0; }
+
+/* File upload */
+.upload-root { border:2px dashed var(--color-border); background:var(--color-bg-muted); padding:1rem; border-radius:var(--radius-md); text-align:center; position:relative; transition:border-color var(--transition-fast), background var(--transition-fast); }
+.upload-root.drag-active { border-color: var(--color-brand); background: rgba(99,122,255,0.08); }
+.upload-instructions { font-size:.8rem; color:var(--color-fg-muted); margin-top:.25rem; }
+.upload-file-list { margin:.75rem 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:.5rem; max-height:200px; overflow:auto; }
+.upload-file { background:var(--color-bg-alt); border:1px solid var(--color-border); padding:.5rem .6rem; border-radius:var(--radius-sm); display:flex; flex-direction:column; gap:.35rem; text-align:left; }
+.upload-file-header { display:flex; align-items:center; gap:.5rem; font-size:.75rem; font-weight:500; }
+.upload-file-progress { height:6px; border-radius:3px; background:var(--color-bg-alt); overflow:hidden; position:relative; }
+.upload-file-progress span { position:absolute; inset:0; background:linear-gradient(90deg,var(--color-brand), var(--color-brand-accent)); width:0%; transition:width .25s ease; }
+.upload-file-status { font-size:.65rem; color:var(--color-fg-muted); display:flex; justify-content:space-between; }
+
+/* Density / spacing helpers (removed custom mt/mb/py to avoid clashing with Tailwind utilities) */
+
+/* Focus visibility (opt-in)
+   说明：原先全局的 :focus-visible 高亮会影响所有可聚焦元素，现改为按需启用。
+   使用方式：在需要可见焦点样式的元素上添加类名 `u-focus-ring` 即可。*/
+.u-focus-ring:focus-visible { outline:2px solid var(--color-brand); outline-offset:3px; border-radius:4px; }
+
+/* 全局滚动条口径上收共享包（@iart/ui scrollbar.css @import；spec docs/hub/visual-design.md §5.6），此处禁止重定义全局 webkit 滚动条。
+   timeline 保留专属横向覆盖；已删除 scrollbar-width/scrollbar-color 标准属性——
+   Chromium 读到非 auto 标准属性会放弃 webkit 伪元素渲染，令下方渐变 thumb 恒为死样式。 */
+.timeline-scrollbar::-webkit-scrollbar { height:8px; }
+.timeline-scrollbar::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); border-radius: 8px; }
+.timeline-scrollbar::-webkit-scrollbar-thumb { background: linear-gradient(180deg,#71717a,#3f3f46); border-radius: 999px; }
+.timeline-scrollbar::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg,#a1a1aa,#52525b); }
+
+/* Card */
+.u-card { background: var(--color-bg-alt); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); position:relative; display:flex; flex-direction:column; min-width:0; }
+.u-card-outlined { background: var(--color-bg); border:1px solid var(--color-border); box-shadow:none; }
+.u-card-ghost { background: transparent; box-shadow:none; }
+.u-card-interactive { cursor:pointer; transition: box-shadow var(--transition-fast), transform var(--transition-fast); }
+.u-card-interactive:hover { box-shadow: var(--shadow-md); }
+.u-card-padding { padding:1rem; }
+.u-card-header { font-weight:600; margin-bottom:.5rem; display:flex; align-items:center; gap:.5rem; }
+.u-card-body { flex:1 1 auto; }
+.u-card-footer { margin-top:1rem; display:flex; gap:.75rem; justify-content:flex-end; }
+
+/* Button minor additions */
+.u-btn-spinner { width:14px; height:14px; border:2px solid rgba(255,255,255,.6); border-top-color:#fff; border-radius:50%; animation: u-btn-spin 0.6s linear infinite; }
+@keyframes u-btn-spin { to { transform: rotate(360deg); } }
+
+/* Canvas node title marquee (hover to scroll when overflow) */
+.iart-title-marquee-container:hover .iart-title-marquee-track[data-overflow="true"] {
+  animation: iart-title-marquee var(--iart-marquee-duration, 6s) linear infinite;
+}
+@keyframes iart-title-marquee {
+  to { transform: translateX(calc(-1 * var(--iart-marquee-shift, 0px))); }
+}
+
+@theme inline { --radius-sm: calc(var(--radius) - 4px); --radius-md: calc(var(--radius) - 2px); --radius-lg: var(--radius); --radius-xl: calc(var(--radius) + 4px); --color-background: var(--background); --color-foreground: var(--foreground); --color-card: var(--card); --color-card-foreground: var(--card-foreground); --color-popover: var(--popover); --color-popover-foreground: var(--popover-foreground); --color-primary: var(--primary); --color-primary-foreground: var(--primary-foreground); --color-secondary: var(--secondary); --color-secondary-foreground: var(--secondary-foreground); --color-muted: var(--muted); --color-muted-foreground: var(--muted-foreground); --color-accent: var(--accent); --color-accent-foreground: var(--accent-foreground); --color-destructive: var(--destructive); --color-border: var(--border); --color-input: var(--input); --color-ring: var(--ring); --color-chart-1: var(--chart-1); --color-chart-2: var(--chart-2); --color-chart-3: var(--chart-3); --color-chart-4: var(--chart-4); --color-chart-5: var(--chart-5); }
+
+.dark { color-scheme: dark; --background: oklch(0.145 0 0); --foreground: oklch(0.985 0 0); --card: oklch(0.205 0 0); --card-foreground: oklch(0.985 0 0); --popover: oklch(0.205 0 0); --popover-foreground: oklch(0.985 0 0); --primary: oklch(0.922 0 0); --primary-foreground: oklch(0.205 0 0); --secondary: oklch(0.269 0 0); --secondary-foreground: oklch(0.985 0 0); --muted: oklch(0.269 0 0); --muted-foreground: oklch(0.708 0 0); --accent: oklch(0.269 0 0); --accent-foreground: oklch(0.985 0 0); --destructive: oklch(0.704 0.191 22.216); --border: oklch(1 0 0 / 10%); --input: oklch(1 0 0 / 15%); --ring: oklch(0.556 0 0); --chart-1: oklch(0.488 0.243 264.376); --chart-2: oklch(0.696 0.17 162.48); --chart-3: oklch(0.769 0.188 70.08); --chart-4: oklch(0.627 0.265 303.9); --chart-5: oklch(0.645 0.246 16.439); }
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50; }
+  body {
+    @apply bg-background text-foreground; } }
+
+/* ============================================================
+   任务节点孵化态（docs/editor/visual-design.md §5.4 / §6；
+   实现层样式事实源=本文件；对齐原型 prototypes/shared/node-task.css）
+   任务节点 = 资产节点的胚胎态：媒体表面 + 孵化 overlay（徽章组 /
+   居中状态胶囊 / 参考 chips / 取消圆钮 / 进度 hairline / 失败、取消
+   overlay）。深色 = 近黑孵化暗室；浅色 = 去罩描边（§5.4.2 分叉）。
+   ============================================================ */
+.task-node .task-surface {
+  position: relative;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* 运行中媒体底色（image/video 孵化面）：内容尚未产出时表面呈现运行底 */
+.task-node .task-surface.is-image { background: var(--media-generating-image); }
+.task-node .task-surface.is-video { background: var(--media-generating-video); }
+
+/* 孵化 veil：深色=暗室（渐变+glow），浅色=透明+品牌色描边（令牌分叉承载） */
+.task-hatch {
+  position: absolute; inset: 0; z-index: 1; border-radius: inherit;
+  border: 1px solid var(--hatch-border);
+  background:
+    radial-gradient(120% 90% at 50% 38%, var(--hatch-glow) 0%, transparent 60%),
+    linear-gradient(180deg, var(--hatch-bg-2), var(--hatch-bg));
+  transition: opacity .35s ease;
+}
+.task-hatch::before {
+  content: ""; position: absolute; inset: 0;
+  background: radial-gradient(56% 44% at 50% 42%, oklch(0.62 0 0 / .10), transparent 70%);
+  animation: iart-hatch-breathe 4.5s ease-in-out infinite;
+}
+.task-hatch::after {
+  content: ""; position: absolute; inset: -20% -40%;
+  background: linear-gradient(115deg, transparent 42%, var(--hatch-sheen) 50%, transparent 58%);
+  transform: translateX(-60%);
+  animation: iart-hatch-sheen 8s linear infinite;
+  animation-play-state: paused;
+}
+.task-node[data-status="generating"] .task-hatch::after { animation-play-state: running; }
+
+/* 左上徽章组：状态白 pill（TaskStatusBadge 同款）+ 任务身份徽章（任务 #N · model_id 直显） */
+.task-badges {
+  position: absolute; left: 8px; top: 8px; z-index: 5;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  pointer-events: none;
+}
+.task-status-badge {
+  display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px;
+  border-radius: 9999px;
+  background: rgba(255,255,255,.9);
+  border: 1px solid rgba(0,0,0,.05);
+  box-shadow: 0 1px 2px rgba(0,0,0,.15);
+  font-size: 10px; font-weight: 500; line-height: 1; white-space: nowrap;
+}
+.task-status-badge .dot { position: relative; width: 10px; height: 10px; flex: none; }
+.task-status-badge .dot i { position: absolute; inset: 0; border-radius: 9999px; }
+.task-status-badge .dot .core { background: var(--dot, var(--task-dot-generating)); }
+.task-status-badge .dot .ping { background: var(--dot, var(--task-dot-generating)); animation: iart-hatch-ping 1s cubic-bezier(0,0,.2,1) infinite; }
+.task-node[data-status="submitting"] .task-status-badge { --dot: var(--task-dot-submitting); color: var(--task-badge-text-submitting); }
+.task-node[data-status="generating"] .task-status-badge { --dot: var(--task-dot-generating); color: var(--task-badge-text-generating); }
+.task-node[data-status="downloading"] .task-status-badge { --dot: var(--task-dot-downloading); color: var(--task-badge-text-downloading); }
+.task-node[data-status="polling"]    .task-status-badge { --dot: var(--task-dot-polling); color: var(--task-badge-text-polling); }
+.task-node[data-status="failed"]     .task-status-badge { color: var(--task-badge-text-failed); }
+.task-node[data-status="cancelled"]  .task-status-badge { color: var(--task-badge-text-cancelled); }
+.task-node[data-status="succeeded"]  .task-status-badge { color: var(--st-succeeded); }
+/* 任务身份徽章（src-badge 同款：黑底白字，媒体标注惯例，两主题一致） */
+.task-id-badge {
+  display: inline-flex; align-items: center;
+  background: rgba(0,0,0,.6); color: var(--scrim-text);
+  border-radius: 9999px; padding: 1px 8px;
+  font-size: 10px; font-weight: 500;
+  white-space: nowrap;
+}
+
+/* 居中状态胶囊（对齐真实 statusOverlay：scrim-55 + spinner + 白字） */
+.task-center {
+  position: absolute; inset: 0; z-index: 4;
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+}
+.task-center .pill {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  min-height: 26px; padding: 5px 12px;
+  border-radius: var(--radius-md);
+  background: var(--scrim-55); color: var(--scrim-text);
+  font-size: 12px; line-height: 1;
+}
+.task-center .pill .row { display: flex; align-items: center; gap: 8px; }
+.task-center .pill .sub {
+  font-size: 10px; color: rgba(255,255,255,.7);
+  font-family: var(--font-mono); line-height: 1;
+}
+.task-center .spinner {
+  width: 12px; height: 12px; border-radius: 9999px; flex: none;
+  border: 2px solid rgba(255,255,255,.4); border-top-color: transparent;
+  animation: iart-hatch-spin 1s linear infinite;
+}
+
+/* 取消白圆钮（运行态常驻，对齐真实 hover 圆钮群 h-6 w-6 bg-white/90） */
+.task-cancel {
+  position: absolute; top: 8px; right: 8px; z-index: 6;
+  width: 24px; height: 24px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: 9999px;
+  background: rgba(255,255,255,.9); color: oklch(0.145 0 0);
+  box-shadow: 0 1px 2px rgba(0,0,0,.2);
+  font-size: 13px; cursor: pointer;
+  transition: background .15s, transform .15s;
+}
+.task-cancel:hover { background: var(--scrim-white); transform: scale(1.06); }
+.task-cancel:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+/* 进度 hairline：2px 底部细线（scaleX 更新，不触发布局），仅 generating */
+.task-hatch-hairline {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 2px; z-index: 3;
+  background: var(--hatch-hairline-track);
+  opacity: 0; transition: opacity .2s;
+}
+.task-node[data-status="generating"] .task-hatch-hairline { opacity: 1; }
+.task-hatch-hairline i {
+  display: block; height: 100%;
+  transform: scaleX(0); transform-origin: left center;
+  background: var(--hatch-hairline-fill);
+  transition: transform .15s linear;
+}
+
+/* 失败 overlay（原因 + 详情折叠 + 动作） */
+.task-failure {
+  position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 5;
+  max-height: calc(100% - 16px);
+  border-radius: var(--radius-md);
+  background: var(--scrim-70); color: var(--scrim-text);
+  padding: 8px 10px; font-size: 12px; line-height: 1.45;
+}
+.task-failure .sum { margin: 0; word-break: break-word; }
+.task-failure details { margin-top: 4px; }
+.task-failure summary { cursor: pointer; font-size: 10px; color: rgba(255,255,255,.8); user-select: none; }
+.task-failure pre {
+  margin: 4px 0 0; font-size: 10px; color: rgba(255,255,255,.9);
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 72px; overflow-y: auto;
+}
+.task-failure .acts { display: flex; gap: 6px; margin-top: 8px; }
+.act-primary {
+  height: 26px; padding: 0 10px; border: none; border-radius: var(--radius-sm);
+  background: rgba(255,255,255,.9); color: oklch(0.145 0 0);
+  font-size: 11px; font-weight: 500; cursor: pointer;
+}
+.act-primary:hover { background: var(--scrim-white); }
+.act-danger {
+  height: 26px; padding: 0 10px;
+  border: 1px solid rgba(255,255,255,.28); border-radius: var(--radius-sm);
+  background: transparent; color: var(--scrim-text);
+  font-size: 11px; font-weight: 500; cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.act-danger:hover {
+  background: rgba(255,255,255,.12); color: var(--scrim-danger-text);
+  border-color: color-mix(in srgb, var(--scrim-danger-text) 50%, transparent);
+}
+.act-primary:focus-visible, .act-danger:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+/* 取消 note（scrim-55，视觉重量低于失败） */
+.task-cancelled-note {
+  position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 5;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  border-radius: var(--radius-md);
+  background: var(--scrim-55); color: var(--scrim-text);
+  padding: 6px 10px; font-size: 11px; line-height: 1.4;
+}
+
+/* 终态 veil：失败红晕（唯一引用主题令牌处）/ 取消静置 */
+.task-node[data-status="failed"] .task-hatch::before {
+  background: radial-gradient(56% 44% at 50% 42%, color-mix(in srgb, var(--st-failed) 12%, transparent), transparent 70%);
+  animation: none;
+}
+.task-node[data-status="failed"] .task-hatch::after { display: none; }
+.task-node[data-status="cancelled"] .task-hatch::before { animation: none; opacity: .5; }
+.task-node[data-status="cancelled"] .task-hatch::after { display: none; }
+
+/* 成功 morph：同框内容替换（外框类名与尺寸不变，≤450ms，只动 opacity） */
+.task-node.morphing .task-hatch { opacity: 0; }
+.task-node.morphing .task-center,
+.task-node.morphing .task-badges,
+.task-node.morphing .task-cancel,
+.task-node.morphing .task-hatch-hairline,
+.task-node.morphing .task-failure,
+.task-node.morphing .task-cancelled-note { opacity: 0; transition: opacity .25s ease; }
+/* 任务节点选中环（2026-08-28 对齐设计层 D28）：双层 box-shadow——2px accent 细环无缝贴合
+   + 4px 柔光晕，与原型 node-task.css .task-node.morph-flash 同构；弃用 outline + offset
+   （缝隙透出画布点阵、硬灰线突兀）。类名与 morph-flash 语义分离：此规则只承载选中态。 */
+.task-node.is-selected {
+  box-shadow: 0 0 0 2px var(--select-ring), 0 0 0 6px var(--select-glow), var(--shadow-md);
+  border-radius: var(--radius-md);
+  transition: box-shadow .15s;
+}
+
+@keyframes iart-hatch-breathe { 0%,100% { opacity: .6; } 50% { opacity: 1; } }
+@keyframes iart-hatch-sheen { 0% { transform: translateX(-60%); } 100% { transform: translateX(160%); } }
+@keyframes iart-hatch-spin { to { transform: rotate(360deg); } }
+@keyframes iart-hatch-ping { 75%,100% { transform: scale(2.2); opacity: 0; } }
+
+/* ============ 孵化态浅色分叉（去罩描边 · 方案 C · §5.4.2）============
+   深色保留近黑孵化暗室；浅色不遮盖媒体表面：品牌色描边 + 实色卡片
+   scrim 子元素 + 实色进度条。深色态零变化（§4 原则 8）。 */
+[data-theme='light'] .task-node .task-hatch { border-width: 1.5px; }
+[data-theme='light'] .task-hatch::before,
+[data-theme='light'] .task-hatch::after { display: none; }
+/* 居中状态胶囊：实色卡片替代 scrim 黑底白字 */
+[data-theme='light'] .task-center .pill {
+  background: var(--card); color: var(--foreground);
+  border: 1px solid var(--border); box-shadow: var(--shadow-md);
+}
+[data-theme='light'] .task-center .pill .sub { color: var(--muted-foreground); }
+[data-theme='light'] .task-center .spinner {
+  border-color: color-mix(in srgb, var(--muted-foreground) 40%, transparent);
+  border-top-color: var(--st-generating);
+}
+/* 白 pill 徽章 / 取消圆钮：浅色在中性占位上加细边增强可见性 */
+[data-theme='light'] .task-status-badge { border-color: var(--border); }
+[data-theme='light'] .task-cancel { border: 1px solid var(--border); }
+/* 失败 overlay：实色卡片 + 失败色强调 */
+[data-theme='light'] .task-failure {
+  background: var(--card); color: var(--foreground);
+  border: 1px solid var(--border); box-shadow: var(--shadow-md);
+}
+[data-theme='light'] .task-failure .sum { color: var(--st-failed-text); }
+[data-theme='light'] .task-failure summary,
+[data-theme='light'] .task-failure pre { color: var(--muted-foreground); }
+[data-theme='light'] .act-primary {
+  background: var(--secondary); color: var(--secondary-foreground);
+  border: 1px solid var(--border);
+}
+[data-theme='light'] .act-primary:hover { background: var(--accent); }
+[data-theme='light'] .act-danger {
+  border: 1px solid var(--border); background: transparent; color: var(--st-failed-text);
+}
+[data-theme='light'] .act-danger:hover {
+  background: color-mix(in srgb, var(--st-failed) 10%, transparent);
+  border-color: color-mix(in srgb, var(--st-failed) 30%, transparent);
+  color: var(--st-failed-text);
+}
+/* 取消 note：实色卡片 */
+[data-theme='light'] .task-cancelled-note {
+  background: var(--card); color: var(--foreground);
+  border: 1px solid var(--border); box-shadow: var(--shadow-sm);
+}
+/* 失败态描边改失败红（深色暗室红晕在浅色不适用，::before 已隐藏） */
+[data-theme='light'] .task-node[data-status="failed"] .task-hatch {
+  border-color: color-mix(in srgb, var(--st-failed) 40%, transparent);
+}
+
+/* ============================================================
+   资产节点媒体满幅面（docs/editor/visual-design.md §5.6 媒体表面三态；
+   对齐原型 prototypes/shared/node-media.css .media-node 形态）
+   image/video 媒体满幅，无头栏、无内嵌 padding；左上来源徽章、
+   hover 元信息、复用动作；选中态走 --select-ring + --select-glow（D28）。
+   ============================================================ */
+.asset-node { border-radius: var(--radius-md); }
+/* flush 媒体选中环（对齐原型 .media-node.flush.selected）：双层 box-shadow——
+   2px accent 细环无缝贴合 + 4px 柔光晕；弃用 outline + offset 2px
+   （缝隙透出画布点阵成「一圈小点」，硬灰线突兀），出现为淡入而非硬线闪现。 */
+.asset-node.is-selected {
+  box-shadow: 0 0 0 2px var(--select-ring), 0 0 0 6px var(--select-glow), var(--shadow-md);
+  transition: box-shadow .15s;
+}
+/* 卡片节点选中（对齐原型 .node.selected）：边框转 accent 蓝 + 外圈柔和光晕
+   （Apple 式，无硬灰线）；走 box-shadow 参与 transition，出现为淡入。
+   供 BaseNodeCard / ContentNodeCard 消费（替代原 tailwind ring-black/70 硬编码）。 */
+.node-card-selected {
+  border-color: var(--select-ring);
+  box-shadow: 0 0 0 4px var(--select-glow), var(--shadow-md);
+}
+.asset-surface {
+  position: relative;
+  height: 100%;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--card);
+  box-shadow: var(--shadow-sm);
+}
+.asset-media {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--media-placeholder-image);
+}
+.asset-empty {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 120px;
+  align-items: center;
+  justify-content: center;
+  background: var(--media-placeholder-image);
+}
+.asset-src-badge {
+  position: absolute; left: 8px; top: 8px; z-index: 5;
+  display: inline-flex; align-items: center;
+  background: rgba(0,0,0,.6); color: var(--scrim-text);
+  border-radius: 9999px; padding: 1px 8px;
+  font-size: 10px; font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.asset-hover-meta {
+  position: absolute; left: 8px; bottom: 8px; z-index: 5;
+  background: rgba(0,0,0,.55); color: var(--scrim-text);
+  border-radius: var(--radius-md); padding: 1px 8px;
+  font-size: 10px; font-family: var(--font-mono);
+  opacity: 0; transition: opacity .15s;
+  pointer-events: none;
+}
+.asset-node:hover .asset-hover-meta { opacity: 1; }
+
+/* ============================================================
+   资产节点选中态双层 chrome（设计层 prototypes/shared/node-chrome.css
+   D17–D27 + H1–H3 的真实实现；表面样式与令牌名逐块对齐原型单一事实源）
+   顶栏 = 媒体加工工具（ghost 28×28 工具钮，A｜sep｜B 分组）；
+   底栏 = 路由动作（用作参考 toggle / 复用 / 删除 inline 确认）。
+   BAR_GAP 14 = 选中环外扩 6px + 视觉余量 8px（D28 后口径，与素材节点
+   NodeToolbar offset 14 一致）。定位/折返/钳制在 AssetNodeChrome.hooks.ts。
+   ============================================================ */
+.node-chrome-top {
+  position: absolute; z-index: var(--z-index-canvas-chrome);
+  display: flex; align-items: center; gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--card); box-shadow: var(--shadow-md);
+  opacity: 0; transform: translateY(-4px); pointer-events: none;
+  transition: opacity .16s cubic-bezier(.4,0,.2,1), transform .16s cubic-bezier(.4,0,.2,1);
+}
+.node-chrome-top.is-visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
+[data-theme='dark'] .node-chrome-top { box-shadow: inset 0 1px 0 oklch(1 0 0 / 8%), var(--shadow-md); }
+.node-chrome-top .grp { display: flex; align-items: center; gap: 2px; }
+.node-chrome-top .sep { width: 1px; align-self: stretch; margin: 4px 6px; background: var(--border); }
+
+/* D18 · 工具钮（ghost 28×28） */
+.tool-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; border: none;
+  border-radius: var(--radius-md);
+  background: transparent; color: var(--foreground);
+  transition: background .12s, transform .08s;
+}
+.tool-btn:hover { background: var(--accent); }
+.tool-btn:active { transform: scale(.96); }
+.tool-btn:focus-visible { outline: 2px solid var(--chrome-ring); outline-offset: 2px; }
+.tool-btn[disabled] { opacity: .4; cursor: not-allowed; }
+.tool-btn[aria-busy="true"] { opacity: .65; }
+.tool-spinner {
+  width: 12px; height: 12px; border-radius: 9999px; flex: none;
+  border: 2px solid color-mix(in srgb, var(--foreground) 30%, transparent);
+  border-top-color: transparent; animation: chrome-spin 1s linear infinite;
+}
+@keyframes chrome-spin { to { transform: rotate(360deg); } }
+
+/* D17/D21 · 底栏（路由动作 chrome） */
+.node-chrome-bottom {
+  position: absolute; z-index: var(--z-index-canvas-chrome);
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--card); box-shadow: var(--shadow-md);
+  opacity: 0; transform: translateY(4px); pointer-events: none;
+  transition: opacity .16s cubic-bezier(.4,0,.2,1), transform .16s cubic-bezier(.4,0,.2,1);
+}
+.node-chrome-bottom.is-visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
+[data-theme='dark'] .node-chrome-bottom { box-shadow: inset 0 1px 0 oklch(1 0 0 / 8%), var(--shadow-md); }
+.node-chrome-bottom .sep { width: 1px; height: 16px; flex: none; background: var(--border); }
+
+/* 使用钮（ghost 文字钮，高 28；H3：不用灰/500 档做文字色） */
+.usage-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 10px; border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent; color: var(--foreground);
+  font-size: 12px; font-weight: 500; white-space: nowrap;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.usage-btn:hover { background: var(--accent); }
+.usage-btn:focus-visible { outline: 2px solid var(--chrome-ring); outline-offset: 2px; }
+.usage-btn[data-active="true"] {
+  background: color-mix(in srgb, var(--st-generating) 14%, transparent);
+  color: var(--st-generating-text);
+  border-color: color-mix(in srgb, var(--st-generating) 30%, transparent);
+}
+.usage-btn[data-active="true"]:hover { background: color-mix(in srgb, var(--st-generating) 20%, transparent); }
+.usage-btn.danger { color: var(--st-failed-text); }
+.usage-btn.danger:hover { background: color-mix(in srgb, var(--st-failed) 10%, transparent); }
+.usage-btn.confirm-fill { background: var(--st-failed-fill); color: var(--scrim-text); } /* 恒定白字（700 档底 ≈5.9:1） */
+.usage-btn.confirm-fill:hover { background: var(--st-failed-fill-hover); }
+
+/* D22 / H1 · hover 媒体钮（暗 scrim 28×28，image/video 资产节点） */
+.asset-media-quick {
+  position: absolute; top: 8px; right: 8px; z-index: 6;
+  display: flex; gap: 4px;
+  opacity: 0; transition: opacity .15s; pointer-events: none;
+}
+.asset-node:hover .asset-media-quick,
+.asset-node:focus-within .asset-media-quick { opacity: 1; pointer-events: auto; }
+.asset-media-quick button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;
+  border: 1px solid oklch(1 0 0 / 0.18); border-radius: 9999px;
+  background: var(--scrim-55); color: var(--scrim-text);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.3);
+  transition: background .12s, transform .12s;
+  cursor: pointer;
+}
+.asset-media-quick button:hover { background: var(--scrim-70); transform: scale(1.06); }
+.asset-media-quick button:focus-visible { outline: 2px solid var(--chrome-ring); outline-offset: 2px; }
+
+/* Agent 节点卡（docs/agent/02-Agent节点与画布投影.md；对齐原型 prototypes/shared/node-agent.css）
+   单节点形态（无成员 240×64，本块承载）：头部（model_id 直显 + 会话标题 + 审批档位）+ 会话摘要
+   副行；容器形态（有成员/折叠）背板与容器头由 AgentNode 内联 Tailwind 承载（CN-V-01~07）；
+   会话历史不在节点上展开；选中环 2px accent 细环 + 柔光晕（容器形态环落背板、单环不叠）。 */
+.agent-node { border-radius: var(--radius-md); }
+.agent-node.is-selected {
+  box-shadow: 0 0 0 2px var(--select-ring), 0 0 0 6px var(--select-glow), var(--shadow-md);
+  transition: box-shadow .15s;
+}
+/* 绑定环（spec 02「绑定态视觉」/06「还原后回落」）：PromptDock 绑定该节点会话期间选中环升级为 2.5px accent 描边（--select-ring，两主题对画布 ≥3:1），对比由描边承担、不新增阴影层。 */
+.agent-node.is-selected.is-bound { box-shadow: 0 0 0 2.5px var(--select-ring), 0 0 0 6px var(--select-glow), var(--shadow-md); }
+.agent-surface {
+  position: relative;
+  display: flex; flex-direction: column; gap: 4px;
+  width: 100%; height: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--card); box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.agent-head { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; }
+/* 状态点：回复中为呼吸圆点（会话进行态，不是进度值），其余态不占视觉重量 */
+.agent-mark { position: relative; flex: none; width: 8px; height: 8px; }
+.agent-mark-pulse {
+  position: absolute; inset: 0; border-radius: 9999px;
+  background: var(--st-generating);
+  animation: iart-hatch-breathe 1.2s ease-in-out infinite;
+}
+.agent-id {
+  flex: none; font-weight: 600; max-width: 60%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.agent-title {
+  flex: 1; min-width: 0; color: var(--muted-foreground);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 头部小标签（审批档位，spec 02「节点身份与数据」）：细边框小字。计数徽章已收敛为折叠态唯一
+   出口（计数=成员数，AG-NP-005/AG-CT-005），由 AgentNode 内联 Tailwind 承载，不再走本类。 */
+.agent-auth {
+  flex: none;
+  font-size: 10px; line-height: 1.4;
+  color: var(--muted-foreground);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 1px 5px; white-space: nowrap;
+}
+.agent-auth { margin-left: auto; }
+.agent-auth[data-mode="yolo"] {
+  color: var(--st-failed-text);
+  border-color: color-mix(in srgb, var(--st-failed) 35%, var(--border));
+}
+.agent-sub {
+  font-size: 11px; color: var(--muted-foreground);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 会话不可用（导入的项目 / 会话被删）：整卡退为次要色，不显示空值 */
+.agent-node[data-session-state="unavailable"] .agent-id { font-weight: 500; color: var(--muted-foreground); }
+.agent-node[data-session-state="unavailable"] .agent-surface { border-style: dashed; }
+
+/* D26 · 「用作参考」飞行反馈 ghost chip（380ms 非阻塞去向反馈）
+   原型挂画布容器（absolute）；真实实现挂 body（视口坐标 → fixed）。 */
+.ref-ghost {
+  position: fixed; z-index: var(--z-index-feedback);
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 9999px;
+  background: var(--card); box-shadow: var(--shadow-md);
+  font-size: 11px; white-space: nowrap; pointer-events: none;
+  transition: transform .38s cubic-bezier(.4,0,.2,1), opacity .38s cubic-bezier(.4,0,.2,1);
+}
+.ref-ghost .thumb {
+  width: 16px; height: 16px; flex: none; border-radius: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+.ref-ghost .thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+/* PromptDock 形态内容区淡入（spec 06）：140ms ease-out 纯 opacity，仅挂形态专属区域（本就随形态重建），输入面不入 → 输入位不跳动；纯淡入即 prefers-reduced-motion 的降级形态。 */
+@keyframes iart-dock-content-in { from { opacity: 0; } to { opacity: 1; } }
+.dock-form-content { animation: iart-dock-content-in .14s ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .node-chrome-top, .node-chrome-bottom { transition: opacity .12s; transform: none; }
+  .tool-btn:active, .asset-media-quick button:hover { transform: none; }
+  .ref-ghost { transition: opacity .12s; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-hatch::before, .task-hatch::after { animation: none; }
+  .task-center .spinner { animation: none; border-top-color: rgba(255,255,255,.4); }
+  .task-status-badge .dot .ping { animation: none; opacity: 0; }
+  .task-hatch-hairline i { transition: none; }
+  .task-node.morphing .task-hatch,
+  .task-node.morphing .task-center,
+  .task-node.morphing .task-badges,
+  .task-node.morphing .task-cancel { transition: none; }
+}
+/* 节点组/容器令牌与共享 keyframes 已下沉组件级 containerNodes.css
+   （GroupNode.tsx / AgentNode.tsx 顶部 import；globals 行数门禁零余量腾行）。 */

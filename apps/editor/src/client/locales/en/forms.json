@@ -1,0 +1,10 @@
+{
+  "json": {
+    "invalid": "That isn't valid JSON. Check that the brackets, quotes, and commas are paired up.",
+    "parseErrorWithMessage": "That isn't valid JSON: {{message}}",
+    "parseError": "That isn't valid JSON. Check that the brackets, quotes, and commas are paired up."
+  },
+  "field": {
+    "optional": "Optional"
+  }
+}

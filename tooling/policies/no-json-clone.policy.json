@@ -1,0 +1,30 @@
+{
+  "zones": [
+    "apps/backend/src",
+    "apps/desktop-shell/src",
+    "apps/editor/src",
+    "apps/hub/src",
+    "packages/contracts/src",
+    "packages/model-asset-runtime/src"
+  ],
+  "boundaryZones": [
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "testing/**"
+  ],
+  "fileExtensions": [".ts", ".tsx", ".cts", ".mts"],
+  "ignorePaths": [
+    "node_modules/**",
+    "**/*.d.ts",
+    "**/*.d.cts",
+    "**/*.d.mts",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**",
+    "**/coverage/**",
+    "dist-desktop/**"
+  ]
+}

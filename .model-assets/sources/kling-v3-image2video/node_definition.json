@@ -1,0 +1,33 @@
+{
+  "node_type": "model",
+  "group_key": "kling",
+  "input_ports": [
+    {
+      "id": "firstFrameImage",
+      "name": "ports.inputs.firstFrameImage.name",
+      "data_type": "image",
+      "field_key": "firstFrameImage",
+      "required": true,
+      "multiple": false,
+      "max_connections": 1
+    },
+    {
+      "id": "lastFrameImage",
+      "name": "ports.inputs.lastFrameImage.name",
+      "data_type": "image",
+      "field_key": "lastFrameImage",
+      "required": false,
+      "multiple": false,
+      "max_connections": 1
+    }
+  ],
+  "output_ports": [
+    {
+      "id": "video",
+      "name": "ports.outputs.video.name",
+      "data_type": "video",
+      "field_key": "output_video",
+      "multiple": true
+    }
+  ]
+}

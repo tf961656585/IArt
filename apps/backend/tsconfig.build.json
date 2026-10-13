@@ -1,0 +1,9 @@
+{
+  "extends": "../../packages/config/tsconfig.cjs.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": ["src/**/*.cts"]
+}

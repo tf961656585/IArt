@@ -1,0 +1,57 @@
+.model-assets/packages/
+node_modules/
+dist/
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+.next/
+out/
+.turbo/
+.env
+.env.local
+.env.*.local
+.env.*
+!.env.example
+.vscode
+.DS_Store
+dist-desktop
+apps/editor/dist-static/
+apps/hub/dist-static/
+.iart-studio-dev/
+
+# Test coverage
+coverage/
+coverage-*/
+*.lcov
+/.cache/
+.pnpm-store/
+.iarts-data/
+
+# Playwright CLI 冒烟测试残留（页面快照 / console 日志）
+.playwright-cli/
+
+# Cloudflare Wrangler
+.wrangler/
+updater.log
+
+.tmp/
+
+# 本机 AI 协作会话目录（仅 plans 曾被使用；目录级忽略防未来 settings 等混入）
+.zcode/
+
+# 凭证文件兜底（当前磁盘无此类文件；防未来私钥/令牌文件被误提交）
+*.pem
+*.key
+*.p12
+.dev.vars
+
+promo-video
+
+# 本机 AI 协作记忆与内部工具（保留磁盘、不入库）
+memory/
+.claude/
+
+# 自部署上传中转服务源码（开源版中转端点由用户自带配置）
+apps/workers/upload/
+
+# publish-opensource 脚本的 main worktree（仅 local 分支使用）
+.publish/

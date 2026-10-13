@@ -1,0 +1,29 @@
+{
+  "zones": [
+    "apps/hub/src"
+  ],
+  "boundaryZones": [],
+  "fileExtensions": [
+    ".ts",
+    ".tsx"
+  ],
+  "ignorePaths": [
+    "node_modules/**",
+    "**/dist/**",
+    "**/dist-static/**",
+    "**/out/**",
+    "**/.next/**",
+    "**/build/**",
+    "**/coverage/**"
+  ],
+  "allowedPatterns": [
+    {
+      "pattern": "^text-\\[10px\\]$",
+      "note": "弹层内装饰文字（PackagePreviewDialog），Editor dock-布局规范 R7 弹层豁免先例允许弹层内 <11px"
+    },
+    {
+      "pattern": "grid-(?:cols|rows)-\\[.*minmax\\(",
+      "note": "响应式网格模板 minmax/repeat(auto-fill,minmax(...))，非百分比栏比"
+    }
+  ]
+}

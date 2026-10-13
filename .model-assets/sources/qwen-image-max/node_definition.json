@@ -1,0 +1,14 @@
+{
+  "node_type": "model",
+  "group_key": "alibaba",
+  "input_ports": [],
+  "output_ports": [
+    {
+      "id": "image",
+      "name": "ports.outputs.image.name",
+      "data_type": "image",
+      "field_key": "output_image",
+      "multiple": true
+    }
+  ]
+}

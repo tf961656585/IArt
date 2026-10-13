@@ -1,0 +1,31 @@
+{
+  "zones": [
+    "apps/desktop-shell/src",
+    "packages/backend-sdk/src",
+    "apps/editor/src/client/utils",
+    "apps/hub/src/client/platform"
+  ],
+  "boundaryZones": [
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "apps/desktop-shell/src/preload.cts",
+    "apps/desktop-shell/src/storage/editor-storage-ipc.cts",
+    "apps/desktop-shell/src/desktop-shell-ipc.cts"
+  ],
+  "allowAssertedTypeSuffixes": ["View", "Projection", "Input", "Row", "Raw", "Payload"],
+  "fileExtensions": [".ts", ".tsx", ".cts", ".mts"],
+  "ignorePaths": [
+    "node_modules/**",
+    "**/*.d.ts",
+    "**/*.d.cts",
+    "**/*.d.mts",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**",
+    "**/coverage/**",
+    "dist-desktop/**"
+  ]
+}

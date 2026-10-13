@@ -1,0 +1,10 @@
+{
+  "dismissToday": "Don't remind me today",
+  "close": "Close",
+  "severity": {
+    "info": "Information",
+    "success": "Success",
+    "warning": "Warning",
+    "error": "Error"
+  }
+}

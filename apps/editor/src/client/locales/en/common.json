@@ -1,0 +1,29 @@
+{
+  "language": {
+    "switcherTooltip": "Change language",
+    "names": {
+      "zh-CN": "Chinese",
+      "en": "English"
+    }
+  },
+  "actions": {
+    "gotoSettings": "Go to settings",
+    "savePreferences": "Save preferences",
+    "saving": "Saving...",
+    "startGeneration": "Start generation",
+    "reset": "Reset",
+    "clear": "Clear",
+    "delete": "Delete"
+  },
+  "login": {
+    "title": "Sign In",
+    "subtitle": "Enter your IARTStudio account credentials to continue.",
+    "username": "Username",
+    "password": "Password",
+    "submit": "Sign in",
+    "submitting": "Signing in...",
+    "errorMissingFields": "Please enter both username and password.",
+    "errorInvalid": "Sign in failed. Check your credentials.",
+    "errorGeneric": "Something went wrong. Please try again."
+  }
+}

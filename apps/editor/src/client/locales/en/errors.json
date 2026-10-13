@@ -1,0 +1,9 @@
+{
+  "httpStatus": {
+    "451": "This service is unavailable in your region due to legal restrictions. Please check your network environment (e.g., proxy/VPN exit region) and retry.",
+    "409": "This action conflicts with the current state — it may have been submitted twice, or the content may have changed. Refresh and try again.",
+    "422": "What you submitted doesn't match the required format. Check your entries and try again.",
+    "429": "You're doing that too quickly. Please wait a moment and try again.",
+    "5xx": "The service is temporarily unavailable. Please try again later; if it keeps failing, contact us."
+  }
+}

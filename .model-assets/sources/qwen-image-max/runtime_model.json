@@ -1,0 +1,294 @@
+{
+  "model_id": "qwen-image-max",
+  "provider_id": "alibaba",
+  "default_task_type": "image",
+  "mode": "image",
+  "role": "generator",
+  "capability": {
+    "input_modalities": [
+      "text"
+    ],
+    "output_modalities": [
+      "image"
+    ],
+    "supports_async_task": false,
+    "supports_streaming": false,
+    "supports_multi_image": false,
+    "supports_reference_media": false,
+    "constraints": []
+  },
+  "parameter_schema": {
+    "schema_type": "object",
+    "fields": [
+      {
+        "field_key": "size",
+        "label": "fields.size.label",
+        "description": "fields.size.description",
+        "required": false,
+        "default_value": "1664x928",
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "select",
+        "enum_options": [
+          {
+            "value": "1664x928",
+            "label": "fields.size.options.1664x928.label"
+          },
+          {
+            "value": "1472x1104",
+            "label": "fields.size.options.1472x1104.label"
+          },
+          {
+            "value": "1328x1328",
+            "label": "fields.size.options.1328x1328.label"
+          },
+          {
+            "value": "1104x1472",
+            "label": "fields.size.options.1104x1472.label"
+          },
+          {
+            "value": "928x1664",
+            "label": "fields.size.options.928x1664.label"
+          }
+        ],
+        "component_props": {}
+      },
+      {
+        "field_key": "watermark",
+        "label": "fields.watermark.label",
+        "required": false,
+        "default_value": false,
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "switch"
+      },
+      {
+        "field_key": "promptExtend",
+        "label": "fields.promptExtend.label",
+        "required": false,
+        "default_value": false,
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "switch"
+      }
+    ],
+    "required_fields": [],
+    "default_values": {
+      "size": "1664x928",
+      "watermark": false,
+      "promptExtend": false
+    },
+    "validation_rules": []
+  },
+  "execution_profile": {
+    "task_type": "image",
+    "supports_async_task": false
+  },
+  "display": {
+    "visible": false,
+    "order": 100
+  },
+  "runtime": {
+    "provider_id": "alibaba",
+    "default_task_type": "image",
+    "mode": "image",
+    "aliases": [
+      "qwen-image"
+    ],
+    "workspace": {
+      "task_list_position": "bottom",
+      "task_queue": {
+        "enabled": true,
+        "max_concurrent": 30
+      }
+    },
+    "api_defaults": {
+      "endpoint": "/v1/images/generations",
+      "method": "POST",
+      "contentType": "application/json"
+    },
+    "payload_rules": {
+      "api.endpoint": {
+        "kind": "literal",
+        "value": "/v1/images/generations"
+      },
+      "api.method": {
+        "kind": "literal",
+        "value": "POST"
+      },
+      "body.model": {
+        "kind": "literal",
+        "value": "qwen-image-max"
+      },
+      "body.prompt": {
+        "kind": "field",
+        "field_key": "__prompt",
+        "transforms": [
+          "trim"
+        ]
+      },
+      "body.size": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "size"
+          }
+        ],
+        "cache_key": "qwenImageMax.size",
+        "options": {
+          "allowed_values": [
+            "1664x928",
+            "1472x1104",
+            "1328x1328",
+            "1104x1472",
+            "928x1664"
+          ],
+          "fallback": "1664x928"
+        }
+      },
+      "body.n": {
+        "kind": "literal",
+        "value": 1
+      },
+      "body.watermark": {
+        "kind": "when",
+        "condition": {
+          "op": "truthy",
+          "field": "watermark"
+        },
+        "truthy": {
+          "kind": "literal",
+          "value": true
+        },
+        "falsy": {
+          "kind": "literal",
+          "value": false
+        }
+      },
+      "body.prompt_extend": {
+        "kind": "when",
+        "condition": {
+          "op": "truthy",
+          "field": "promptExtend"
+        },
+        "truthy": {
+          "kind": "literal",
+          "value": true
+        },
+        "falsy": {
+          "kind": "literal",
+          "value": false
+        }
+      },
+      "prompt": {
+        "kind": "field",
+        "field_key": "__prompt",
+        "transforms": [
+          "trim"
+        ]
+      },
+      "input": {
+        "kind": "field",
+        "field_key": "__prompt",
+        "transforms": [
+          "trim"
+        ]
+      },
+      "meta.size": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "size"
+          }
+        ],
+        "cache_key": "qwenImageMax.size",
+        "options": {
+          "allowed_values": [
+            "1664x928",
+            "1472x1104",
+            "1328x1328",
+            "1104x1472",
+            "928x1664"
+          ],
+          "fallback": "1664x928"
+        }
+      },
+      "meta.model_id": {
+        "kind": "literal",
+        "value": "qwen-image-max"
+      }
+    },
+    "capabilities": {
+      "execution_traits": [
+        "nonBlocking"
+      ]
+    },
+    "schema_defaults": {
+      "size": "1664x928",
+      "watermark": false,
+      "promptExtend": false
+    },
+    "execution_driver": "http_formal_task"
+  },
+  "request_strategy": {
+    "request_stage": "submit",
+    "protocol": "http",
+    "endpoint": "/v1/images/generations",
+    "method": "POST",
+    "header_rules": [],
+    "body_rules": [],
+    "query_rules": []
+  },
+  "result_rule": {
+    "mode": "sync",
+    "submit_response_id_path": "/id"
+  },
+  "result_output_mapping": {
+    "response_mode": "structured_payload",
+    "output_mapping_rules": [
+      {
+        "target": "output.image_url",
+        "source": {
+          "kind": "response",
+          "path": "data"
+        },
+        "required": false,
+        "default_value": null
+      },
+      {
+        "target": "output.text",
+        "source": {
+          "kind": "response",
+          "path": "data.0.revised_prompt"
+        },
+        "required": false,
+        "default_value": null
+      },
+      {
+        "target": "output.text",
+        "source": {
+          "kind": "response",
+          "path": "revised_prompt"
+        },
+        "required": false,
+        "default_value": null
+      }
+    ],
+    "note": "migrated_from_runtime_result_extractor"
+  },
+  "prompt_field": {
+    "field_key": "__prompt",
+    "required": true,
+    "validation_rules": []
+  }
+}

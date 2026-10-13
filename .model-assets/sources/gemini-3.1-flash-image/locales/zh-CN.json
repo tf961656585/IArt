@@ -1,0 +1,100 @@
+{
+  "fields": {
+    "image": {
+      "label": "参考图",
+      "description": "最多 14 张参考图（对象 10 + 角色 4）。"
+    },
+    "aspectRatio": {
+      "label": "画面比例",
+      "description": "共 14 档；不指定时跟随参考图比例，无参考图时为 1:1。",
+      "options": {
+        "auto": {
+          "label": "自动（不指定，跟随参考图比例；无参考图为 1:1）"
+        },
+        "1_1": {
+          "label": "1:1"
+        },
+        "2_3": {
+          "label": "2:3"
+        },
+        "3_2": {
+          "label": "3:2"
+        },
+        "3_4": {
+          "label": "3:4"
+        },
+        "4_3": {
+          "label": "4:3"
+        },
+        "4_5": {
+          "label": "4:5"
+        },
+        "5_4": {
+          "label": "5:4"
+        },
+        "9_16": {
+          "label": "9:16"
+        },
+        "16_9": {
+          "label": "16:9"
+        },
+        "21_9": {
+          "label": "21:9"
+        },
+        "1_4": {
+          "label": "1:4"
+        },
+        "4_1": {
+          "label": "4:1"
+        },
+        "1_8": {
+          "label": "1:8"
+        },
+        "8_1": {
+          "label": "8:1"
+        }
+      }
+    },
+    "imageSize": {
+      "label": "尺寸档",
+      "description": "官方档位：512 / 1K / 2K / 4K。",
+      "options": {
+        "512": {
+          "label": "512px"
+        },
+        "1K": {
+          "label": "1K"
+        },
+        "2K": {
+          "label": "2K"
+        },
+        "4K": {
+          "label": "4K"
+        }
+      }
+    },
+    "mimeType": {
+      "label": "输出格式",
+      "description": "官方 REST reference 仅列出 image/jpeg。",
+      "options": {
+        "image_jpeg": {
+          "label": "image/jpeg"
+        }
+      }
+    }
+  },
+  "ports": {
+    "inputs": {
+      "image": {
+        "name": "参考图",
+        "description": "接入素材或资产节点作为参考图；文生图时留空。"
+      }
+    },
+    "outputs": {
+      "image": {
+        "name": "生成图像",
+        "description": "生成的图像结果。"
+      }
+    }
+  }
+}

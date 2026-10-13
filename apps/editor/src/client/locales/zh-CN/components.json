@@ -1,0 +1,75 @@
+{
+  "fileUpload": {
+    "acceptHint": "（支持 {{accept}}）",
+    "fallbackName": "文件",
+    "moveLeft": "← 左移",
+    "moveRight": "右移 →",
+    "preview": "预览",
+    "remove": "删除",
+    "process": "处理",
+    "processTitle": "图片处理",
+    "processOriginal": "原图",
+    "processResult": "处理结果",
+    "processHint": "点击下方按钮开始检测边缘。",
+    "processRunning": "正在处理，请稍候……",
+    "processThreshold": "边缘阈值",
+    "processThresholdValue": "当前：低 {{low}} / 高 {{high}}",
+    "processRun": "开始边缘检测",
+    "processApply": "应用结果",
+    "processCancel": "取消",
+    "processMissingSource": "无法找到原图。",
+    "processError": "处理图片失败，请重试。",
+    "processApplyError": "没能应用这个处理结果，请重试。",
+    "reorderHint": "，支持排序（左移/右移）",
+    "select": "选择文件",
+    "dimensionHint": "图片长边将自动限制在 {{max}} 像素以内。",
+    "summary": "最多上传 {{count}} 个文件{{reorderHint}}{{acceptHint}}",
+    "validation": {
+      "autoResize": "有 {{count}} 张图片长边超过 {{max}} 像素，已自动缩放以满足限制。",
+      "sizeExceeded": "有 {{count}} 个文件超过 {{maxSizeMB}} MB，已跳过。",
+      "invalidImage": "有 {{count}} 个文件无法读取尺寸或格式不支持，已跳过。"
+    }
+  },
+  "modelSelector": {
+    "placeholder": "选择模型"
+  },
+  "promptDock": {
+    "deploymentReady": "可以生成",
+    "noModels": "还没有可用的模型，请到主窗口「设置 → 服务商与模型」添加",
+    "goFix": "去添加"
+  },
+  "textInputAiEdit": {
+    "title": "AI 修改",
+    "description": "写下你想怎么改，点「开始修改」生成结果，可编辑后再覆盖原文。",
+    "modelLabel": "模型",
+    "noModels": "当前没有可用的对话模型，请到主窗口配置后再试。",
+    "systemPromptLabel": "角色设定（可选）",
+    "systemPromptNone": "未选择角色设定",
+    "noSystemPrompts": "还没有可用的角色设定",
+    "instructionLabel": "你想怎么改",
+    "instructionPlaceholder": "例如：更具体、更电影感；加上镜头与光线；把语气改得更克制……",
+    "templateLabel": "模板",
+    "templatePlaceholder": "选择模板",
+    "resultLabel": "修改结果",
+    "usedModel": "使用模型",
+    "resultPlaceholder": "AI 修改后的内容会显示在这里，你也可以直接编辑。",
+    "cancel": "取消",
+    "running": "修改中…",
+    "regenerate": "重新生成",
+    "start": "开始修改",
+    "apply": "覆盖原文",
+    "errorNoModel": "请先选择模型",
+    "errorRunFailed": "这次没能改出来，请重试。"
+  },
+  "imageSizeSelector": {
+    "aspectRatio": "宽高比",
+    "resolution": "分辨率",
+    "matchUploadLabel": "保持输入比例 ({{ratio}})",
+    "matchUploadDescription": "根据上传图片自动计算 ({{ratio}})",
+    "orientation": {
+      "landscape": "横向",
+      "portrait": "竖向",
+      "square": "方形"
+    }
+  }
+}

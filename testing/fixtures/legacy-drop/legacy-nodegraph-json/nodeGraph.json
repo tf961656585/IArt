@@ -1,0 +1,16 @@
+{
+  "id": "legacy-nodegraph-legacy-drop-v1",
+  "name": "legacy-nodegraph",
+  "nodes": [
+    {
+      "id": "legacy-node-1",
+      "type": "model",
+      "data": {
+        "modelKey": "json-extract",
+        "url": "http://127.0.0.1:4363/files/a.png?x=1"
+      }
+    }
+  ],
+  "edges": [],
+  "settings": {}
+}

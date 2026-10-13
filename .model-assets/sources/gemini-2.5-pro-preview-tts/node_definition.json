@@ -1,0 +1,24 @@
+{
+  "node_type": "model",
+  "group_key": "google",
+  "input_ports": [
+    {
+      "id": "text",
+      "name": "ports.inputs.text.name",
+      "data_type": "text",
+      "field_key": "text",
+      "required": false,
+      "multiple": false,
+      "description": "ports.inputs.text.description"
+    }
+  ],
+  "output_ports": [
+    {
+      "id": "audio",
+      "name": "ports.outputs.audio.name",
+      "data_type": "audio",
+      "field_key": "output_audio",
+      "multiple": true
+    }
+  ]
+}

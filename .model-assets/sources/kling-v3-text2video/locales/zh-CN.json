@@ -1,0 +1,105 @@
+{
+  "fields": {
+    "duration": {
+      "label": "视频时长",
+      "options": {
+        "3": {
+          "label": "3 秒"
+        },
+        "4": {
+          "label": "4 秒"
+        },
+        "5": {
+          "label": "5 秒"
+        },
+        "6": {
+          "label": "6 秒"
+        },
+        "7": {
+          "label": "7 秒"
+        },
+        "8": {
+          "label": "8 秒"
+        },
+        "9": {
+          "label": "9 秒"
+        },
+        "10": {
+          "label": "10 秒"
+        },
+        "11": {
+          "label": "11 秒"
+        },
+        "12": {
+          "label": "12 秒"
+        },
+        "13": {
+          "label": "13 秒"
+        },
+        "14": {
+          "label": "14 秒"
+        },
+        "15": {
+          "label": "15 秒"
+        }
+      }
+    },
+    "resolution": {
+      "label": "清晰度",
+      "options": {
+        "720p": {
+          "label": "720P"
+        },
+        "1080p": {
+          "label": "1080P"
+        },
+        "4k": {
+          "label": "4K"
+        }
+      }
+    },
+    "aspectRatio": {
+      "label": "画幅比例",
+      "options": {
+        "16_9": {
+          "label": "16:9 横屏"
+        },
+        "9_16": {
+          "label": "9:16 竖屏"
+        },
+        "1_1": {
+          "label": "1:1 方形"
+        }
+      }
+    },
+    "audio": {
+      "label": "音频",
+      "options": {
+        "native": {
+          "label": "原生音频"
+        },
+        "off": {
+          "label": "无音频"
+        }
+      }
+    },
+    "multiShot": {
+      "label": "多镜头"
+    },
+    "watermark": {
+      "label": "水印"
+    }
+  },
+  "ports": {
+    "inputs": {
+      "prompt": {
+        "name": "提示词"
+      }
+    },
+    "outputs": {
+      "video": {
+        "name": "视频"
+      }
+    }
+  }
+}

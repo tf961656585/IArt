@@ -1,0 +1,23 @@
+{
+  "package_id": "doubao-seedance-2-0-260128",
+  "engine_version_range": ">=0.0.0",
+  "entry_model": {
+    "model_id": "doubao-seedance-2-0-260128",
+    "relative_path": "runtime_model.json"
+  },
+  "node_definition": {
+    "relative_path": "node_definition.json"
+  },
+  "resources": [],
+  "note": "字节跳动 Seedance 2.0（火山方舟 Ark）官方 tasks 接口异步视频生成能力包",
+  "locales": [
+    {
+      "locale": "zh-CN",
+      "relative_path": "locales/zh-CN.json"
+    },
+    {
+      "locale": "en",
+      "relative_path": "locales/en.json"
+    }
+  ]
+}

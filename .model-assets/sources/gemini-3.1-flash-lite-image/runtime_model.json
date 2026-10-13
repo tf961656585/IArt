@@ -1,0 +1,401 @@
+{
+  "model_id": "gemini-3.1-flash-lite-image",
+  "provider_id": "google",
+  "default_task_type": "image",
+  "mode": "image",
+  "role": "generator",
+  "capability": {
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "output_modalities": [
+      "image"
+    ],
+    "supports_async_task": false,
+    "supports_streaming": false,
+    "supports_multi_image": true,
+    "supports_reference_media": true,
+    "constraints": []
+  },
+  "parameter_schema": {
+    "schema_type": "object",
+    "fields": [
+      {
+        "field_key": "image",
+        "label": "fields.image.label",
+        "description": "fields.image.description",
+        "required": false,
+        "default_value": [],
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "imageUpload",
+        "component_props": {
+          "accept": "image/*",
+          "maxFiles": 14
+        }
+      },
+      {
+        "field_key": "aspectRatio",
+        "label": "fields.aspectRatio.label",
+        "description": "fields.aspectRatio.description",
+        "required": false,
+        "default_value": "auto",
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "select",
+        "enum_options": [
+          {
+            "value": "auto",
+            "label": "fields.aspectRatio.options.auto.label"
+          },
+          {
+            "value": "1:1",
+            "label": "fields.aspectRatio.options.1_1.label"
+          },
+          {
+            "value": "2:3",
+            "label": "fields.aspectRatio.options.2_3.label"
+          },
+          {
+            "value": "3:2",
+            "label": "fields.aspectRatio.options.3_2.label"
+          },
+          {
+            "value": "3:4",
+            "label": "fields.aspectRatio.options.3_4.label"
+          },
+          {
+            "value": "4:3",
+            "label": "fields.aspectRatio.options.4_3.label"
+          },
+          {
+            "value": "4:5",
+            "label": "fields.aspectRatio.options.4_5.label"
+          },
+          {
+            "value": "5:4",
+            "label": "fields.aspectRatio.options.5_4.label"
+          },
+          {
+            "value": "9:16",
+            "label": "fields.aspectRatio.options.9_16.label"
+          },
+          {
+            "value": "16:9",
+            "label": "fields.aspectRatio.options.16_9.label"
+          },
+          {
+            "value": "21:9",
+            "label": "fields.aspectRatio.options.21_9.label"
+          }
+        ],
+        "component_props": {}
+      },
+      {
+        "field_key": "imageSize",
+        "label": "fields.imageSize.label",
+        "description": "fields.imageSize.description",
+        "required": false,
+        "default_value": "1K",
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "select",
+        "enum_options": [
+          {
+            "value": "1K",
+            "label": "fields.imageSize.options.1K.label"
+          }
+        ],
+        "component_props": {}
+      },
+      {
+        "field_key": "mimeType",
+        "label": "fields.mimeType.label",
+        "description": "fields.mimeType.description",
+        "required": false,
+        "default_value": "image/jpeg",
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "select",
+        "enum_options": [
+          {
+            "value": "image/jpeg",
+            "label": "fields.mimeType.options.image_jpeg.label"
+          }
+        ],
+        "component_props": {}
+      }
+    ],
+    "required_fields": [],
+    "default_values": {
+      "image": [],
+      "aspectRatio": "auto",
+      "imageSize": "1K",
+      "mimeType": "image/jpeg"
+    },
+    "validation_rules": []
+  },
+  "execution_profile": {
+    "task_type": "image",
+    "supports_async_task": false
+  },
+  "display": {
+    "visible": true,
+    "order": 100
+  },
+  "runtime": {
+    "provider_id": "google",
+    "default_task_type": "image",
+    "mode": "image",
+    "aliases": [],
+    "payload_format": "json",
+    "workspace": {
+      "task_list_position": "bottom",
+      "task_queue": {
+        "enabled": true,
+        "max_concurrent": 30
+      }
+    },
+    "api_defaults": {
+      "endpoint": "/v1beta/interactions",
+      "method": "POST",
+      "contentType": "application/json"
+    },
+    "payload_rules": {
+      "api.endpoint": {
+        "kind": "literal",
+        "value": "/v1beta/interactions"
+      },
+      "api.method": {
+        "kind": "literal",
+        "value": "POST"
+      },
+      "api.contentType": {
+        "kind": "literal",
+        "value": "application/json"
+      },
+      "body.model": {
+        "kind": "literal",
+        "value": "gemini-3.1-flash-lite-image"
+      },
+      "body.input": {
+        "kind": "compute",
+        "operator": "build_content_blocks",
+        "media_target": "inline_data",
+        "cache_key": "gemini-3.1-flash-lite-image.interactionsInput",
+        "options": {
+          "output_shape": "interactions_input",
+          "parts": [
+            {
+              "part_kind": "text",
+              "value": {
+                "kind": "field",
+                "field_key": "__prompt",
+                "transforms": [
+                  "trim"
+                ]
+              }
+            },
+            {
+              "part_kind": "inline_data",
+              "value": {
+                "kind": "field",
+                "field_key": "image",
+                "transforms": [
+                  "extractUrls"
+                ],
+                "media_target": "inline_data"
+              },
+              "multiple": true,
+              "max_items": 14
+            }
+          ]
+        }
+      },
+      "body.response_format": {
+        "kind": "compute",
+        "operator": "compact_object",
+        "cache_key": "gemini31FlashLiteImageInteractions.responseFormat",
+        "entries": {
+          "type": {
+            "kind": "literal",
+            "value": "image"
+          },
+          "aspect_ratio": {
+            "kind": "when",
+            "condition": {
+              "op": "ne",
+              "field": "aspectRatio",
+              "value": "auto"
+            },
+            "truthy": {
+              "kind": "field",
+              "field_key": "aspectRatio",
+              "transforms": [
+                "trim"
+              ]
+            }
+          },
+          "image_size": {
+            "kind": "compute",
+            "operator": "normalize_enum",
+            "cache_key": "gemini31FlashLiteImageInteractions.imageSize",
+            "args": [
+              {
+                "kind": "field",
+                "field_key": "imageSize",
+                "transforms": [
+                  "trim"
+                ]
+              }
+            ],
+            "options": {
+              "allowed_values": [
+                "1K"
+              ],
+              "fallback": "1K"
+            }
+          },
+          "mime_type": {
+            "kind": "field",
+            "field_key": "mimeType",
+            "transforms": [
+              "trim"
+            ]
+          }
+        }
+      },
+      "prompt": {
+        "kind": "field",
+        "field_key": "__prompt",
+        "transforms": [
+          "trim"
+        ]
+      },
+      "input": {
+        "kind": "field",
+        "field_key": "__prompt",
+        "transforms": [
+          "trim"
+        ]
+      },
+      "meta.model_id": {
+        "kind": "literal",
+        "value": "gemini-3.1-flash-lite-image"
+      },
+      "meta.aspectRatio": {
+        "kind": "field",
+        "field_key": "aspectRatio"
+      },
+      "meta.imageSize": {
+        "kind": "field",
+        "field_key": "imageSize"
+      }
+    },
+    "capabilities": {
+      "execution_traits": [
+        "nonBlocking"
+      ]
+    },
+    "schema_defaults": {
+      "image": [],
+      "aspectRatio": "auto",
+      "imageSize": "1K",
+      "mimeType": "image/jpeg"
+    },
+    "execution_driver": "http_formal_task"
+  },
+  "request_strategy": {
+    "request_stage": "submit",
+    "protocol": "http",
+    "endpoint": "/v1beta/interactions",
+    "method": "POST",
+    "header_rules": [],
+    "body_rules": [],
+    "query_rules": []
+  },
+  "result_rule": {
+    "mode": "sync",
+    "submit_response_id_path": "/id",
+    "failure_condition": {
+      "op": "any",
+      "children": [
+        {
+          "op": "not_empty",
+          "path": "error.message"
+        },
+        {
+          "op": "not_empty",
+          "path": "error.code"
+        },
+        {
+          "op": "not_empty",
+          "path": "error.status"
+        }
+      ]
+    },
+    "error_mapping_rules": [
+      {
+        "target": "code",
+        "source": {
+          "kind": "response",
+          "path": "error.code"
+        },
+        "required": false
+      },
+      {
+        "target": "message",
+        "source": {
+          "kind": "response",
+          "path": "error.message"
+        },
+        "required": false
+      },
+      {
+        "target": "details.remote.status",
+        "source": {
+          "kind": "response",
+          "path": "error.status"
+        },
+        "required": false
+      }
+    ]
+  },
+  "result_output_mapping": {
+    "response_mode": "structured_payload",
+    "output_mapping_rules": [
+      {
+        "target": "output.image_url",
+        "source": {
+          "kind": "response",
+          "path": "steps.[].content"
+        },
+        "required": true
+      },
+      {
+        "target": "output.text",
+        "source": {
+          "kind": "response",
+          "path": "steps.[].content"
+        },
+        "required": false,
+        "default_value": null
+      }
+    ],
+    "note": "Gemini Interactions API：遍历 steps[]，取 type==model_output 的 content[] 中的图像块 data（base64 内联）"
+  },
+  "prompt_field": {
+    "field_key": "__prompt",
+    "required": true,
+    "validation_rules": []
+  }
+}

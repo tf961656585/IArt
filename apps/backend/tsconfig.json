@@ -1,0 +1,10 @@
+{
+  "extends": "../../packages/config/tsconfig.cjs.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*.cts", "src/**/*.ts"]
+}

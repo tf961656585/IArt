@@ -1,0 +1,16 @@
+{
+  "node_type": "model",
+  "group_key": "alibaba",
+  "icon_ref": "provider-alibaba-icon",
+  "input_ports": [],
+  "output_ports": [
+    {
+      "id": "image",
+      "name": "ports.outputs.image.name",
+      "data_type": "image",
+      "field_key": "output_image",
+      "required": false,
+      "multiple": true
+    }
+  ]
+}

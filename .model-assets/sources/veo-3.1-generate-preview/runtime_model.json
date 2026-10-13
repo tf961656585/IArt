@@ -1,0 +1,512 @@
+{
+  "model_id": "veo-3.1-generate-preview",
+  "provider_id": "google",
+  "default_task_type": "video",
+  "mode": "video",
+  "role": "generator",
+  "capability": {
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "output_modalities": [
+      "video"
+    ],
+    "supports_async_task": true,
+    "supports_streaming": false,
+    "supports_multi_image": true,
+    "supports_reference_media": true,
+    "constraints": []
+  },
+  "parameter_schema": {
+    "schema_type": "object",
+    "fields": [
+      {
+        "field_key": "firstFrameImage",
+        "label": "fields.firstFrameImage.label",
+        "required": false,
+        "default_value": [],
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "description": "fields.firstFrameImage.description",
+        "component": "imageUpload",
+        "component_props": {
+          "accept": "image/*",
+          "maxFiles": 1
+        }
+      },
+      {
+        "field_key": "lastFrameImage",
+        "label": "fields.lastFrameImage.label",
+        "required": false,
+        "default_value": [],
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "description": "fields.lastFrameImage.description",
+        "component": "imageUpload",
+        "component_props": {
+          "accept": "image/*",
+          "maxFiles": 1
+        }
+      },
+      {
+        "field_key": "referenceImages",
+        "label": "fields.referenceImages.label",
+        "required": false,
+        "default_value": [],
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "description": "fields.referenceImages.description",
+        "component": "imageUpload",
+        "component_props": {
+          "accept": "image/*",
+          "maxFiles": 3
+        }
+      },
+      {
+        "field_key": "aspectRatio",
+        "label": "fields.aspectRatio.label",
+        "description": "fields.aspectRatio.description",
+        "required": false,
+        "default_value": "16:9",
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "select",
+        "enum_options": [
+          {
+            "value": "16:9",
+            "label": "fields.aspectRatio.options.ratio_16_9.label"
+          },
+          {
+            "value": "9:16",
+            "label": "fields.aspectRatio.options.ratio_9_16.label"
+          }
+        ],
+        "component_props": {}
+      },
+      {
+        "field_key": "durationSeconds",
+        "label": "fields.durationSeconds.label",
+        "description": "fields.durationSeconds.description",
+        "required": false,
+        "default_value": "8",
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "select",
+        "enum_options": [
+          {
+            "value": "4",
+            "label": "fields.durationSeconds.options.duration_4.label"
+          },
+          {
+            "value": "6",
+            "label": "fields.durationSeconds.options.duration_6.label"
+          },
+          {
+            "value": "8",
+            "label": "fields.durationSeconds.options.duration_8.label"
+          }
+        ],
+        "component_props": {}
+      },
+      {
+        "field_key": "resolution",
+        "label": "fields.resolution.label",
+        "description": "fields.resolution.description",
+        "required": false,
+        "default_value": "720p",
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "select",
+        "enum_options": [
+          {
+            "value": "720p",
+            "label": "fields.resolution.options.resolution_720p.label"
+          },
+          {
+            "value": "1080p",
+            "label": "fields.resolution.options.resolution_1080p.label"
+          },
+          {
+            "value": "4k",
+            "label": "fields.resolution.options.resolution_4k.label"
+          }
+        ],
+        "component_props": {}
+      },
+      {
+        "field_key": "seed",
+        "label": "fields.seed.label",
+        "description": "fields.seed.description",
+        "required": false,
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "number",
+        "component_props": {}
+      }
+    ],
+    "required_fields": [],
+    "default_values": {
+      "firstFrameImage": [],
+      "lastFrameImage": [],
+      "referenceImages": [],
+      "aspectRatio": "16:9",
+      "durationSeconds": "8",
+      "resolution": "720p"
+    },
+    "validation_rules": []
+  },
+  "execution_profile": {
+    "task_type": "video",
+    "supports_async_task": true
+  },
+  "display": {
+    "visible": true,
+    "order": 100
+  },
+  "runtime": {
+    "provider_id": "google",
+    "default_task_type": "video",
+    "mode": "video",
+    "workspace": {
+      "task_list_position": "right"
+    },
+    "api_defaults": {
+      "contentType": "application/json"
+    },
+    "payload_rules": {
+      "api.endpoint": {
+        "kind": "literal",
+        "value": "/v1beta/models/{model}:predictLongRunning"
+      },
+      "api.method": {
+        "kind": "literal",
+        "value": "POST"
+      },
+      "body.instances": {
+        "kind": "compute",
+        "operator": "array",
+        "cache_key": "veo31Standard.instances",
+        "args": [
+          {
+            "kind": "compute",
+            "operator": "compact_object",
+            "cache_key": "veo31Standard.instance",
+            "entries": {
+              "prompt": {
+                "kind": "when",
+                "condition": {
+                  "op": "truthy",
+                  "field": "__prompt"
+                },
+                "truthy": {
+                  "kind": "field",
+                  "field_key": "__prompt",
+                  "transforms": [
+                    "trim"
+                  ]
+                }
+              },
+              "image": {
+                "kind": "when",
+                "condition": {
+                  "op": "ne",
+                  "field": "firstFrameImage",
+                  "value": []
+                },
+                "truthy": {
+                  "kind": "field",
+                  "field_key": "firstFrameImage",
+                  "transforms": [
+                    "extractFirstUrl"
+                  ],
+                  "media_target": "inline_data"
+                }
+              },
+              "lastFrame": {
+                "kind": "when",
+                "condition": {
+                  "op": "ne",
+                  "field": "lastFrameImage",
+                  "value": []
+                },
+                "truthy": {
+                  "kind": "field",
+                  "field_key": "lastFrameImage",
+                  "transforms": [
+                    "extractFirstUrl"
+                  ],
+                  "media_target": "inline_data"
+                }
+              },
+              "referenceImages": {
+                "kind": "when",
+                "condition": {
+                  "op": "ne",
+                  "field": "referenceImages",
+                  "value": []
+                },
+                "truthy": {
+                  "kind": "compute",
+                  "operator": "map_array",
+                  "cache_key": "veo31Standard.referenceImages",
+                  "media_target": "inline_data",
+                  "options": {
+                    "source": {
+                      "kind": "field",
+                      "field_key": "referenceImages",
+                      "transforms": [
+                        "extractUrls"
+                      ],
+                      "media_target": "inline_data"
+                    },
+                    "item": {
+                      "kind": "compute",
+                      "operator": "object",
+                      "entries": {
+                        "image": {
+                          "kind": "item"
+                        },
+                        "referenceType": {
+                          "kind": "literal",
+                          "value": "asset"
+                        }
+                      }
+                    },
+                    "max_items": 3,
+                    "skip_if_empty": true
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "body.parameters": {
+        "kind": "compute",
+        "operator": "compact_object",
+        "cache_key": "veo31Standard.parameters",
+        "entries": {
+          "aspectRatio": {
+            "kind": "compute",
+            "operator": "normalize_enum",
+            "cache_key": "veo31Standard.aspectRatio",
+            "args": [
+              {
+                "kind": "field",
+                "field_key": "aspectRatio",
+                "transforms": [
+                  "trim"
+                ]
+              }
+            ],
+            "options": {
+              "allowed_values": [
+                "16:9",
+                "9:16"
+              ],
+              "fallback": "16:9"
+            }
+          },
+          "durationSeconds": {
+            "kind": "compute",
+            "operator": "normalize_enum",
+            "cache_key": "veo31Standard.durationSeconds",
+            "args": [
+              {
+                "kind": "field",
+                "field_key": "durationSeconds",
+                "transforms": [
+                  "trim"
+                ]
+              }
+            ],
+            "options": {
+              "allowed_values": [
+                "4",
+                "6",
+                "8"
+              ],
+              "fallback": "8"
+            }
+          },
+          "resolution": {
+            "kind": "compute",
+            "operator": "normalize_enum",
+            "cache_key": "veo31Standard.resolution",
+            "args": [
+              {
+                "kind": "field",
+                "field_key": "resolution",
+                "transforms": [
+                  "trim"
+                ]
+              }
+            ],
+            "options": {
+              "allowed_values": [
+                "720p",
+                "1080p",
+                "4k"
+              ],
+              "fallback": "720p"
+            }
+          },
+          "personGeneration": {
+            "kind": "when",
+            "condition": {
+              "op": "or",
+              "conditions": [
+                {
+                  "op": "ne",
+                  "field": "firstFrameImage",
+                  "value": []
+                },
+                {
+                  "op": "ne",
+                  "field": "referenceImages",
+                  "value": []
+                }
+              ]
+            },
+            "truthy": {
+              "kind": "literal",
+              "value": "allow_adult"
+            },
+            "falsy": {
+              "kind": "literal",
+              "value": "allow_all"
+            }
+          },
+          "seed": {
+            "kind": "when",
+            "condition": {
+              "op": "truthy",
+              "field": "seed"
+            },
+            "truthy": {
+              "kind": "field",
+              "field_key": "seed",
+              "transforms": [
+                "toNumber"
+              ]
+            }
+          }
+        }
+      },
+      "prompt": {
+        "kind": "field",
+        "field_key": "__prompt",
+        "transforms": [
+          "trim"
+        ]
+      },
+      "input": {
+        "kind": "field",
+        "field_key": "__prompt",
+        "transforms": [
+          "trim"
+        ]
+      },
+      "meta.model_id": {
+        "kind": "literal",
+        "value": "veo-3.1-generate-preview"
+      },
+      "meta.aspectRatio": {
+        "kind": "field",
+        "field_key": "aspectRatio"
+      },
+      "meta.durationSeconds": {
+        "kind": "field",
+        "field_key": "durationSeconds"
+      },
+      "meta.resolution": {
+        "kind": "field",
+        "field_key": "resolution"
+      }
+    },
+    "execution_driver": "http_formal_task"
+  },
+  "request_strategy": {
+    "request_stage": "submit",
+    "protocol": "http",
+    "endpoint": "/v1beta/models/{model}:predictLongRunning",
+    "method": "POST",
+    "header_rules": [],
+    "body_rules": [],
+    "query_rules": []
+  },
+  "polling_strategy": {
+    "request": {
+      "url_template": "/v1beta/{operation_name}",
+      "method": "GET",
+      "headers": {},
+      "body": null
+    },
+    "polling": {
+      "intervalMs": 10000,
+      "maxAttempts": 120,
+      "successFieldPaths": [
+        "response.generateVideoResponse.generatedSamples[0].video.uri"
+      ],
+      "successStatuses": [
+        "true"
+      ],
+      "statusFieldPaths": [
+        "done"
+      ],
+      "failureStatuses": [
+        "error",
+        "failed",
+        "failure",
+        "cancelled",
+        "canceled"
+      ],
+      "failureCodePaths": [
+        "error.code"
+      ],
+      "failureMessagePaths": [
+        "error.message",
+        "error.status",
+        "error.details"
+      ]
+    }
+  },
+  "result_rule": {
+    "mode": "async",
+    "submit_response_id_path": "/name"
+  },
+  "result_output_mapping": {
+    "response_mode": "structured_payload",
+    "output_mapping_rules": [
+      {
+        "target": "output.video_url",
+        "source": {
+          "kind": "response",
+          "path": "response.generateVideoResponse.generatedSamples[0].video.uri"
+        },
+        "required": false,
+        "default_value": null
+      }
+    ]
+  },
+  "prompt_field": {
+    "field_key": "__prompt",
+    "required": true,
+    "validation_rules": []
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "fields": {
+    "firstFrameImage": {
+      "label": "首帧图",
+      "description": "作为视频起始画面的图像；建议不低于 720p，画幅为 16:9 或 9:16。"
+    },
+    "lastFrameImage": {
+      "label": "尾帧图",
+      "description": "作为视频结束画面的图像，必须与首帧图一同使用。"
+    },
+    "aspectRatio": {
+      "label": "画幅比例",
+      "description": "仅支持 16:9 与 9:16 两档。",
+      "options": {
+        "ratio_16_9": {
+          "label": "横屏 16:9"
+        },
+        "ratio_9_16": {
+          "label": "竖屏 9:16"
+        }
+      }
+    },
+    "durationSeconds": {
+      "label": "视频时长",
+      "description": "1080p 时必须为 8 秒。",
+      "options": {
+        "duration_4": {
+          "label": "4 秒"
+        },
+        "duration_6": {
+          "label": "6 秒"
+        },
+        "duration_8": {
+          "label": "8 秒"
+        }
+      }
+    },
+    "resolution": {
+      "label": "清晰度",
+      "description": "1080p 仅支持 8 秒时长。",
+      "options": {
+        "resolution_720p": {
+          "label": "720p"
+        },
+        "resolution_1080p": {
+          "label": "1080p"
+        }
+      }
+    },
+    "seed": {
+      "label": "随机种子",
+      "description": "用于重复生成的随机种子，不保证结果完全一致。"
+    }
+  },
+  "ports": {
+    "inputs": {
+      "firstFrameImage": {
+        "name": "首帧图"
+      },
+      "lastFrameImage": {
+        "name": "尾帧图"
+      }
+    },
+    "outputs": {
+      "video": {
+        "name": "视频"
+      }
+    }
+  }
+}

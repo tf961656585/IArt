@@ -1,0 +1,41 @@
+{
+  "fields": {
+    "prompt": {
+      "label": "提示词"
+    },
+    "size": {
+      "label": "画面尺寸",
+      "description": "选择适合当前构图的输出尺寸。",
+      "options": {
+        "1664x928": {
+          "label": "16:9 横屏"
+        },
+        "1472x1104": {
+          "label": "4:3 横屏"
+        },
+        "1328x1328": {
+          "label": "1:1 方形"
+        },
+        "1104x1472": {
+          "label": "3:4 竖屏"
+        },
+        "928x1664": {
+          "label": "9:16 竖屏"
+        }
+      }
+    },
+    "watermark": {
+      "label": "添加水印"
+    },
+    "promptExtend": {
+      "label": "提示词扩写"
+    }
+  },
+  "ports": {
+    "outputs": {
+      "image": {
+        "name": "图像"
+      }
+    }
+  }
+}

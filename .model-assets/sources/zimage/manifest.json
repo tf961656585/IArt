@@ -1,0 +1,29 @@
+{
+  "package_id": "zimage",
+  "engine_version_range": ">=0.0.0",
+  "entry_model": {
+    "model_id": "z-image-turbo",
+    "relative_path": "runtime_model.json"
+  },
+  "node_definition": {
+    "relative_path": "node_definition.json"
+  },
+  "resources": [
+    {
+      "resource_id": "provider-alibaba-icon",
+      "media_type": "image/svg+xml",
+      "relative_path": "resources/alibaba.svg"
+    }
+  ],
+  "note": "single model package for z-image-turbo",
+  "locales": [
+    {
+      "locale": "zh-CN",
+      "relative_path": "locales/zh-CN.json"
+    },
+    {
+      "locale": "en",
+      "relative_path": "locales/en.json"
+    }
+  ]
+}

@@ -1,0 +1,988 @@
+{
+  "model_id": "doubao-seedance-2-0-mini-260615",
+  "provider_id": "bytedance",
+  "default_task_type": "video",
+  "mode": "video",
+  "role": "generator",
+  "capability": {
+    "input_modalities": [
+      "text",
+      "image",
+      "video",
+      "audio"
+    ],
+    "output_modalities": [
+      "video"
+    ],
+    "supports_async_task": true,
+    "supports_streaming": false,
+    "supports_multi_image": true,
+    "supports_reference_media": true,
+    "constraints": []
+  },
+  "parameter_schema": {
+    "schema_type": "object",
+    "fields": [
+      {
+        "field_key": "input_mode",
+        "label": "fields.input_mode.label",
+        "description": "fields.input_mode.description",
+        "required": false,
+        "default_value": "text",
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "select",
+        "enum_options": [
+          {
+            "value": "text",
+            "label": "fields.input_mode.options.text.label",
+            "description": "fields.input_mode.options.text.description"
+          },
+          {
+            "value": "keyframes",
+            "label": "fields.input_mode.options.keyframes.label",
+            "description": "fields.input_mode.options.keyframes.description"
+          },
+          {
+            "value": "reference",
+            "label": "fields.input_mode.options.reference.label",
+            "description": "fields.input_mode.options.reference.description"
+          }
+        ],
+        "component_props": {}
+      },
+      {
+        "field_key": "first_frame",
+        "label": "fields.first_frame.label",
+        "description": "fields.first_frame.description",
+        "required": false,
+        "default_value": [],
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "imageUpload",
+        "component_props": {
+          "accept": "image/*",
+          "maxFiles": 1
+        },
+        "visible_when": {
+          "field": "input_mode",
+          "op": "eq",
+          "value": "keyframes"
+        }
+      },
+      {
+        "field_key": "last_frame",
+        "label": "fields.last_frame.label",
+        "description": "fields.last_frame.description",
+        "required": false,
+        "default_value": [],
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "imageUpload",
+        "component_props": {
+          "accept": "image/*",
+          "maxFiles": 1
+        },
+        "visible_when": {
+          "field": "input_mode",
+          "op": "eq",
+          "value": "keyframes"
+        }
+      },
+      {
+        "field_key": "reference_images",
+        "label": "fields.reference_images.label",
+        "description": "fields.reference_images.description",
+        "required": false,
+        "default_value": [],
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "imageUpload",
+        "component_props": {
+          "accept": "image/*",
+          "maxFiles": 9
+        },
+        "visible_when": {
+          "field": "input_mode",
+          "op": "eq",
+          "value": "reference"
+        }
+      },
+      {
+        "field_key": "reference_videos",
+        "label": "fields.reference_videos.label",
+        "description": "fields.reference_videos.description",
+        "required": false,
+        "default_value": [],
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "file",
+        "component_props": {
+          "accept": "video/mp4,video/*",
+          "maxFiles": 3,
+          "allowMultiple": true
+        },
+        "visible_when": {
+          "field": "input_mode",
+          "op": "eq",
+          "value": "reference"
+        }
+      },
+      {
+        "field_key": "reference_audios",
+        "label": "fields.reference_audios.label",
+        "description": "fields.reference_audios.description",
+        "required": false,
+        "default_value": [],
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "file",
+        "component_props": {
+          "accept": "audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/*",
+          "maxFiles": 3,
+          "allowMultiple": true
+        },
+        "visible_when": {
+          "field": "input_mode",
+          "op": "eq",
+          "value": "reference"
+        }
+      },
+      {
+        "field_key": "resolution",
+        "label": "fields.resolution.label",
+        "description": "fields.resolution.description",
+        "required": false,
+        "default_value": "720p",
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "select",
+        "enum_options": [
+          {
+            "value": "480p",
+            "label": "fields.resolution.options.480p.label"
+          },
+          {
+            "value": "720p",
+            "label": "fields.resolution.options.720p.label"
+          }
+        ],
+        "component_props": {}
+      },
+      {
+        "field_key": "ratio",
+        "label": "fields.ratio.label",
+        "description": "fields.ratio.description",
+        "required": false,
+        "default_value": "adaptive",
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "select",
+        "enum_options": [
+          {
+            "value": "16:9",
+            "label": "fields.ratio.options.16_9.label"
+          },
+          {
+            "value": "4:3",
+            "label": "fields.ratio.options.4_3.label"
+          },
+          {
+            "value": "1:1",
+            "label": "fields.ratio.options.1_1.label"
+          },
+          {
+            "value": "3:4",
+            "label": "fields.ratio.options.3_4.label"
+          },
+          {
+            "value": "9:16",
+            "label": "fields.ratio.options.9_16.label"
+          },
+          {
+            "value": "21:9",
+            "label": "fields.ratio.options.21_9.label"
+          },
+          {
+            "value": "adaptive",
+            "label": "fields.ratio.options.adaptive.label"
+          }
+        ],
+        "component_props": {}
+      },
+      {
+        "field_key": "duration",
+        "label": "fields.duration.label",
+        "description": "fields.duration.description",
+        "required": false,
+        "default_value": "5",
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "select",
+        "enum_options": [
+          {
+            "value": "4",
+            "label": "fields.duration.options.4.label"
+          },
+          {
+            "value": "5",
+            "label": "fields.duration.options.5.label"
+          },
+          {
+            "value": "6",
+            "label": "fields.duration.options.6.label"
+          },
+          {
+            "value": "7",
+            "label": "fields.duration.options.7.label"
+          },
+          {
+            "value": "8",
+            "label": "fields.duration.options.8.label"
+          },
+          {
+            "value": "9",
+            "label": "fields.duration.options.9.label"
+          },
+          {
+            "value": "10",
+            "label": "fields.duration.options.10.label"
+          },
+          {
+            "value": "11",
+            "label": "fields.duration.options.11.label"
+          },
+          {
+            "value": "12",
+            "label": "fields.duration.options.12.label"
+          },
+          {
+            "value": "13",
+            "label": "fields.duration.options.13.label"
+          },
+          {
+            "value": "14",
+            "label": "fields.duration.options.14.label"
+          },
+          {
+            "value": "15",
+            "label": "fields.duration.options.15.label"
+          },
+          {
+            "value": "-1",
+            "label": "fields.duration.options.smart.label"
+          }
+        ],
+        "component_props": {}
+      },
+      {
+        "field_key": "generate_audio",
+        "label": "fields.generate_audio.label",
+        "description": "fields.generate_audio.description",
+        "required": false,
+        "default_value": true,
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "switch"
+      },
+      {
+        "field_key": "return_last_frame",
+        "label": "fields.return_last_frame.label",
+        "description": "fields.return_last_frame.description",
+        "required": false,
+        "default_value": false,
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "switch"
+      },
+      {
+        "field_key": "watermark",
+        "label": "fields.watermark.label",
+        "description": "fields.watermark.description",
+        "required": false,
+        "default_value": false,
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "switch"
+      },
+      {
+        "field_key": "seed",
+        "label": "fields.seed.label",
+        "description": "fields.seed.description",
+        "required": false,
+        "default_value": "",
+        "validation_rules": [],
+        "layout": {
+          "colSpan": 1
+        },
+        "component": "text",
+        "component_props": {}
+      }
+    ],
+    "required_fields": [],
+    "default_values": {
+      "input_mode": "text",
+      "first_frame": [],
+      "last_frame": [],
+      "reference_images": [],
+      "reference_videos": [],
+      "reference_audios": [],
+      "resolution": "720p",
+      "ratio": "adaptive",
+      "duration": "5",
+      "generate_audio": true,
+      "return_last_frame": false,
+      "watermark": false,
+      "seed": ""
+    },
+    "validation_rules": []
+  },
+  "execution_profile": {
+    "task_type": "video",
+    "supports_async_task": true
+  },
+  "display": {
+    "visible": true,
+    "order": 302
+  },
+  "runtime": {
+    "url_input_upload_mode": "public_relay",
+    "provider_id": "bytedance",
+    "default_task_type": "video",
+    "mode": "video",
+    "aliases": [
+      "doubao-seedance-2-0-mini-260615"
+    ],
+    "workspace": {
+      "task_list_position": "right"
+    },
+    "api_defaults": {
+      "contentType": "application/json"
+    },
+    "payload_rules": {
+      "api.endpoint": {
+        "kind": "literal",
+        "value": "/api/v3/contents/generations/tasks"
+      },
+      "api.method": {
+        "kind": "literal",
+        "value": "POST"
+      },
+      "api.contentType": {
+        "kind": "literal",
+        "value": "application/json"
+      },
+      "api.responseHandling.mode": {
+        "kind": "literal",
+        "value": "async"
+      },
+      "body.model": {
+        "kind": "literal",
+        "value": "doubao-seedance-2-0-mini-260615"
+      },
+      "body.content": {
+        "kind": "compute",
+        "operator": "map_array",
+        "cache_key": "doubao-seedance-2-0-mini-260615.payload.content",
+        "note": "按 input_mode 组装官方 content 数组：prepend 文本块，append 首/尾帧与参考视频、参考音频；skip_if_empty 丢弃未启用分支。",
+        "options": {
+          "source": {
+            "kind": "when",
+            "condition": {
+              "op": "eq",
+              "field": "input_mode",
+              "value": "reference"
+            },
+            "truthy": {
+              "kind": "field",
+              "field_key": "reference_images",
+              "transforms": [
+                "extractUrls"
+              ],
+              "media_target": "public_url"
+            },
+            "falsy": {
+              "kind": "literal",
+              "value": []
+            }
+          },
+          "item": {
+            "kind": "compute",
+            "operator": "object",
+            "entries": {
+              "type": {
+                "kind": "literal",
+                "value": "image_url"
+              },
+              "image_url": {
+                "kind": "compute",
+                "operator": "object",
+                "entries": {
+                  "url": {
+                    "kind": "item"
+                  }
+                }
+              },
+              "role": {
+                "kind": "literal",
+                "value": "reference_image"
+              }
+            }
+          },
+          "prepend": [
+            {
+              "kind": "compute",
+              "operator": "object",
+              "entries": {
+                "type": {
+                  "kind": "literal",
+                  "value": "text"
+                },
+                "text": {
+                  "kind": "field",
+                  "field_key": "__prompt",
+                  "transforms": [
+                    "trim"
+                  ]
+                }
+              }
+            }
+          ],
+          "append": [
+            {
+              "kind": "when",
+              "condition": {
+                "op": "and",
+                "conditions": [
+                  {
+                    "op": "eq",
+                    "field": "input_mode",
+                    "value": "keyframes"
+                  },
+                  {
+                    "op": "ne",
+                    "field": "first_frame",
+                    "value": []
+                  }
+                ]
+              },
+              "truthy": {
+                "kind": "compute",
+                "operator": "object",
+                "entries": {
+                  "type": {
+                    "kind": "literal",
+                    "value": "image_url"
+                  },
+                  "image_url": {
+                    "kind": "compute",
+                    "operator": "object",
+                    "entries": {
+                      "url": {
+                        "kind": "field",
+                        "field_key": "first_frame",
+                        "transforms": [
+                          "extractFirstUrl"
+                        ],
+                        "media_target": "public_url"
+                      }
+                    }
+                  },
+                  "role": {
+                    "kind": "literal",
+                    "value": "first_frame"
+                  }
+                }
+              },
+              "falsy": {
+                "kind": "literal",
+                "value": null
+              }
+            },
+            {
+              "kind": "when",
+              "condition": {
+                "op": "and",
+                "conditions": [
+                  {
+                    "op": "eq",
+                    "field": "input_mode",
+                    "value": "keyframes"
+                  },
+                  {
+                    "op": "ne",
+                    "field": "last_frame",
+                    "value": []
+                  }
+                ]
+              },
+              "truthy": {
+                "kind": "compute",
+                "operator": "object",
+                "entries": {
+                  "type": {
+                    "kind": "literal",
+                    "value": "image_url"
+                  },
+                  "image_url": {
+                    "kind": "compute",
+                    "operator": "object",
+                    "entries": {
+                      "url": {
+                        "kind": "field",
+                        "field_key": "last_frame",
+                        "transforms": [
+                          "extractFirstUrl"
+                        ],
+                        "media_target": "public_url"
+                      }
+                    }
+                  },
+                  "role": {
+                    "kind": "literal",
+                    "value": "last_frame"
+                  }
+                }
+              },
+              "falsy": {
+                "kind": "literal",
+                "value": null
+              }
+            },
+            {
+              "kind": "compute",
+              "operator": "map_array",
+              "cache_key": "doubao-seedance-2-0-mini-260615.payload.referenceVideos",
+              "options": {
+                "source": {
+                  "kind": "field",
+                  "field_key": "reference_videos",
+                  "transforms": [
+                    "extractUrls"
+                  ],
+                  "media_target": "public_url"
+                },
+                "item": {
+                  "kind": "compute",
+                  "operator": "object",
+                  "entries": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "video_url"
+                    },
+                    "video_url": {
+                      "kind": "compute",
+                      "operator": "object",
+                      "entries": {
+                        "url": {
+                          "kind": "item"
+                        }
+                      }
+                    },
+                    "role": {
+                      "kind": "literal",
+                      "value": "reference_video"
+                    }
+                  }
+                },
+                "skip_if_empty": true
+              }
+            },
+            {
+              "kind": "compute",
+              "operator": "map_array",
+              "cache_key": "doubao-seedance-2-0-mini-260615.payload.referenceAudios",
+              "options": {
+                "source": {
+                  "kind": "field",
+                  "field_key": "reference_audios",
+                  "transforms": [
+                    "extractUrls"
+                  ],
+                  "media_target": "public_url"
+                },
+                "item": {
+                  "kind": "compute",
+                  "operator": "object",
+                  "entries": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "audio_url"
+                    },
+                    "audio_url": {
+                      "kind": "compute",
+                      "operator": "object",
+                      "entries": {
+                        "url": {
+                          "kind": "item"
+                        }
+                      }
+                    },
+                    "role": {
+                      "kind": "literal",
+                      "value": "reference_audio"
+                    }
+                  }
+                },
+                "skip_if_empty": true
+              }
+            }
+          ],
+          "skip_if_empty": true
+        }
+      },
+      "body.resolution": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "cache_key": "doubao-seedance-2-0-mini-260615.payload.resolution",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "resolution",
+            "transforms": [
+              "trim"
+            ]
+          }
+        ],
+        "options": {
+          "allowed_values": [
+            "480p",
+            "720p"
+          ],
+          "fallback": "720p"
+        }
+      },
+      "body.ratio": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "cache_key": "doubao-seedance-2-0-mini-260615.payload.ratio",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "ratio",
+            "transforms": [
+              "trim"
+            ]
+          }
+        ],
+        "options": {
+          "allowed_values": [
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+            "21:9",
+            "adaptive"
+          ],
+          "fallback": "adaptive"
+        }
+      },
+      "body.duration": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "cache_key": "doubao-seedance-2-0-mini-260615.payload.duration",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "duration",
+            "transforms": [
+              "toNumber"
+            ]
+          }
+        ],
+        "options": {
+          "allowed_values": [
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            -1
+          ],
+          "fallback": 5
+        }
+      },
+      "body.generate_audio": {
+        "kind": "field",
+        "field_key": "generate_audio"
+      },
+      "body.return_last_frame": {
+        "kind": "field",
+        "field_key": "return_last_frame"
+      },
+      "body.watermark": {
+        "kind": "field",
+        "field_key": "watermark"
+      },
+      "body.seed": {
+        "kind": "when",
+        "condition": {
+          "op": "truthy",
+          "field": "seed"
+        },
+        "truthy": {
+          "kind": "field",
+          "field_key": "seed",
+          "transforms": [
+            "trim",
+            "toNumber"
+          ]
+        }
+      },
+      "prompt": {
+        "kind": "field",
+        "field_key": "__prompt",
+        "transforms": [
+          "trim"
+        ]
+      },
+      "input": {
+        "kind": "field",
+        "field_key": "__prompt",
+        "transforms": [
+          "trim"
+        ]
+      },
+      "meta.model_id": {
+        "kind": "literal",
+        "value": "doubao-seedance-2-0-mini-260615"
+      },
+      "meta.input_mode": {
+        "kind": "field",
+        "field_key": "input_mode"
+      },
+      "meta.resolution": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "cache_key": "doubao-seedance-2-0-mini-260615.payload.resolution",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "resolution",
+            "transforms": [
+              "trim"
+            ]
+          }
+        ],
+        "options": {
+          "allowed_values": [
+            "480p",
+            "720p"
+          ],
+          "fallback": "720p"
+        }
+      },
+      "meta.ratio": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "cache_key": "doubao-seedance-2-0-mini-260615.payload.ratio",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "ratio",
+            "transforms": [
+              "trim"
+            ]
+          }
+        ],
+        "options": {
+          "allowed_values": [
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+            "21:9",
+            "adaptive"
+          ],
+          "fallback": "adaptive"
+        }
+      },
+      "meta.duration": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "cache_key": "doubao-seedance-2-0-mini-260615.payload.duration",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "duration",
+            "transforms": [
+              "toNumber"
+            ]
+          }
+        ],
+        "options": {
+          "allowed_values": [
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            -1
+          ],
+          "fallback": 5
+        }
+      },
+      "meta.generate_audio": {
+        "kind": "field",
+        "field_key": "generate_audio"
+      },
+      "meta.return_last_frame": {
+        "kind": "field",
+        "field_key": "return_last_frame"
+      },
+      "meta.watermark": {
+        "kind": "field",
+        "field_key": "watermark"
+      },
+      "meta.seed": {
+        "kind": "when",
+        "condition": {
+          "op": "truthy",
+          "field": "seed"
+        },
+        "truthy": {
+          "kind": "field",
+          "field_key": "seed",
+          "transforms": [
+            "trim"
+          ]
+        }
+      }
+    },
+    "schema_defaults": {
+      "input_mode": "text",
+      "first_frame": [],
+      "last_frame": [],
+      "reference_images": [],
+      "reference_videos": [],
+      "reference_audios": [],
+      "resolution": "720p",
+      "ratio": "adaptive",
+      "duration": "5",
+      "generate_audio": true,
+      "return_last_frame": false,
+      "watermark": false,
+      "seed": ""
+    },
+    "url_input_upload_target_type": "cloudflare_image_public_url",
+    "execution_driver": "http_formal_task"
+  },
+  "request_strategy": {
+    "request_stage": "submit",
+    "protocol": "http",
+    "endpoint": "/api/v3/contents/generations/tasks",
+    "method": "POST",
+    "header_rules": [],
+    "body_rules": [],
+    "query_rules": []
+  },
+  "polling_strategy": {
+    "request": {
+      "url_template": "/api/v3/contents/generations/tasks/{id}",
+      "method": "GET",
+      "headers": {},
+      "body": null
+    },
+    "polling": {
+      "intervalMs": 3000,
+      "maxAttempts": 500,
+      "successFieldPaths": [
+        "content.video_url",
+        "status"
+      ],
+      "successStatuses": [
+        "succeeded"
+      ],
+      "statusFieldPaths": [
+        "status",
+        "data.status"
+      ],
+      "failureStatuses": [
+        "failed",
+        "expired"
+      ],
+      "failureCodePaths": [
+        "error.code"
+      ],
+      "failureMessagePaths": [
+        "error.message",
+        "message",
+        "data.message",
+        "fail_reason"
+      ]
+    }
+  },
+  "result_rule": {
+    "mode": "async",
+    "submit_response_id_path": "/id"
+  },
+  "result_output_mapping": {
+    "response_mode": "structured_payload",
+    "output_mapping_rules": [
+      {
+        "target": "output.video_url",
+        "source": {
+          "kind": "response",
+          "path": "content.video_url"
+        },
+        "required": false,
+        "default_value": null
+      },
+      {
+        "target": "output.video_url",
+        "source": {
+          "kind": "response",
+          "path": "data.content.video_url"
+        },
+        "required": false,
+        "default_value": null
+      }
+    ],
+    "note": "Seedance 2.0 查询成功负载 content.video_url（24h 有效的 mp4 签名直链）；data.content.video_url 为网关包裹形态的兜底路径。"
+  },
+  "prompt_field": {
+    "field_key": "__prompt",
+    "required": true,
+    "validation_rules": []
+  }
+}

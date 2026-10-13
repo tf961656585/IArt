@@ -1,0 +1,39 @@
+{
+  "zones": [
+    "apps/editor/src/client/api",
+    "apps/editor/src/features/canvas/hooks/execution",
+    "apps/backend/src/local-server",
+    "apps/desktop-shell/src",
+    "packages/backend-sdk/src",
+    "packages/chat-adapter/src",
+    "packages/contracts/src"
+  ],
+  "boundaryZones": [
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "tooling/**",
+    "testing/**",
+    "apps/backend/src/local-server/task-engine.cts",
+    "apps/backend/src/local-server/task-executor.cts",
+    "apps/backend/src/local-server/task-result-materializer.cts",
+    "apps/backend/src/local-server/media-download.cts",
+    "apps/backend/src/local-server/media-asset-registry.cts",
+    "apps/backend/src/local-server/project-lock.cts"
+  ],
+  "timeoutNames": ["timeout", "timeoutMs", "*TimeoutMs", "withTimeout"],
+  "fileExtensions": [".ts", ".tsx", ".cts", ".mts"],
+  "ignorePaths": [
+    "node_modules/**",
+    "**/*.d.ts",
+    "**/*.d.cts",
+    "**/*.d.mts",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**",
+    "**/coverage/**",
+    "dist-desktop/**"
+  ]
+}

@@ -1,0 +1,20 @@
+/* ============================================================
+   滚动条口径（spec: docs/hub/visual-design.md §5.6）
+   Editor / Hub 全部滚动条的唯一事实源，由各 app 的 globals.css
+   @import 本文件。形状与交互口径在此定义；滑块颜色经语义令牌
+   --scrollbar-thumb / --scrollbar-thumb-hover 由各 app 主题块注入
+   （两窗口令牌体系不同名，颜色值必须留在本地主题）。
+   口径：细悬浮薄条——7px 细滑块、无轨道底色、中性灰、悬停加深。
+   仅用 ::-webkit-scrollbar 伪元素定制（Electron = Chromium 单内核，
+   无 Firefox 分支）：不设 scrollbar-width / scrollbar-color 标准属性
+   兜底——Chromium 一旦读到非 auto 的标准属性就放弃 webkit 伪元素渲染，
+   标准属性无圆角与透明轨道能力，兜底反而退化（timeline-scrollbar 先例）。
+   已知边界：定制后滚动条为常驻占位型，内容溢出时占 7px 布局宽；
+   真正的浮动隐入形态归 Radix ScrollArea 组件路径（当前两窗口均未消费）。
+   ============================================================ */
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; } /* Windows 端隐藏经典箭头按钮，保持双平台一致 */
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb, oklch(0 0 0 / 25%)); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover, oklch(0 0 0 / 40%)); }

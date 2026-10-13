@@ -1,0 +1,24 @@
+{
+  "name": "@iart/model-asset-runtime",
+  "private": true,
+  "version": "0.0.0",
+  "type": "commonjs",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package-hash": {
+      "types": "./dist/package-hash.d.ts",
+      "default": "./dist/package-hash.js"
+    }
+  },
+  "dependencies": {
+    "@iart/contracts": "workspace:*"
+  },
+  "scripts": {
+    "build": "node ../../tooling/build/up-to-date-runner.mjs @iart/model-asset-runtime --workspace-deps -- \"node ../../tooling/build/clean-dist.mjs dist && tsc -p tsconfig.json\""
+  }
+}

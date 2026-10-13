@@ -1,0 +1,50 @@
+{
+  "appearance": {
+    "ariaLabel": "主题设置",
+    "title": "主题外观",
+    "dark": "深色模式",
+    "light": "浅色模式",
+    "note": "保存后立即生效。"
+  },
+  "account": {
+    "ariaLabel": "账户偏好",
+    "title": "账户与密钥",
+    "usernameLabel": "用户名",
+    "usernamePlaceholder": "用于显示的昵称",
+    "apiBaseLabel": "API Base URL",
+    "apiBasePlaceholder": "例如 https://api.openai.com",
+    "apiKeyLabel": "API Key",
+    "apiKeyPlaceholder": "你的密钥（只保存在本机）",
+    "apiKeySelectPlaceholder": "请选择要使用的密钥",
+    "apiKeyHelper": "选择后保存即可生效。",
+    "apiKeyLoading": "正在获取密钥列表…",
+    "apiKeyLoadError": "没能获取密钥列表，请重试。",
+    "apiKeyInvalidToken": "密钥已失效，请重新登录。",
+    "apiKeyMissing": "请先登录，或重新登录后再试。",
+    "apiKeyRefreshFailed": "没能自动更新登录凭证，请重试。",
+    "refreshTokens": "重新获取密钥列表",
+    "fetchKey": "去获取 API Key",
+    "rebuildToken": "重新生成密钥",
+    "rebuildingToken": "正在重新生成…",
+    "autoSaveHistory": "自动保存历史",
+    "savedAt": "已保存 {{time}}"
+  },
+  "cache": {
+    "ariaLabel": "媒体缓存设置",
+    "title": "媒体缓存",
+    "currentUsage": "当前缓存：{{size}} GB（{{count}} 个文件）",
+    "maxSizeLabel": "存储上限（GB）",
+    "ttlLabel": "保存时长（天）",
+    "cleanupNow": "立即清理",
+    "cleaning": "正在清理…",
+    "confirmTitle": "确认清除{{type}}缓存",
+    "confirmDescription": "清除后这些文件可能就找不回来了，要不要先下载备份？",
+    "downloadBackup": "下载备份",
+    "downloading": "下载中...",
+    "downloaded": "已下载",
+    "confirmClear": "确认清除",
+    "downloadError": "下载失败：{{error}}",
+    "downloadErrorFallback": "下载失败，请重试。",
+    "cacheTypeTask": "任务媒体"
+  }
+}

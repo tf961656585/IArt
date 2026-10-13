@@ -1,0 +1,15 @@
+{
+  "sourceFile": "apps/editor/src/client/api/taskFacade.ts",
+  "functionName": "buildMediaInputFromUploadLikeItem",
+  "contractFile": "packages/contracts/src/task-submit-media-input.ts",
+  "schemaName": "TaskSubmitMediaSourceKindSchema",
+  "requiredSourceKinds": ["base64", "url"],
+  "fileExtensions": [".ts", ".cts"],
+  "ignorePaths": [
+    "node_modules/**",
+    "**/*.d.ts",
+    "**/*.d.cts",
+    "**/dist/**",
+    "**/build/**"
+  ]
+}

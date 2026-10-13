@@ -1,0 +1,41 @@
+{
+  "zones": [
+    "apps/hub/src",
+    "apps/editor/src"
+  ],
+  "boundaryZones": [
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*"
+  ],
+  "fileExtensions": [
+    ".css",
+    ".html"
+  ],
+  "ignorePaths": [
+    "node_modules/**",
+    "**/dist/**",
+    "**/dist-static/**",
+    "**/out/**",
+    "**/.next/**",
+    "**/build/**",
+    "**/coverage/**"
+  ],
+  "runtimeInjectedVars": [
+    "iart-marquee-shift",
+    "iart-marquee-duration",
+    "group-text-light",
+    "group-text-dark",
+    "z-index-surface-inner",
+    "z-index-canvas-overlay",
+    "z-index-canvas-chrome",
+    "z-index-canvas-banner",
+    "z-index-dock",
+    "z-index-drawer",
+    "z-index-dock-popover",
+    "z-index-feedback",
+    "z-index-modal",
+    "z-index-tooltip",
+    "z-index-popover"
+  ]
+}

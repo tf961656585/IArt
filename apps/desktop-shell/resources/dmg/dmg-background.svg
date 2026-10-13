@@ -1,0 +1,63 @@
+<svg width="760" height="540" viewBox="0 0 760 540" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="40" x2="700" y2="520" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F4F8FF" />
+      <stop offset="1" stop-color="#E8F1FF" />
+    </linearGradient>
+    <linearGradient id="card" x1="70" y1="50" x2="640" y2="370" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" />
+      <stop offset="1" stop-color="#F8FBFF" />
+    </linearGradient>
+    <filter id="shadow" x="42" y="32" width="676" height="426" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix" />
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha" />
+      <feOffset dy="8" />
+      <feGaussianBlur stdDeviation="12" />
+      <feComposite in2="hardAlpha" operator="out" />
+      <feColorMatrix type="matrix" values="0 0 0 0 0.231373 0 0 0 0 0.333333 0 0 0 0 0.482353 0 0 0 0.12 0" />
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1" />
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape" />
+    </filter>
+  </defs>
+
+  <rect width="760" height="540" fill="url(#bg)" />
+
+  <g filter="url(#shadow)">
+    <rect x="66" y="46" width="628" height="378" rx="20" fill="url(#card)" />
+    <rect x="66" y="46" width="628" height="378" rx="20" stroke="#D5E2F6" />
+  </g>
+
+  <text x="92" y="92" fill="#1A2A42" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="25" font-weight="700">
+    <tspan x="92" dy="0">如果 macOS 提示应用无法打开或已损坏，</tspan>
+    <tspan x="92" dy="34">请按以下步骤操作：</tspan>
+  </text>
+
+  <text x="96" y="162" fill="#243B63" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="20" font-weight="500">
+    1. 打开 Mac 的“终端”（Terminal）应用。
+  </text>
+  <text x="96" y="196" fill="#243B63" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="20" font-weight="500">
+    2. 输入下面的命令（注意：命令最后要保留一个空格）：
+  </text>
+
+  <rect x="96" y="210" width="566" height="48" rx="10" fill="#0C1E3A" />
+  <text x="118" y="241" fill="#DDEBFF" font-family="Menlo, Monaco, Consolas, monospace" font-size="24" font-weight="700" xml:space="preserve">sudo xattr -cr </text>
+
+  <text x="96" y="286" fill="#243B63" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="20" font-weight="500">
+    3. 将已安装的 App（或 DMG 文件）直接拖入终端窗口。
+  </text>
+  <text x="96" y="320" fill="#243B63" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="20" font-weight="500">
+    4. 按回车键，输入当前 Mac 的登录密码，再按回车确认。
+  </text>
+  <text x="96" y="352" fill="#4A658A" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="18" font-weight="500">
+    （输入密码时终端不会显示字符，这是正常现象）
+  </text>
+  <text x="96" y="386" fill="#1E4E8C" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="22" font-weight="700">
+    执行完成后，再次打开应用即可。
+  </text>
+
+  <line x1="240" y1="438" x2="520" y2="438" stroke="#89A7D6" stroke-width="3" stroke-linecap="round" />
+  <path d="M516 430L530 438L516 446" stroke="#89A7D6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="288" y="468" fill="#355B90" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="18" font-weight="600">
+    拖动 App 到 Applications
+  </text>
+</svg>

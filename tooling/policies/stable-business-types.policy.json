@@ -1,0 +1,83 @@
+{
+  "stableZones": [
+    "apps/backend/src",
+    "apps/desktop-shell/src",
+    "apps/editor/src",
+    "packages/backend-sdk/src",
+    "packages/contracts/src",
+    "packages/domain/src",
+    "packages/utils/src"
+  ],
+  "boundaryZones": [
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "testing/**",
+    "tooling/**",
+    "packages/contracts/src/model-asset-contract.ts",
+    "packages/contracts/src/unified-generation.ts",
+    "packages/contracts/src/runtime-transaction.ts",
+    "packages/contracts/src/hub-contract.ts",
+    "**/adapter/**",
+    "**/adapters/**",
+    "**/parser/**",
+    "**/parsers/**",
+    "**/raw/**",
+    "**/external/**",
+    "**/legacy/**",
+    "**/migration/**",
+    "**/migrations/**"
+  ],
+  "openMapNames": [
+    "*Map",
+    "*ById",
+    "*ByKey",
+    "*Metadata",
+    "*Meta",
+    "*Payload",
+    "*Params",
+    "*Result",
+    "Raw*",
+    "External*",
+    "Legacy*",
+    "Dynamic*",
+    "Json*",
+    "UnknownRecord",
+    "PlainObject"
+  ],
+  "allowedRecordAliases": [
+    "UnknownRecord",
+    "PlainObject",
+    "JsonRecord",
+    "RawJsonObject",
+    "ExternalPayload",
+    "DynamicMetadata"
+  ],
+  "allowedFixedFieldObjects": [
+    "process.env",
+    "process.versions",
+    "import.meta.env",
+    "*.dataset",
+    "*.userData"
+  ],
+  "fileExtensions": [
+    ".ts",
+    ".tsx",
+    ".cts",
+    ".mts"
+  ],
+  "ignorePaths": [
+    "node_modules/**",
+    "**/*.d.ts",
+    "**/*.d.cts",
+    "**/*.d.mts",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**",
+    "**/coverage/**",
+    "dist-desktop/**",
+    "_templates/**"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@iart/editor",
+  "private": true,
+  "version": "0.4.5",
+  "dependencies": {
+    "@iart/backend-sdk": "workspace:*",
+    "@iart/contracts": "workspace:*",
+    "@iart/domain": "workspace:*",
+    "@iart/model-asset-runtime": "workspace:*",
+    "@iart/ui": "workspace:*",
+    "@iart/utils": "workspace:*"
+  },
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0",
+    "build": "next build",
+    "build:desktop-renderer": "vite build -c vite.desktop.config.ts"
+  }
+}

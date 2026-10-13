@@ -1,0 +1,138 @@
+{
+  "fields": {
+    "mode": {
+      "label": "配音模式",
+      "options": {
+        "single": {
+          "label": "单说话者"
+        },
+        "multi": {
+          "label": "多说话者"
+        }
+      }
+    },
+    "text": {
+      "label": "配音文本",
+      "description": "输入需要转换为语音的文本内容。"
+    },
+    "voiceName": {
+      "label": "声音名称",
+      "description": "单说话者模式下使用的默认声音。",
+      "enum_options": {
+        "Zephyr": {
+          "label": "Zephyr — 明亮"
+        },
+        "Puck": {
+          "label": "Puck — 欢快"
+        },
+        "Charon": {
+          "label": "Charon — 详实"
+        },
+        "Kore": {
+          "label": "Kore — 坚定"
+        },
+        "Fenrir": {
+          "label": "Fenrir — 激昂"
+        },
+        "Leda": {
+          "label": "Leda — 年轻"
+        },
+        "Orus": {
+          "label": "Orus — 稳重"
+        },
+        "Aoede": {
+          "label": "Aoede — 轻快"
+        },
+        "Callirrhoe": {
+          "label": "Callirrhoe — 随和"
+        },
+        "Autonoe": {
+          "label": "Autonoe — 明亮"
+        },
+        "Enceladus": {
+          "label": "Enceladus — 轻柔"
+        },
+        "Iapetus": {
+          "label": "Iapetus — 清晰"
+        },
+        "Umbriel": {
+          "label": "Umbriel — 随和"
+        },
+        "Algieba": {
+          "label": "Algieba — 柔顺"
+        },
+        "Despina": {
+          "label": "Despina — 柔顺"
+        },
+        "Erinome": {
+          "label": "Erinome — 清晰"
+        },
+        "Algenib": {
+          "label": "Algenib — 粗粝"
+        },
+        "Rasalgethi": {
+          "label": "Rasalgethi — 详实"
+        },
+        "Laomedeia": {
+          "label": "Laomedeia — 欢快"
+        },
+        "Achernar": {
+          "label": "Achernar — 柔和"
+        },
+        "Alnilam": {
+          "label": "Alnilam — 坚定"
+        },
+        "Schedar": {
+          "label": "Schedar — 平稳"
+        },
+        "Gacrux": {
+          "label": "Gacrux — 成熟"
+        },
+        "Pulcherrima": {
+          "label": "Pulcherrima — 主动"
+        },
+        "Achird": {
+          "label": "Achird — 友善"
+        },
+        "Zubenelgenubi": {
+          "label": "Zubenelgenubi — 随性"
+        },
+        "Vindemiatrix": {
+          "label": "Vindemiatrix — 温和"
+        },
+        "Sadachbia": {
+          "label": "Sadachbia — 活泼"
+        },
+        "Sadaltager": {
+          "label": "Sadaltager — 渊博"
+        },
+        "Sulafat": {
+          "label": "Sulafat — 温暖"
+        }
+      }
+    },
+    "speakerVoiceLines": {
+      "label": "说话者语音配置",
+      "description": "多说话者模式下按“说话者|声音”逐行配置。",
+      "leftLabel": "说话者",
+      "rightLabel": "声音",
+      "leftPlaceholder": "输入说话者名称",
+      "rightPlaceholder": "选择声音",
+      "addButton": "新增角色",
+      "removeButton": "删除"
+    }
+  },
+  "ports": {
+    "inputs": {
+      "text": {
+        "name": "朗读文本",
+        "description": "要转换成语音的文本内容"
+      }
+    },
+    "outputs": {
+      "audio": {
+        "name": "音频"
+      }
+    }
+  }
+}

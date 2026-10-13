@@ -1,0 +1,21 @@
+{
+  "zones": [
+    "apps/backend/src/**",
+    "apps/desktop-shell/src/**",
+    "apps/editor/src/**",
+    "apps/hub/src/**"
+  ],
+  "boundaryZones": [
+    "packages/utils/src/media-file-key.cts",
+    "packages/utils/src/media-constants.cts",
+    "packages/contracts/src/**",
+    "**/__tests__/**",
+    "apps/desktop-shell/src/desktop-shell-bootstrap.cts"
+  ],
+  "ignorePaths": [
+    "tooling/**",
+    "docs/**",
+    "testing/**"
+  ],
+  "fileExtensions": [".ts", ".tsx", ".cts", ".mts"]
+}

@@ -1,0 +1,66 @@
+{
+  "fields": {
+    "prompt": {
+      "label": "提示词"
+    },
+    "images": {
+      "label": "参考图"
+    },
+    "size": {
+      "label": "画面尺寸",
+      "sizeOptions": {
+        "option_1": {
+          "label": "2K"
+        },
+        "option_2": {
+          "label": "4K"
+        }
+      },
+      "aspectOptions": {
+        "portrait-9-16": {
+          "label": "9:16",
+          "description": "竖屏"
+        },
+        "portrait-2-3": {
+          "label": "2:3",
+          "description": "竖屏"
+        },
+        "portrait-3-4": {
+          "label": "3:4",
+          "description": "竖屏"
+        },
+        "square": {
+          "label": "1:1",
+          "description": "方形"
+        },
+        "landscape-4-3": {
+          "label": "4:3",
+          "description": "横屏"
+        },
+        "landscape-3-2": {
+          "label": "3:2",
+          "description": "横屏"
+        },
+        "landscape-16-9": {
+          "label": "16:9",
+          "description": "横屏"
+        }
+      }
+    }
+  },
+  "ports": {
+    "inputs": {
+      "prompt": {
+        "name": "提示词"
+      },
+      "images": {
+        "name": "参考图"
+      }
+    },
+    "outputs": {
+      "image": {
+        "name": "图像"
+      }
+    }
+  }
+}

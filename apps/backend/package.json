@@ -1,0 +1,28 @@
+{
+  "name": "@iart/backend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "commonjs",
+  "main": "./dist/main.cjs",
+  "dependencies": {
+    "@iart/chat-adapter": "workspace:*",
+    "@iart/contracts": "workspace:*",
+    "@iart/domain": "workspace:*",
+    "@iart/model-asset-runtime": "workspace:*",
+    "@iart/utils": "workspace:*",
+    "busboy": "^1.6.0",
+    "dotenv": "^17.2.3",
+    "ffmpeg-static": "^5.3.0",
+    "sharp": "^0.34.5",
+    "undici": "7.16.0",
+    "ws": "^8.19.0",
+    "zod": "^3.23.8"
+  },
+  "scripts": {
+    "build": "node ../../tooling/build/up-to-date-runner.mjs @iart/backend --workspace-deps -- \"node ../../tooling/build/clean-dist.mjs dist && tsc -p tsconfig.build.json\"",
+    "dev": "tsx ./src/main.cts"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}

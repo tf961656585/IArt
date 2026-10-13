@@ -1,0 +1,24 @@
+{
+  "node_type": "model",
+  "group_key": "openai",
+  "input_ports": [
+    {
+      "id": "image",
+      "name": "ports.inputs.image.name",
+      "data_type": "image",
+      "field_key": "image",
+      "required": false,
+      "multiple": true,
+      "description": "ports.inputs.image.description"
+    }
+  ],
+  "output_ports": [
+    {
+      "id": "image",
+      "name": "ports.outputs.image.name",
+      "data_type": "image",
+      "field_key": "output_image",
+      "multiple": true
+    }
+  ]
+}

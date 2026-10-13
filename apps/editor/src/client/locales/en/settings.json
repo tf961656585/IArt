@@ -1,0 +1,50 @@
+{
+  "appearance": {
+    "ariaLabel": "Theme settings",
+    "title": "Appearance",
+    "dark": "Dark mode",
+    "light": "Light mode",
+    "note": "Applies as soon as you save."
+  },
+  "account": {
+    "ariaLabel": "Account preferences",
+    "title": "Account & keys",
+    "usernameLabel": "Username",
+    "usernamePlaceholder": "Display nickname",
+    "apiBaseLabel": "API Base URL",
+    "apiBasePlaceholder": "e.g. https://api.openai.com",
+    "apiKeyLabel": "API Key",
+    "apiKeyPlaceholder": "Your key (stored only on this computer)",
+    "apiKeySelectPlaceholder": "Select the key to use",
+    "apiKeyHelper": "Pick one and save to apply it.",
+    "apiKeyLoading": "Loading keys...",
+    "apiKeyLoadError": "Couldn't load the key list. Please try again.",
+    "apiKeyInvalidToken": "This key has expired. Please sign in again.",
+    "apiKeyMissing": "Please sign in first, or sign in again, then try once more.",
+    "apiKeyRefreshFailed": "Couldn't refresh your sign-in automatically. Please try again.",
+    "refreshTokens": "Reload the key list",
+    "rebuildToken": "Generate a new key",
+    "rebuildingToken": "Generating...",
+    "fetchKey": "Get an API key",
+    "autoSaveHistory": "Auto-save history",
+    "savedAt": "Saved at {{time}}"
+  },
+  "cache": {
+    "ariaLabel": "Media cache settings",
+    "title": "Media cache",
+    "currentUsage": "Current cache: {{size}} GB ({{count}} files)",
+    "maxSizeLabel": "Storage limit (GB)",
+    "ttlLabel": "Retention duration (days)",
+    "cleanupNow": "Clean up now",
+    "cleaning": "Cleaning...",
+    "confirmTitle": "Confirm clear {{type}} cache",
+    "confirmDescription": "You may not be able to open these files after clearing. Download a backup first?",
+    "downloadBackup": "Download backup",
+    "downloading": "Downloading...",
+    "downloaded": "Downloaded",
+    "confirmClear": "Confirm clear",
+    "downloadError": "Download failed: {{error}}",
+    "downloadErrorFallback": "Download failed. Please try again.",
+    "cacheTypeTask": "task media"
+  }
+}

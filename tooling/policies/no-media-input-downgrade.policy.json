@@ -1,0 +1,13 @@
+{
+  "sourceFile": "apps/editor/src/client/api/taskFacade.ts",
+  "functionName": "normalizeTaskSubmitArgsFromRecord",
+  "innerFunctionName": "buildMediaInputFromUploadLikeItem",
+  "fileExtensions": [".ts", ".cts"],
+  "ignorePaths": [
+    "node_modules/**",
+    "**/*.d.ts",
+    "**/*.d.cts",
+    "**/dist/**",
+    "**/build/**"
+  ]
+}

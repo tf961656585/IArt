@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>pointer-capture-probe</title>
+<!--
+  pointer-capture-probe：核验「面板指针捕获吞掉槽内按钮点击」这一类交互故障。
+
+  背景：图片缩放面板（apps/editor/src/components/ui/zoomable-image-preview/ZoomableImagePreview.tsx）
+  的 surface 在 pointerdown 里 preventDefault + setPointerCapture 以启动拖拽平移；指针一旦被 surface
+  捕获，浏览器会把随后的兼容鼠标事件（mouseup / click）重定向到捕获元素，面板内部的可交互浮层
+  （底部导航槽 / 工具栏 / 缩放 HUD）里按钮的 onclick 永远收不到——表现为「点了没反应」，页脚计数不变。
+  jsdom 不实现命中测试与指针捕获，单测（fireEvent.click 直接投递目标节点）对此完全静态绿。
+
+  用法：用 browser 工具打开本页（无需 viewport 参数）→ 对每个用例的按钮调 clickAt(按钮中心)（真实鼠标输入，
+  不要用 evaluate 派发合成事件，合成事件绕开捕获语义会得出假的绿色）→ __PROBE.events() 读事件序列。
+  判据：事件里出现 `<按钮 id>: BUTTON CLICKED` 才算按钮收到点击；只出现 `surface: click ... (target=surface)`
+  即被捕获吞掉。
+
+  局限：只验证浏览器指针捕获/命中测试语义，不覆盖 React 装配与真实数据（React 侧的 prop 接线由
+  apps/editor/src/components/ui/zoomable-image-preview/__tests__/ZoomableImagePreview.test.tsx 兜住）。
+-->
+<style>
+  body { font: 13px system-ui; margin: 0; padding: 12px; }
+  .case { margin-bottom: 14px; }
+  .surface { position: relative; width: 320px; height: 120px; overflow: hidden; background: #222; border-radius: 6px; }
+  .inner { height: 100%; width: 100%; }
+  .band { position: absolute; inset-inline: 0; bottom: 12px; display: flex; align-items: center; justify-content: flex-start; padding: 0 12px; pointer-events: none; }
+  .nav { pointer-events: auto; display: flex; gap: 8px; background: rgba(0, 0, 0, .55); padding: 2px 8px; color: #fff; border-radius: 6px; }
+  button { font: inherit; }
+  pre { background: #f4f4f4; padding: 6px; min-height: 40px; }
+</style>
+</head>
+<body>
+<div class="case">
+  <strong>A 现役形态：surface 捕获 + 槽内按钮无守卫（复现点击无效）</strong>
+  <div class="surface" id="sA"><div class="inner">
+    <div class="band"><div class="nav"><button id="nextA">下一张 ›</button></div></div>
+  </div></div>
+</div>
+
+<div class="case">
+  <strong>B 只 preventDefault、不 setPointerCapture（对照：按钮正常）</strong>
+  <div class="surface" id="sB"><div class="inner">
+    <div class="band"><div class="nav"><button id="nextB">下一张 ›</button></div></div>
+  </div></div>
+</div>
+
+<div class="case">
+  <strong>C 按钮自身 stopPropagation（工具栏旧写法，对照：按钮正常）</strong>
+  <div class="surface" id="sC"><div class="inner">
+    <div class="band"><div class="nav" id="navC"><button id="nextC">下一张 ›</button></div></div>
+  </div></div>
+</div>
+
+<div class="case">
+  <strong>D 守卫挂在槽位容器上（SLOT_INTERACTION_GUARD 修复形态：按钮正常）</strong>
+  <div class="surface" id="sD"><div class="inner">
+    <div class="band" id="bandD"><div class="nav"><button id="nextD">下一张 ›</button></div></div>
+  </div></div>
+</div>
+
+<pre id="log"></pre>
+<script>
+  const lines = [];
+  const events = [];
+  const logEl = document.getElementById('log');
+
+  function log(message) {
+    lines.push(message);
+    events.push(message);
+    logEl.textContent = lines.join('\n');
+  }
+
+  /** 复刻 surface 的平移启动：preventDefault 必做；setPointerCapture 仅在 mode === 'capture' 时调用。 */
+  function wireSurface(surfaceId, mode) {
+    const surface = document.getElementById(surfaceId);
+    surface.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      if (mode === 'capture') {
+        try { surface.setPointerCapture(event.pointerId); } catch { /* 忽略 */ }
+      }
+    });
+    surface.addEventListener('click', (event) => {
+      log(surfaceId + ': click on surface (target=' + (event.target.id || event.target.className) + ')');
+    });
+    surface.addEventListener('mouseup', (event) => {
+      log(surfaceId + ': mouseup target=' + event.target.id);
+    });
+  }
+
+  wireSurface('sA', 'capture');
+  wireSurface('sB', 'nocapture');
+  wireSurface('sC', 'capture');
+  wireSurface('sD', 'capture');
+
+  // C：工具栏旧写法——在按钮与其容器上就地阻断 pointerdown。
+  document.getElementById('navC').addEventListener('pointerdown', (event) => event.stopPropagation());
+  document.getElementById('nextC').addEventListener('pointerdown', (event) => event.stopPropagation());
+
+  // D：修复形态——守卫挂在槽位容器上，按钮自身不管。
+  const bandD = document.getElementById('bandD');
+  for (const type of ['pointerdown', 'mousedown', 'dblclick']) {
+    bandD.addEventListener(type, (event) => event.stopPropagation());
+  }
+
+  for (const id of ['nextA', 'nextB', 'nextC', 'nextD']) {
+    document.getElementById(id).addEventListener('click', () => log(id + ': BUTTON CLICKED'));
+  }
+
+  window.__PROBE = {
+    reset() { lines.length = 0; events.length = 0; logEl.textContent = ''; },
+    events() { return events.slice(); },
+  };
+</script>
+</body>
+</html>

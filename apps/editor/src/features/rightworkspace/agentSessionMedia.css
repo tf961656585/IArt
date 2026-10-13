@@ -1,0 +1,60 @@
+/* ============================================================
+   会话视图「媒体统一件」组件级样式（与 agentSessionView.css 同层）。
+   只承载动画与原生控件的伪元素形态：**不写任何 var() 引用**（颜色一律在
+   tsx 侧按令牌消费，避免把主题令牌塞进 guard:css-undefined-vars 的
+   runtimeInjectedVars 白名单——那一条只收运行时内联注入的变量）。
+   轨道 / 滑钮取 currentColor，颜色由消费元素的 text-primary 类提供。
+   类选择器置于 @layer components，不压 utilities 层；prefers-reduced-motion 下关动效。
+   ============================================================ */
+@layer components {
+  .agent-media-fade {
+    animation: agent-media-fade 140ms ease-out both;
+  }
+
+  /* seek：样式化原生 range —— 视觉 2px 轨 + 10px 滑钮，命中区 24px（键盘天然可达） */
+  .agent-media-seek {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 100%;
+    height: 24px;
+    background: transparent;
+    cursor: pointer;
+  }
+  .agent-media-seek::-webkit-slider-runnable-track {
+    height: 2px;
+    border-radius: 9999px;
+    background: color-mix(in srgb, currentColor 30%, transparent);
+  }
+  .agent-media-seek::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 10px;
+    height: 10px;
+    margin-top: -4px;
+    border: 0;
+    border-radius: 9999px;
+    background: currentColor;
+  }
+  .agent-media-seek::-moz-range-track {
+    height: 2px;
+    border-radius: 9999px;
+    background: color-mix(in srgb, currentColor 30%, transparent);
+  }
+  .agent-media-seek::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    border: 0;
+    border-radius: 9999px;
+    background: currentColor;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .agent-media-fade {
+      animation: none;
+    }
+  }
+}
+@keyframes agent-media-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

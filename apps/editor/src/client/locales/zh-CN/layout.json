@@ -1,0 +1,19 @@
+{
+  "nav": {
+    "brand": "IArt",
+    "toggleSidebar": "切换侧边栏",
+    "toggleThemeDark": "切换到暗色",
+    "toggleThemeLight": "切换到浅色",
+    "toggleThemeAria": "切换主题模式"
+  },
+  "sidebar": {
+    "aria": "侧边导航",
+    "expand": "展开侧边栏",
+    "collapse": "折叠侧边栏",
+    "toggleAria": "切换侧边栏",
+    "version": "版本 {{version}}"
+  },
+  "footer": {
+    "copyright": "© {{year}} IARTStudio"
+  }
+}

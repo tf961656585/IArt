@@ -1,0 +1,111 @@
+{
+  "fields": {
+    "prompt": {
+      "label": "提示词"
+    },
+    "size": {
+      "label": "画面尺寸",
+      "description": "可自动选择尺寸，也可按档位与比例（含自定义比例）设置输出尺寸。",
+      "sizeLevels": {
+        "1k": {
+          "label": "1K"
+        },
+        "2k": {
+          "label": "2K"
+        },
+        "4k": {
+          "label": "4K"
+        }
+      },
+      "aspectPresets": {
+        "1_1": {
+          "label": "1:1"
+        },
+        "3_2": {
+          "label": "3:2"
+        },
+        "2_3": {
+          "label": "2:3"
+        },
+        "16_9": {
+          "label": "16:9"
+        },
+        "9_16": {
+          "label": "9:16"
+        }
+      },
+      "presetOptions": {
+        "auto": {
+          "label": "自动",
+          "description": "由模型决定输出尺寸"
+        }
+      }
+    },
+    "quality": {
+      "label": "图片画质",
+      "description": "默认自动，档位越高画质越精细。",
+      "options": {
+        "auto": {
+          "label": "自动"
+        },
+        "low": {
+          "label": "低"
+        },
+        "medium": {
+          "label": "中"
+        },
+        "high": {
+          "label": "高"
+        }
+      }
+    },
+    "format": {
+      "label": "图片格式",
+      "description": "可选 png、jpeg 或 webp，默认 jpeg。",
+      "options": {
+        "png": {
+          "label": "PNG"
+        },
+        "jpeg": {
+          "label": "JPEG"
+        },
+        "webp": {
+          "label": "WebP"
+        }
+      }
+    },
+    "moderation": {
+      "label": "内容审核",
+      "description": "可选 low 或 auto，默认 auto。",
+      "options": {
+        "auto": {
+          "label": "自动"
+        },
+        "low": {
+          "label": "低"
+        }
+      }
+    },
+    "image": {
+      "label": "参考图",
+      "description": "上传一张或多张要编辑的图片。"
+    }
+  },
+  "ports": {
+    "outputs": {
+      "image": {
+        "name": "图像"
+      }
+    },
+    "inputs": {
+      "prompt": {
+        "name": "提示词",
+        "description": "描述要生成的编辑效果。"
+      },
+      "image": {
+        "name": "参考图",
+        "description": "传入要编辑的图片文件。"
+      }
+    }
+  }
+}

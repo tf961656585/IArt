@@ -1,0 +1,168 @@
+{
+  "name": "@iart/ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./alert": {
+      "types": "./dist/alert.d.ts",
+      "default": "./dist/alert.js"
+    },
+    "./badge": {
+      "types": "./dist/badge.d.ts",
+      "default": "./dist/badge.js"
+    },
+    "./button": {
+      "types": "./dist/button.d.ts",
+      "default": "./dist/button.js"
+    },
+    "./button-group": {
+      "types": "./dist/button-group.d.ts",
+      "default": "./dist/button-group.js"
+    },
+    "./card": {
+      "types": "./dist/card.d.ts",
+      "default": "./dist/card.js"
+    },
+    "./carousel": {
+      "types": "./dist/carousel.d.ts",
+      "default": "./dist/carousel.js"
+    },
+    "./checkbox": {
+      "types": "./dist/checkbox.d.ts",
+      "default": "./dist/checkbox.js"
+    },
+    "./collapsible": {
+      "types": "./dist/collapsible.d.ts",
+      "default": "./dist/collapsible.js"
+    },
+    "./command": {
+      "types": "./dist/command.d.ts",
+      "default": "./dist/command.js"
+    },
+    "./context-menu": {
+      "types": "./dist/context-menu.d.ts",
+      "default": "./dist/context-menu.js"
+    },
+    "./dialog": {
+      "types": "./dist/dialog.d.ts",
+      "default": "./dist/dialog.js"
+    },
+    "./dropdown-menu": {
+      "types": "./dist/dropdown-menu.d.ts",
+      "default": "./dist/dropdown-menu.js"
+    },
+    "./hover-card": {
+      "types": "./dist/hover-card.d.ts",
+      "default": "./dist/hover-card.js"
+    },
+    "./input": {
+      "types": "./dist/input.d.ts",
+      "default": "./dist/input.js"
+    },
+    "./input-group": {
+      "types": "./dist/input-group.d.ts",
+      "default": "./dist/input-group.js"
+    },
+    "./label": {
+      "types": "./dist/label.d.ts",
+      "default": "./dist/label.js"
+    },
+    "./popover": {
+      "types": "./dist/popover.d.ts",
+      "default": "./dist/popover.js"
+    },
+    "./progress": {
+      "types": "./dist/progress.d.ts",
+      "default": "./dist/progress.js"
+    },
+    "./scroll-area": {
+      "types": "./dist/scroll-area.d.ts",
+      "default": "./dist/scroll-area.js"
+    },
+    "./select": {
+      "types": "./dist/select.d.ts",
+      "default": "./dist/select.js"
+    },
+    "./separator": {
+      "types": "./dist/separator.d.ts",
+      "default": "./dist/separator.js"
+    },
+    "./slider": {
+      "types": "./dist/slider.d.ts",
+      "default": "./dist/slider.js"
+    },
+    "./sonner": {
+      "types": "./dist/sonner.d.ts",
+      "default": "./dist/sonner.js"
+    },
+    "./switch": {
+      "types": "./dist/switch.d.ts",
+      "default": "./dist/switch.js"
+    },
+    "./table": {
+      "types": "./dist/table.d.ts",
+      "default": "./dist/table.js"
+    },
+    "./textarea": {
+      "types": "./dist/textarea.d.ts",
+      "default": "./dist/textarea.js"
+    },
+    "./toggle": {
+      "types": "./dist/toggle.d.ts",
+      "default": "./dist/toggle.js"
+    },
+    "./toggle-group": {
+      "types": "./dist/toggle-group.d.ts",
+      "default": "./dist/toggle-group.js"
+    },
+    "./tooltip": {
+      "types": "./dist/tooltip.d.ts",
+      "default": "./dist/tooltip.js"
+    },
+    "./tooltip-button": {
+      "types": "./dist/tooltip-button.d.ts",
+      "default": "./dist/tooltip-button.js"
+    }
+  },
+  "scripts": {
+    "build": "node ../../tooling/build/up-to-date-runner.mjs @iart/ui --workspace-deps -- \"node ../../tooling/build/clean-dist.mjs dist && tsc -p tsconfig.json\""
+  },
+  "peerDependencies": {
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "dependencies": {
+    "@radix-ui/react-checkbox": "^1.3.3",
+    "@radix-ui/react-collapsible": "^1.1.12",
+    "@radix-ui/react-context-menu": "^2.2.16",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-hover-card": "^1.1.15",
+    "@radix-ui/react-label": "^2.1.8",
+    "@radix-ui/react-popover": "^1.1.15",
+    "@radix-ui/react-progress": "^1.1.8",
+    "@radix-ui/react-scroll-area": "^1.2.10",
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-separator": "^1.1.8",
+    "@radix-ui/react-slider": "^1.3.6",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-switch": "^1.2.6",
+    "@radix-ui/react-toggle": "^1.1.10",
+    "@radix-ui/react-toggle-group": "^1.1.11",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "embla-carousel-react": "^8.6.0",
+    "lucide-react": "^0.553.0",
+    "sonner": "^2.0.7",
+    "tailwind-merge": "^3.4.0"
+  }
+}

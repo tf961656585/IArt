@@ -1,0 +1,29 @@
+{
+  "language": {
+    "switcherTooltip": "切换语言",
+    "names": {
+      "zh-CN": "中文",
+      "en": "English"
+    }
+  },
+  "actions": {
+    "gotoSettings": "前往设置",
+    "savePreferences": "保存偏好",
+    "saving": "保存中...",
+    "startGeneration": "开始生成",
+    "reset": "重置",
+    "clear": "清空",
+    "delete": "删除"
+  },
+  "login": {
+    "title": "账号登录",
+    "subtitle": "请先输入 IARTStudio 账号与密码继续访问。",
+    "username": "用户名",
+    "password": "密码",
+    "submit": "登录",
+    "submitting": "登录中...",
+    "errorMissingFields": "请输入用户名和密码",
+    "errorInvalid": "登录失败，请检查账号和密码",
+    "errorGeneric": "登录时出错了，请重试。"
+  }
+}

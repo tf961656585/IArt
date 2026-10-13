@@ -1,0 +1,10 @@
+{
+  "dismissToday": "今日不再提醒",
+  "close": "关闭",
+  "severity": {
+    "info": "提示",
+    "success": "成功",
+    "warning": "警告",
+    "error": "错误"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "json": {
+    "invalid": "JSON 格式不对，请检查括号、引号和逗号是否配对",
+    "parseErrorWithMessage": "JSON 格式不对：{{message}}",
+    "parseError": "JSON 格式不对，请检查括号、引号和逗号是否配对"
+  },
+  "field": {
+    "optional": "可选"
+  }
+}

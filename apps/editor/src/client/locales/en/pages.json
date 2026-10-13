@@ -1,0 +1,195 @@
+{
+  "notFound": {
+    "title": "Page not found",
+    "description": "Sorry, the page you're looking for doesn't exist or may have moved. Try heading back home or jump to a popular page.",
+    "backHome": "Back to home",
+    "suggestions": "Popular links"
+  },
+  "modelWorkspace": {
+    "status": {
+      "submitting": "Submitting...",
+      "waiting": "Start by entering a prompt to generate results"
+    },
+    "output": {
+      "empty": "No results yet — submit a generation and it'll show up here.",
+      "rawTitle": "Raw response",
+      "legacyTitle": "Legacy renderer"
+    },
+    "actions": {
+      "generate": "Start generation",
+      "submitting": "Submitting..."
+    },
+    "form": {
+      "loadError": "Couldn't load the model settings. Please try again.",
+      "submitError": "Submission failed. Please try again."
+    }
+  },
+  "settings": {
+    "header": {
+      "title": "Settings",
+      "description": "Configure theme, account credentials and usage preferences."
+    }
+  },
+  "dashboard": {
+    "header": {
+      "title": "Dashboard",
+      "description": "Monitor usage metrics and recent generations at a glance."
+    }
+  },
+  "history": {
+    "header": {
+      "title": "History",
+      "description": "Search and review recent generations with detailed input and output context."
+    },
+    "search": {
+      "placeholder": "Search keywords",
+      "clear": "Clear search",
+      "noResults": "No matches for current keywords"
+    },
+    "details": {
+      "title": "Details",
+      "timestamp": "{{time}} · Model: {{model}}",
+      "input": "Input",
+      "output": "Output",
+      "noInput": "No input this time",
+      "close": "Close"
+    }
+  },
+  "search": {
+    "header": {
+      "title": "Site search",
+      "description": "Quickly find IARTStudio tools and pages."
+    },
+    "form": {
+      "placeholder": "Search keywords",
+      "submit": "Search",
+      "clear": "Clear"
+    },
+    "results": {
+      "title": "Suggested pages",
+      "open": "Open page",
+      "empty": "No matches yet. Try another keyword."
+    }
+  },
+  "help": {
+    "header": {
+      "title": "Help Center",
+      "description": "Review FAQs, quick links and support options for IARTStudio."
+    },
+    "sections": {
+      "quickLinksTitle": "Quick links",
+      "faqTitle": "Frequently asked questions",
+      "supportTitle": "Support & contact"
+    },
+    "quickLinks": [
+      {
+        "label": "Canvas",
+        "path": "canvas"
+      },
+      {
+        "label": "Settings",
+        "path": "settings"
+      }
+    ],
+    "faq": [
+      {
+        "question": "How do I choose a model?",
+        "answer": "Use the model selector in the creation workspace header and compare latency or capability notes to pick the best fit."
+      },
+      {
+        "question": "Where can I manage my API keys?",
+        "answer": "Open the Settings page and switch to the Integrations tab to update API credentials."
+      }
+    ],
+    "contacts": [
+      {
+        "label": "Email",
+        "value": "961656585@qq.com"
+      },
+      {
+        "label": "WeChat",
+        "value": "Tian_Riching"
+      }
+    ],
+    "hint": "Need assistance? Start with these resources or reach out to the team.",
+    "supportNote": "We respond to support requests within one business day."
+  },
+  "storyboard": {
+    "header": {
+      "title": "Storyboard Workspace",
+      "description": "Orchestrate long-form video projects with segment-level control and persistent drafts."
+    },
+    "alert": {
+      "offlineSupport": "Your changes are saved on this computer automatically, so you can keep editing offline."
+    }
+  },
+  "canvas": {
+    "toolbar": {
+      "file": "File",
+      "fromTemplate": "New from template",
+      "import": "Import canvas",
+      "export": "Export canvas",
+      "save": "Save",
+      "unsaved": "Unsaved changes"
+    },
+    "dialogs": {
+      "importExport": {
+        "title": "Import / Export Canvas",
+        "importTab": "Import",
+        "exportTab": "Export",
+        "load": "Load canvas",
+        "dropHint": "Drop a JSON file here or pick from disk",
+        "parseError": "Import failed. Check that the file content is correct.",
+        "warnings": "Import warnings"
+      },
+      "template": {
+        "title": "Choose official template",
+        "searchPlaceholder": "Search templates...",
+        "categoryAll": "All",
+        "useTemplate": "Use template",
+        "empty": "No matching template"
+      },
+      "recovery": {
+        "title": "Restore unsaved canvas",
+        "description": "We found an unfinished canvas from your last visit. Restore it?",
+        "savedAt": "Saved at",
+        "hasUnsavedChanges": "Contains unsaved changes",
+        "recover": "Restore",
+        "discard": "Discard"
+      },
+      "unsaved": {
+        "title": "Unsaved changes detected",
+        "description": "Continuing will replace the current canvas and lose unsaved edits. Continue?",
+        "confirm": "Discard and continue",
+        "cancel": "Cancel"
+      }
+    }
+  },
+  "imageGeneration": {
+    "fields": {
+      "aspectRatio": {
+        "label": "Aspect ratio",
+        "options": {
+          "1_1": "1:1 Square",
+          "2_3": "2:3 Portrait",
+          "3_2": "3:2 Landscape",
+          "3_4": "3:4 Portrait",
+          "4_3": "4:3 Landscape",
+          "4_5": "4:5 Portrait",
+          "5_4": "5:4 Landscape",
+          "9_16": "9:16 Portrait",
+          "16_9": "16:9 Landscape",
+          "21_9": "21:9 Ultrawide"
+        }
+      },
+      "imageSize": {
+        "label": "Image size",
+        "options": {
+          "1K": "1K",
+          "2K": "2K",
+          "4K": "4K"
+        }
+      }
+    }
+  }
+}

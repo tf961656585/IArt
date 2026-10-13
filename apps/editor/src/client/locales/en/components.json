@@ -1,0 +1,75 @@
+{
+  "fileUpload": {
+    "acceptHint": " (accepts {{accept}})",
+    "fallbackName": "file",
+    "moveLeft": "← Move left",
+    "moveRight": "Move right →",
+    "preview": "Preview",
+    "remove": "Remove",
+    "process": "Process",
+    "processTitle": "Image processing",
+    "processOriginal": "Original",
+    "processResult": "Processed",
+    "processHint": "Click the button below to start detecting edges.",
+    "processRunning": "Processing image...",
+    "processThreshold": "Edge thresholds",
+    "processThresholdValue": "Current: low {{low}} / high {{high}}",
+    "processRun": "Start edge detection",
+    "processApply": "Apply result",
+    "processCancel": "Cancel",
+    "processMissingSource": "Couldn't find the original image.",
+    "processError": "Couldn't process the image. Please try again.",
+    "processApplyError": "Couldn't apply this result. Please try again.",
+    "reorderHint": " with reordering (move left/right)",
+    "select": "Select files",
+    "dimensionHint": "Images are limited to {{max}} px on the long edge (auto-resized if larger).",
+    "summary": "Upload up to {{count}} file(s){{reorderHint}}{{acceptHint}}",
+    "validation": {
+      "autoResize": "{{count}} image(s) exceeded {{max}} px on the long edge and were auto-resized.",
+      "sizeExceeded": "{{count}} file(s) exceeded {{maxSizeMB}} MB and were skipped.",
+      "invalidImage": "{{count}} file(s) could not be read or were unsupported, so they were skipped."
+    }
+  },
+  "modelSelector": {
+    "placeholder": "Select a model"
+  },
+  "promptDock": {
+    "deploymentReady": "Ready to generate",
+    "noModels": "No models available yet. Add one in the main window under Settings → Providers & Models.",
+    "goFix": "Add one"
+  },
+  "textInputAiEdit": {
+    "title": "AI edit",
+    "description": "Describe how you want it changed, then click “Start editing” to generate a result. You can edit it before overwriting the original.",
+    "modelLabel": "Model",
+    "noModels": "No chat model is available right now. Configure one in the main window and try again.",
+    "systemPromptLabel": "Persona (optional)",
+    "systemPromptNone": "No persona selected",
+    "noSystemPrompts": "No personas available yet",
+    "instructionLabel": "How should it change",
+    "instructionPlaceholder": "For example: more specific, more cinematic; add lens and lighting; make the tone more restrained…",
+    "templateLabel": "Template",
+    "templatePlaceholder": "Select a template",
+    "resultLabel": "Edited result",
+    "usedModel": "Model used",
+    "resultPlaceholder": "The AI-edited content appears here. You can also edit it directly.",
+    "cancel": "Cancel",
+    "running": "Editing…",
+    "regenerate": "Regenerate",
+    "start": "Start editing",
+    "apply": "Overwrite original",
+    "errorNoModel": "Select a model first.",
+    "errorRunFailed": "Couldn't edit it this time. Please try again."
+  },
+  "imageSizeSelector": {
+    "aspectRatio": "Aspect ratio",
+    "resolution": "Resolution",
+    "matchUploadLabel": "Keep input ratio ({{ratio}})",
+    "matchUploadDescription": "Match uploaded image ({{ratio}})",
+    "orientation": {
+      "landscape": "Landscape",
+      "portrait": "Portrait",
+      "square": "Square"
+    }
+  }
+}

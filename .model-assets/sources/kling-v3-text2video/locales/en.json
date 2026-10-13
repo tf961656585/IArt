@@ -1,0 +1,105 @@
+{
+  "fields": {
+    "duration": {
+      "label": "Duration",
+      "options": {
+        "3": {
+          "label": "3 seconds"
+        },
+        "4": {
+          "label": "4 seconds"
+        },
+        "5": {
+          "label": "5 seconds"
+        },
+        "6": {
+          "label": "6 seconds"
+        },
+        "7": {
+          "label": "7 seconds"
+        },
+        "8": {
+          "label": "8 seconds"
+        },
+        "9": {
+          "label": "9 seconds"
+        },
+        "10": {
+          "label": "10 seconds"
+        },
+        "11": {
+          "label": "11 seconds"
+        },
+        "12": {
+          "label": "12 seconds"
+        },
+        "13": {
+          "label": "13 seconds"
+        },
+        "14": {
+          "label": "14 seconds"
+        },
+        "15": {
+          "label": "15 seconds"
+        }
+      }
+    },
+    "resolution": {
+      "label": "Resolution",
+      "options": {
+        "720p": {
+          "label": "720P"
+        },
+        "1080p": {
+          "label": "1080P"
+        },
+        "4k": {
+          "label": "4K"
+        }
+      }
+    },
+    "aspectRatio": {
+      "label": "Aspect ratio",
+      "options": {
+        "16_9": {
+          "label": "16:9 landscape"
+        },
+        "9_16": {
+          "label": "9:16 portrait"
+        },
+        "1_1": {
+          "label": "1:1 square"
+        }
+      }
+    },
+    "audio": {
+      "label": "Audio",
+      "options": {
+        "native": {
+          "label": "Native audio"
+        },
+        "off": {
+          "label": "No audio"
+        }
+      }
+    },
+    "multiShot": {
+      "label": "Multi-shot"
+    },
+    "watermark": {
+      "label": "Watermark"
+    }
+  },
+  "ports": {
+    "inputs": {
+      "prompt": {
+        "name": "Prompt"
+      }
+    },
+    "outputs": {
+      "video": {
+        "name": "Video"
+      }
+    }
+  }
+}

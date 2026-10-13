@@ -1,0 +1,201 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+/* 海拔层级令牌（唯一事实源在 @iart/ui 源码包）：@iart/ui 浮层组件的
+   z-popover / z-tooltip / z-modal 等语义工具类依赖这些 token，规格见
+   docs/editor/elevation-z-model.md。 */
+@import "../../../../packages/ui/src/elevation.css";
+
+/* 滚动条口径（唯一事实源在 @iart/ui 源码包）：细悬浮薄条的形状与交互，
+   滑块色经 --scrollbar-thumb / --scrollbar-thumb-hover 本地主题注入，
+   规格见 docs/hub/visual-design.md §5.6。 */
+@import "../../../../packages/ui/src/scrollbar.css";
+
+/* @iart/ui 是 workspace 包，vite alias 解析到 packages/ui/src 源码，
+   但 Tailwind v4 文件系统扫描基准是 apps/hub，扫不到其外的 packages/ui/src。
+   显式 @source 扩展扫描边界，让组件 variant 工具类（bg-primary /
+   text-primary-foreground / bg-destructive 等）被生成——否则 Button/Badge
+   default variant 渲染成透明底，品牌色锚点消失。
+   深度核算：本文件在 apps/hub/src/app/，回退 4 层到仓库根（与 editor
+   globals.css 里 streamdown 那条 @source 同深度）。 */
+@source "../../../../packages/ui/src/**/*.tsx";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Hub 视觉令牌。视觉规范以 docs/hub/visual-design.md 为权威。
+ * 标准 shadcn 变量名与 Editor 对齐（保证 @iart/ui 组件渲染一致），
+ * 变量值独立：indigo 品牌色 + 调性灰表面阶梯。
+ * 双主题：:root 为浅色 token，.dark 为深色 token（默认深色）；切换机制见
+ * docs/hub/hub-renderer-architecture.md §8.1（hub-entry.tsx 同步应用）。
+ */
+
+:root {
+  /* Light 主题：与 .dark 在品牌色相（indigo hue 277）与信息层级语义上对齐，
+     仅做明度翻转与支柱权重调整。浅色明度天花板=纯白，card 触顶、canvas 下沉，
+     card-canvas 明度差 ≥0.035 承担主边界提示（边框退场，spec §4 原则8、§5.4.1）。
+     层级支柱权重：表面明度差（主）+ 阴影（辅）；边框退到 alpha 3.5% 隐形安全网。
+     所有文本对比度路径 WCAG AA（spec §5.4.5）。 */
+  --background: oklch(0.96 0.003 277); /* canvas 下沉，与纯白 card 明度差 0.04 承担主边界（边框退场，spec §5.4.1） */
+  --foreground: oklch(0.235 0.015 277); /* 正文近黑带 indigo 冷调，on bg 15.99 */
+  --card: oklch(1 0 0); /* surface-1 触顶纯白 */
+  --card-foreground: oklch(0.235 0.015 277);
+  --popover: oklch(1 0 0); /* surface-2 触顶纯白，靠 shadow-lg + 方向性光照区分（边框退场） */
+  --popover-foreground: oklch(0.235 0.015 277);
+  --elevated: oklch(0.972 0.004 277); /* surface-3 语义反转：比 card 略暗，陷下去的次级表面（spec §5.4.1） */
+  --primary: oklch(0.535 0.22 277); /* indigo；浅色比深色(0.565)深 0.03 留对比度余量，白字 5.60 / link 5.37（spec §5.4.2） */
+  --primary-foreground: oklch(1 0 0); /* 纯白字 */
+  --secondary: oklch(0.965 0.004 277); /* 次级按钮底，浅灰带 indigo */
+  --secondary-foreground: oklch(0.235 0.015 277);
+  --muted: oklch(0.965 0.004 277);
+  --muted-foreground: oklch(0.50 0.02 277); /* 次级文字边界值，on card 6.02 / on elevated 5.55，勿动（spec §5.4.5） */
+  --accent: oklch(0.95 0.03 277); /* indigo 淡染底，选中态 */
+  --accent-foreground: oklch(0.30 0.13 277); /* 深 indigo 文字，on accent 12.20 */
+  --destructive: oklch(0.555 0.23 27.3); /* 语义色翻转：比深色(0.704)更深，on card 5.29（spec §5.4.2） */
+  --success: oklch(0.50 0.15 162); /* on card 5.30 */
+  --warning: oklch(0.56 0.15 75); /* 深棕橙，色相 h=75 与深色一致，on card 4.75 */
+  --border: oklch(0 0 0 / 0.035); /* 隐形安全网：边框退场，仅防与背景融合，不承担主边界（spec §5.4.4） */
+  --input: oklch(0 0 0 / 0.12); /* input 描边略深 */
+  --ring: oklch(0.535 0.22 277); /* focus ring 跟随 primary，浅色必须实色（spec §5.5），on card 5.60 */
+
+  /* 原生控件色系声明（spec §5.6）：缺省时 Chromium 的原生控件（滚动条、input
+     spinner、原生下拉箭头等）一律按浅色渲染，深色主题下出现系统白条。 */
+  color-scheme: light;
+
+  /* 滚动条滑块色（形状事实源在 @iart/ui scrollbar.css，spec §5.6）：
+     中性黑 alpha，不与品牌色纠缠（品牌色稀缺，spec §6.1）。 */
+  --scrollbar-thumb: oklch(0 0 0 / 0.22);
+  --scrollbar-thumb-hover: oklch(0 0 0 / 0.38);
+  --chart-1: oklch(0.55 0.22 264);
+  --chart-2: oklch(0.60 0.15 162);
+  --chart-3: oklch(0.70 0.17 70);
+  --chart-4: oklch(0.58 0.20 304);
+  --chart-5: oklch(0.60 0.20 16);
+
+  /* 主题无关的几何基底（深色同值，spec §5.2.3）。
+     --radius 修复 @iart/ui 的 calc(var(--radius) - Npx) 负值计算。 */
+  --radius: 0.625rem; /* calc 基底 ≈10px，修复负值圆角 */
+
+  /* 方向性光照源值（顶部 inset 亮边，被 @theme inline 的 --shadow-* 经 var() 引用）。
+     属阴影语言、非 border 属性；浅色白卡上近不可见=中性无害。
+     深色值在 .dark 块覆盖（spec §5.4.4）。 */
+  --border-highlight: oklch(1 0 0 / 0.5);
+
+  /* 浅色阴影参数（被 @theme inline 的 --shadow-* 经 var() 引用，spec §5.4.3）。
+     冷 indigo 调低 alpha 模拟北方天光，不脏；深色值见 .dark 块。 */
+  --shadow-key: oklch(0.21 0.025 277 / 0.14);
+  --shadow-ambient: oklch(0.21 0.025 277 / 0.10); /* 边框退场后微提 0.02 补偿边界提示，仍 ≤0.14 天花板（spec §5.4.3） */
+}
+
+.dark {
+  /* Dark（默认主题）：调性灰表面阶梯（四级）+ indigo 品牌色。
+     相邻档明度差 ≥0.04（canvas↔card↔popover）、elevated↔popover ≥0.03；
+     全阶梯 chroma 0.012-0.028，暗表面偏低、亮表面偏高，色温随明度递增可辨。
+     见 §5.2.1。 */
+  --background: oklch(0.165 0.012 277); /* canvas 调性灰，chroma 0.012 */
+  --foreground: oklch(0.97 0.003 277);
+  --card: oklch(0.215 0.014 277); /* surface-1 一级抬升，对 canvas +0.05 */
+  --card-foreground: oklch(0.97 0.003 277);
+  --popover: oklch(0.255 0.018 277); /* surface-2 弹层，对 card +0.04 */
+  --popover-foreground: oklch(0.97 0.003 277);
+  --elevated: oklch(0.285 0.022 277); /* surface-3 嵌套子卡/hover 抬升/dropdown 选中，对 popover +0.03，最高表面档 */
+  --primary: oklch(0.565 0.21 277); /* indigo ≈ #6366f1；WCAG AA：白字 on primary 4.455→4.750，从锚定 L=0.58 微调（spec §5.2.2 允许微调） */
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.245 0.014 277); /* 按钮底，语义应低于 elevated */
+  --secondary-foreground: oklch(0.97 0.003 277);
+  --muted: oklch(0.225 0.012 277); /* 跟随 secondary 区间，低调性灰 */
+  --muted-foreground: oklch(0.68 0.015 277); /* 冷调次级文字，对比度边界值，勿动 */
+  --accent: oklch(0.30 0.06 277); /* primary 低饱和暗版，选中态底色，chroma 上调让品牌色感可辨 */
+  --accent-foreground: oklch(0.85 0.04 277);
+  --destructive: oklch(0.704 0.191 22.216);
+  --success: oklch(0.70 0.17 162);
+  --warning: oklch(0.78 0.16 75);
+  --border: oklch(1 0 0 / 3.5%); /* 隐形安全网：边框退场，仅防与背景融合（spec §5.2.5） */
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.565 0.21 277); /* focus ring 跟随 primary 品牌色（§5.2.2），与 primary L 同步 */
+
+  /* 原生控件色系声明（spec §5.6）：dark class 不等于 color-scheme，
+     缺省时原生滚动条按浅色渲染（Hub 白条缺陷的直接根因）。 */
+  color-scheme: dark;
+
+  /* 滚动条滑块色：中性白 alpha，随深色表面可辨（spec §5.6）。 */
+  --scrollbar-thumb: oklch(1 0 0 / 0.16);
+  --scrollbar-thumb-hover: oklch(1 0 0 / 0.30);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+
+  /* 方向性光照 + 阴影参数的深色覆盖（浅色值在 :root，spec §5.4.3 / §5.4.4）。
+     --border-highlight 被 @theme inline 的 --shadow-* 经 var() 引用（顶部 inset 亮边），
+     浅色引入后 :root 改为浅色值，深色必须在此显式覆盖否则方向性光照失效。
+     --shadow-key / --shadow-ambient 为参数化阴影色，深色用高 alpha 黑影
+     （黑影在深色底靠被投影表面更亮才可见，spec §5.2.4）。 */
+  --border-highlight: oklch(1 0 0 / 12%); /* 浮起表面顶部 1px 高光边，边框退场后方向性光照的关键信号（spec §5.2.5） */
+  --shadow-key: oklch(0 0 0 / 0.4); /* 主投影 */
+  --shadow-ambient: oklch(0 0 0 / 0.3); /* 环境投影 */
+}
+
+@theme inline {
+  /* 圆角梯度（Hub spec：lg=base-2、xl=base，与 Editor 偏移不同——按 Hub spec）。
+     生成 rounded-sm/md/lg/xl/2xl utility，@iart/ui Card(rounded-xl)/Button(rounded-md)
+     经此映射自动消费 calc 关系，无需改 @iart/ui 源码。见 §5.2.3。
+     梯度 4/6/8/10/14，连贯无断裂。 */
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-lg: calc(var(--radius) - 2px);
+  --radius-xl: var(--radius);
+  --radius-2xl: calc(var(--radius) + 4px);
+  /* 阴影梯度（参数化双主题：顶部 1px 亮边 + 主影 + 环境影，颜色经 var() 随主题切换）。
+     必须在 @theme inline 定义：Tailwind 4 的 shadow-* utility 经编译时 theme 查选取值，
+     :root 手写的 --shadow-* 不被识别为 theme、utility 会回退框架默认值。
+     投影色 var(--shadow-key) / var(--shadow-ambient) 运行时从 :root（浅色）或 .dark（深色）
+     解析；var(--border-highlight) 同理。深色 alpha 0.3–0.4（黑影），浅色 alpha 0.10–0.14
+     （冷 indigo，边框退场后 ambient 微提，spec §5.4.3）。@iart/ui Card 的 shadow-sm 自动消费，无需改源码。见 §5.2.4。 */
+  --shadow-sm: inset 0 1px 0 var(--border-highlight), 0 1px 2px 0 var(--shadow-ambient); /* 卡片默认 */
+  --shadow-md: inset 0 1px 0 var(--border-highlight), 0 4px 12px -2px var(--shadow-key), 0 2px 4px -1px var(--shadow-ambient); /* hover / elevated / dropdown */
+  --shadow-lg: inset 0 1px 0 var(--border-highlight), 0 16px 32px -8px var(--shadow-key), 0 4px 8px -2px var(--shadow-ambient); /* popover / dialog / toast */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-elevated: var(--elevated);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --font-sans: 'Inter Variable', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* 字号档 text-2xs（11px）：元信息专用档，字号阶梯四档定案见 docs/hub/visual-design.md §7.1，
+     11px 只经该令牌消费，禁止 11px 任意值字号写法（§12 尺寸类任意值禁止项）。
+     --text-2xs--line-height 是 Tailwind v4 字号档行高令牌语法（同 node_modules/tailwindcss/theme.css 的 --text-sm--line-height 先例）。 */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1.45;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  /* 文本基色必须显式声明：Radix Dialog 经 Portal 渲染到 body 下，
+     不继承 App 根 div 的 text-foreground，缺省会落到浏览器默认黑色，
+     深色弹窗底上黑字不可读（与 editor globals.css body 同口径）。 */
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+}

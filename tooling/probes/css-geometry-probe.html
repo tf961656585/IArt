@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>CSS 几何探针（真实类名结构转写）</title>
+<!--
+用途：定长视口下把目标组件链路的 Tailwind 类逐条等价转写成静态页，用真实 Chromium 量 rect，
+     让「布局/尺寸」从推断变成实测（jsdom 无语义布局，类型检查与静态门禁不覆盖 CSS 布局语义）。
+     仓库纪律见 AGENTS.md「Harness：门禁体系」的「布局/尺寸类改动没有机械兜底」条。
+
+用法：
+1) 逐条转写目标组件的类名到下面的 scoped CSS，注释标出转写来源的组件/类名。
+   本页默认转写的是 Editor 画布形态弹窗链（来源：docs/editor/dialog-sizing-contract.md）：
+   DialogContent form="canvas" → flex flex-col w-[min(96vw,1200px)] max-h-[90vh] overflow-hidden
+   fill prop 追加 h-[90vh]；预览面 → h-full w-full flex-1 min-h-0；图片 → h-full w-full object-contain。
+2) 一个场景一个 .stage（尺寸=目标视口），同一结构复刻「现状 / 候选修复」两种变体便于对照。
+3) 用 harness 的 browser 工具打开（**必须显式给 viewport**，90vh 依赖视口高度），evaluate 调 MEASURE(cases)。
+局限：只验证 CSS/cascade 语义，不覆盖组件真实装配与运行时数据；结论以数值为准，截图只作辅助。
+-->
+
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #444; font: 12px/1.4 monospace; color: #fff; }
+  img { display: block; max-width: 100%; height: auto; }        /* Tailwind preflight，必须照写 */
+
+  .stage { position: relative; width: 1512px; height: 880px; border-bottom: 4px solid #000; overflow: hidden; }
+  .stage-label { position: absolute; z-index: 5; left: 8px; top: 8px; background: #000; padding: 2px 6px; }
+
+  /* DialogContent form="canvas" */
+  .dialog { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    display: flex; flex-direction: column; gap: 1rem;
+    width: min(96vw, 1200px); max-height: 90vh; overflow: hidden; background: rgba(0,0,0,.6); }
+  .dialog-fill { height: 90vh; }                                 /* 追加 fill prop 后的 h-[90vh] */
+  /* 各入口包装层 / 预览面 / 媒体元素 */
+  .wrap { display: flex; min-height: 0; flex: 1 1 0%; align-items: center; justify-content: center; }
+  .surface { position: relative; height: 100%; width: 100%; flex: 1 1 0%; min-height: 0; overflow: hidden; background: rgba(0,0,0,.85); }
+  .inner { height: 100%; width: 100%; }
+  .media { height: 100%; width: 100%; object-fit: contain; }
+</style></head>
+<body>
+<div class="stage" id="stageA">
+  <div class="stage-label">A 现状（无 fill）· 方图 1024×1024</div>
+  <div class="dialog" id="dA">
+    <div class="wrap"><div class="surface"><div class="inner">
+      <img class="media" id="iA" width="1024" height="1024" alt=""
+        src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1024' height='1024'%3E%3Crect width='1024' height='1024' fill='%23c33'/%3E%3C/svg%3E">
+    </div></div></div>
+  </div>
+</div>
+<div class="stage" id="stageB">
+  <div class="stage-label">B 候选修复（fill + 高度链）· 方图 1024×1024</div>
+  <div class="dialog dialog-fill" id="dB">
+    <div class="wrap"><div class="surface"><div class="inner">
+      <img class="media" id="iB" width="1024" height="1024" alt=""
+        src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1024' height='1024'%3E%3Crect width='1024' height='1024' fill='%23c33'/%3E%3C/svg%3E">
+    </div></div></div>
+  </div>
+</div>
+<script>
+  // 每个场景返回：容器框 / 媒体框 / 自然尺寸 / 溢出像素 / 容器自身溢出 / 可见比例 / 需缩到多少才看全
+  window.MEASURE = (cases) => {
+    const out = {};
+    for (const [key, dialogId, mediaId] of cases) {
+      const d = document.getElementById(dialogId);
+      const m = document.getElementById(mediaId);
+      const dr = d.getBoundingClientRect();
+      const mr = m.getBoundingClientRect();
+      const overflow = Math.max(0, mr.bottom - dr.bottom) + Math.max(0, dr.top - mr.top)
+        + Math.max(0, mr.right - dr.right) + Math.max(0, dr.left - mr.left);
+      const visW = Math.min(dr.right, mr.right) - Math.max(dr.left, mr.left);
+      const visH = Math.min(dr.bottom, mr.bottom) - Math.max(dr.top, mr.top);
+      out[key] = {
+        dialogBox: [Math.round(dr.width), Math.round(dr.height)],
+        mediaBox: [Math.round(mr.width), Math.round(mr.height)],
+        natural: [m.naturalWidth, m.naturalHeight],
+        overflowPx: Math.round(overflow),
+        dialogOverflowY: d.scrollHeight - d.clientHeight,
+        visibleFraction: +((visW * visH) / (mr.width * mr.height)).toFixed(2),
+        scaleToSeeAll: +(dr.height / mr.height).toFixed(2),
+      };
+    }
+    out.viewport = [window.innerWidth, window.innerHeight, Math.round(window.innerHeight * 0.9)];
+    return JSON.stringify(out, null, 1);
+  };
+</script>
+</body></html>

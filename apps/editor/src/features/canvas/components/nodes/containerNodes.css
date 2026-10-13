@@ -1,0 +1,21 @@
+/* ============================================================
+   画布容器节点（组 / Agent 容器）组件级样式。
+   自 globals.css 拆出（globals 行数门禁 1000/1000 零余量，零令牌纯样式块下沉腾行）：
+   本文件所有 var() 引用要么在文件内定义（--group-anchor-text），要么登记在
+   guard:css-undefined-vars policy 的 runtimeInjectedVars（--group-text-light/dark，
+   由 GroupNode 按实例内联注入）——单文件闭合判定不跨文件解析。
+   消费方：GroupNode.tsx / AgentNode.tsx（顶部 import 本文件），
+   keyframes 经 Tailwind 任意 animate-* 消费（iart-group-surface-in 背板淡入 120ms、
+   iart-group-card-in 折叠卡淡入 150ms，均只动 paint，motion-reduce 关闭）。
+   ============================================================ */
+
+/* 组色配套文字档（浅 700 / 深 300 档）：--group-text-light/dark 由 GroupNode 实例内联注入 */
+.group-text-tier { color: var(--group-text-light); }
+[data-theme='dark'] .group-text-tier { color: var(--group-text-dark); }
+
+/* LOD 锚点近黑字：500 档组色/身份色实底压白字不达对比度，固定近黑字最不利色 ≥3:1
+   （大文本达标；对比度回归见 AgentNode.contrast.test.ts）。 */
+:root { --group-anchor-text: oklch(0.145 0 0); }
+
+@keyframes iart-group-surface-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes iart-group-card-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }

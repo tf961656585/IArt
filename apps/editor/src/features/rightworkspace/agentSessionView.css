@@ -1,0 +1,56 @@
+/* ============================================================
+   Agent 会话（批次 C 视觉重设计）：工具状态呼吸、流式光标、流式条目呼吸条。
+   只动 transform / opacity / 光标伪元素；prefers-reduced-motion 下全部关闭。
+   类选择器置于 @layer components，不压 utilities 层。
+   本文件随 AgentSessionView.tsx 组件级 import，由 PostCSS/Tailwind 管线
+   处理（与 globals.css 同链路）；层序沿用 globals.css 中 tailwindcss
+   @import 声明的 components 层次序，不在此重复声明基础层。
+   颜色一律在 tsx 侧按令牌消费：本文件不写 var() 引用（避免把主题令牌塞进
+   guard:css-undefined-vars 的运行时注入白名单），光标取 currentColor。
+   ============================================================ */
+@layer components {
+  /* 流式条目左侧状态条（scaleY 呼吸）与条目卡生成中呼吸点（opacity 呼吸） */
+  .agent-session-pulse {
+    animation: agent-session-breath 1.6s ease-in-out infinite;
+  }
+  .agent-session-breathe {
+    animation: agent-session-breath-opacity 1.6s ease-in-out infinite;
+  }
+  /* 审批面板提交中的执行钮 spinner */
+  .agent-session-spin {
+    animation: agent-session-spin 700ms linear infinite;
+  }
+  /* 流式文本尾光标：挂在 markdown 渲染容器上，落在最后一个块级元素的文本之后 */
+  .agent-session-caret-host > :last-child::after {
+    content: '';
+    display: inline-block;
+    width: 2px;
+    height: 1em;
+    margin-left: 2px;
+    vertical-align: -0.15em;
+    background: currentColor;
+    animation: agent-session-blink 1s steps(2, start) infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .agent-session-pulse,
+    .agent-session-breathe,
+    .agent-session-spin,
+    .agent-session-caret-host > :last-child::after {
+      animation: none;
+    }
+  }
+}
+@keyframes agent-session-breath {
+  0%, 100% { transform: scaleY(0.55); }
+  50% { transform: scaleY(1); }
+}
+@keyframes agent-session-breath-opacity {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+@keyframes agent-session-blink {
+  50% { opacity: 0; }
+}
+@keyframes agent-session-spin {
+  to { transform: rotate(360deg); }
+}

@@ -1,0 +1,29 @@
+{
+  "zones": [
+    "apps/editor/src/features/canvas",
+    "testing/integration"
+  ],
+  "boundaryZones": [
+    "apps/editor/src/features/canvas/store/internal/loadGraphNormalization.ts",
+    "apps/editor/src/features/canvas/store/__tests__/canvasStore.normalization.test.ts",
+    "apps/editor/src/features/canvas/components/canvas/useNodeSizeCommitGate.test.tsx",
+    "apps/editor/src/features/canvas/utils/contextMenuTarget.test.ts"
+  ],
+  "fileExtensions": [
+    ".ts",
+    ".tsx",
+    ".cts",
+    ".mts"
+  ],
+  "ignorePaths": [
+    "node_modules/**",
+    "**/*.d.ts",
+    "**/*.d.cts",
+    "**/*.d.mts",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**",
+    "**/coverage/**",
+    "dist-desktop/**"
+  ]
+}

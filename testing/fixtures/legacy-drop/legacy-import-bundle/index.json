@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "nodeGraphId": "legacy-import-legacy-drop-v1",
+  "updatedAt": "2026-02-26T00:00:00.000Z",
+  "tasksById": {
+    "legacy-task-1": {
+      "taskId": "legacy-task-1",
+      "status": "completed",
+      "output": {
+        "mediaType": "image",
+        "url": "/files/legacy.png"
+      }
+    }
+  },
+  "outputsByNodeId": {}
+}

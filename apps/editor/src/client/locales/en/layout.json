@@ -1,0 +1,19 @@
+{
+  "nav": {
+    "brand": "IArt",
+    "toggleSidebar": "Toggle sidebar",
+    "toggleThemeDark": "Switch to dark",
+    "toggleThemeLight": "Switch to light",
+    "toggleThemeAria": "Toggle theme mode"
+  },
+  "sidebar": {
+    "aria": "Side navigation",
+    "expand": "Expand sidebar",
+    "collapse": "Collapse sidebar",
+    "toggleAria": "Toggle sidebar",
+    "version": "Version {{version}}"
+  },
+  "footer": {
+    "copyright": "© {{year}} IARTStudio"
+  }
+}

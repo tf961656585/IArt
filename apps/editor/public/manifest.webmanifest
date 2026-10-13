@@ -1,0 +1,23 @@
+﻿{
+  "name": "IARTStudio",
+  "short_name": "IARTStudio",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "lang": "zh-CN",
+  "description": "IARTStudio 提供 AI 视频生成、AI 图片生成、脚本创意等一站式创作工具，帮助创作者和团队快速产出高品质内容。",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

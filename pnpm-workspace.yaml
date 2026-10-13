@@ -1,0 +1,17 @@
+packages:
+  - "apps/backend"
+  - "apps/desktop-shell"
+  - "apps/editor"
+  - "apps/hub"
+  - "packages/*"
+# macOS 安装包在本机（arm64）同时打包 arm64 与 x64 两个架构。
+# 声明 supportedArchitectures 让 pnpm install 一次性安装 darwin 下 arm64 与 x64
+# 两套平台特定 optional 依赖（如 sharp 的 @img/sharp-darwin-* 平台包），
+# 使交叉打包 x64 产物时能携带正确的 x64 native 二进制。
+# Windows x64 包在 Windows 机器原生构建，os=current 在该机器上解析为 win32 即可。
+supportedArchitectures:
+  os:
+    - current
+  cpu:
+    - current
+    - x64

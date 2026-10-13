@@ -1,0 +1,22 @@
+{
+  "package_id": "kling-v3-text2video",
+  "engine_version_range": ">=0.0.0",
+  "entry_model": {
+    "model_id": "kling-v3-text2video",
+    "relative_path": "runtime_model.json"
+  },
+  "node_definition": {
+    "relative_path": "node_definition.json"
+  },
+  "resources": [],
+  "locales": [
+    {
+      "locale": "zh-CN",
+      "relative_path": "locales/zh-CN.json"
+    },
+    {
+      "locale": "en",
+      "relative_path": "locales/en.json"
+    }
+  ]
+}

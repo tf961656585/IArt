@@ -1,0 +1,53 @@
+{
+  "name": "@iart/utils",
+  "private": true,
+  "version": "0.0.0",
+  "type": "commonjs",
+  "main": "./dist/files-url.cjs",
+  "types": "./dist/files-url.d.cts",
+  "exports": {
+    ".": {
+      "types": "./dist/files-url.d.cts",
+      "require": "./dist/files-url.cjs",
+      "default": "./dist/files-url.cjs"
+    },
+    "./files-url": {
+      "types": "./dist/files-url.d.cts",
+      "require": "./dist/files-url.cjs",
+      "default": "./dist/files-url.cjs"
+    },
+    "./project-paths": {
+      "types": "./dist/project-paths.d.cts",
+      "require": "./dist/project-paths.cjs",
+      "default": "./dist/project-paths.cjs"
+    },
+    "./project-ref": {
+      "types": "./dist/project-ref.d.cts",
+      "require": "./dist/project-ref.cjs",
+      "default": "./dist/project-ref.cjs"
+    },
+    "./storage-root-hints": {
+      "types": "./dist/storage-root-hints.d.cts",
+      "require": "./dist/storage-root-hints.cjs",
+      "default": "./dist/storage-root-hints.cjs"
+    },
+    "./media-constants": {
+      "types": "./dist/media-constants.d.cts",
+      "require": "./dist/media-constants.cjs",
+      "default": "./dist/media-constants.cjs"
+    },
+    "./media-file-key": {
+      "types": "./dist/media-file-key.d.cts",
+      "require": "./dist/media-file-key.cjs",
+      "default": "./dist/media-file-key.cjs"
+    },
+    "./stable-project-id": {
+      "types": "./dist/stable-project-id.d.cts",
+      "require": "./dist/stable-project-id.cjs",
+      "default": "./dist/stable-project-id.cjs"
+    }
+  },
+  "scripts": {
+    "build": "node ../../tooling/build/up-to-date-runner.mjs @iart/utils --workspace-deps -- \"node ../../tooling/build/clean-dist.mjs dist && tsc -p tsconfig.json\""
+  }
+}

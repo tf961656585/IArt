@@ -1,0 +1,41 @@
+{
+  "zones": [
+    "apps/backend/src",
+    "apps/editor/src",
+    "apps/hub/src",
+    "apps/desktop-shell/src",
+    "packages/backend-sdk/src"
+  ],
+  "boundaryZones": [
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx"
+  ],
+  "ownerZones": ["packages/contracts/src"],
+  "forbiddenLocalDeclarations": [
+    "*RuntimeTransaction*",
+    "*TaskStateNotification*",
+    "*TaskStateSnapshot*",
+    "*StorageRead*Request",
+    "*StorageRead*Response",
+    "*StorageRead*Params",
+    "*StorageRead*Result",
+    "*TaskSubmitMediaInputSchema*"
+  ],
+  "allowedLocalSuffixes": ["View", "Projection", "Input", "Row", "Raw", "Payload"],
+  "forbiddenLocalSchemaVariables": ["mediaInputSchema"],
+  "fileExtensions": [".ts", ".tsx", ".cts", ".mts"],
+  "ignorePaths": [
+    "node_modules/**",
+    "**/*.d.ts",
+    "**/*.d.cts",
+    "**/*.d.mts",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**",
+    "**/coverage/**",
+    "dist-desktop/**"
+  ]
+}

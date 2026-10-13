@@ -1,0 +1,14 @@
+{
+  "node_type": "model",
+  "group_key": "kling",
+  "input_ports": [],
+  "output_ports": [
+    {
+      "id": "video",
+      "name": "ports.outputs.video.name",
+      "data_type": "video",
+      "field_key": "output_video",
+      "multiple": true
+    }
+  ]
+}

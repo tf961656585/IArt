@@ -1,0 +1,15 @@
+{
+  "description": "Ensure normalizeTaskSubmitRequestBody handles nested FormData body (SchemaGenerationPayload format)",
+  "targetFunction": "apps/editor/src/client/api/taskFacade.ts::normalizeTaskSubmitRequestBody",
+  "requiredPatterns": [
+    "isFormDataLike(body)",
+    "normalizeTaskSubmitArgsFromFormData(body)"
+  ],
+  "ignorePaths": [
+    "node_modules/**",
+    "**/*.d.ts",
+    "**/*.d.cts",
+    "**/dist/**",
+    "**/build/**"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "description": "Ensure normalizeTaskSubmitRequestBody strips structural fields (body, api, meta) from arguments",
+  "targetFunction": "apps/editor/src/client/api/taskFacade.ts::normalizeTaskSubmitRequestBody",
+  "forbiddenArgKeys": ["body", "api", "meta"],
+  "ignorePaths": [
+    "node_modules/**",
+    "**/*.d.ts",
+    "**/*.d.cts",
+    "**/dist/**",
+    "**/build/**"
+  ]
+}
