@@ -1,10 +1,9 @@
 // skill bundle 打包/校验共享模块。
 //
-// 从 tooling/scripts/skill-publish.mjs（R2 直传发布，私有分发链路）抽出的
-// 纯校验与打包逻辑，供两个消费者共同使用：
-//   - skill-publish.mjs：R2 直传（退役中，保持行为不变直至退役批次）
+// 纯校验与打包逻辑的共享模块，消费者：
 //   - skill-catalog-build.mjs：本地产出 .skill-dist/（index.json + bundles/*.json，
-//     对齐 skill-catalog 分支布局）
+//     对齐公开仓 skill-catalog 分支布局）
+// （原另一消费者 skill-publish.mjs 为 R2 直传脚本，2026-10-13 随自建分发栈退役删除）
 //
 // 本模块不得引入任何分发通道语义（R2/wrangler/远端 URL），只承载：
 // 文件收集、路径安全校验、bundle 组装、bundle/index 结构校验、sha512、index 合并。

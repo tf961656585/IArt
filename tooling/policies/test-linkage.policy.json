@@ -23,7 +23,6 @@
     "apps/editor/src/**/*.spec.tsx",
     "apps/hub/src/**/*.test.ts",
     "apps/hub/src/**/*.test.tsx",
-    "apps/workers/app-update/src/**/*.test.ts",
     "apps/desktop-shell/src/__tests__/**/*.test.mts",
     "packages/chat-adapter/__tests__/**/*.test.ts",
     "packages/chat-adapter/__tests__/**/*.test.tsx",

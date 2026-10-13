@@ -62,12 +62,7 @@
     "*.dataset",
     "*.userData"
   ],
-  "fileExtensions": [
-    ".ts",
-    ".tsx",
-    ".cts",
-    ".mts"
-  ],
+  "fileExtensions": [".ts", ".tsx", ".cts", ".mts"],
   "ignorePaths": [
     "node_modules/**",
     "**/*.d.ts",

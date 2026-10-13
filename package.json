@@ -230,9 +230,8 @@
       "**/apps/backend/native-modules/better-sqlite3/**"
     ],
     "publish": {
-      "provider": "github",
-      "owner": "tf961656585",
-      "repo": "IArt"
+      "provider": "generic",
+      "url": "https://github.com/tf961656585/IArt/releases/latest/download"
     },
     "files": [
       "apps/backend/dist/**/*",

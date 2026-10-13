@@ -187,7 +187,7 @@ const runCli = () => {
   const packageDir = args.workspaceDeps ? process.cwd() : null;
   const inputsHash = computeInputsHash({ packageDir, explicitRoots: args.explicitRoots });
 
-  // 发布链路（desktop-release-local）注入 IART_FORCE_FRESH_BUILD=1：跳过复用判定，强制清理重建
+  // 发布链路（GitHub Actions）或调用方注入 IART_FORCE_FRESH_BUILD=1：跳过复用判定，强制清理重建
   const forceFreshBuild = process.env.IART_FORCE_FRESH_BUILD === '1';
   if (!forceFreshBuild && isUpToDate(args.key, inputsHash) && readUpToDateState(args.key).command === command) {
     log(`${args.key}: 构建输入未变化，跳过重建（产物为本轮最新）`);

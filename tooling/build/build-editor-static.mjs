@@ -58,7 +58,7 @@ process.on("SIGTERM", () => handleTerminate("SIGTERM"));
 
 try {
   const inputsHash = computeInputsHash({ explicitRoots: editorInputRoots });
-  // 发布链路注入 IART_FORCE_FRESH_BUILD=1 时跳过复用判定，强制清理重建
+  // 发布链路或调用方注入 IART_FORCE_FRESH_BUILD=1 时跳过复用判定，强制清理重建
   if (process.env.IART_FORCE_FRESH_BUILD !== '1' && isUpToDate("editor-static", inputsHash)) {
     console.log("[build-editor-static] 输入未变化，复用现有 dist-static（本轮最新产物）");
     process.exit(0);

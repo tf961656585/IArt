@@ -3,8 +3,8 @@
 //
 // 背景：mac job 在 arm64 runner 上分两次 electron-builder 构建后，每次构建都会用
 // 单架构条目覆盖 dist-desktop/latest-mac.yml；electron-updater 要求 latest-mac.yml
-// 同时携带 arm64 与 x64 的 zip 条目（对齐 desktop-release-local.mjs buildLatestMacYaml
-// 的输出形状：files = 双架构 zip 条目，顶层 path/sha512 = arm64 主条目，sha512 base64）。
+// 同时携带 arm64 与 x64 的 zip 条目（electron-updater 消费形状：files = 双架构 zip
+// 条目，顶层 path/sha512 = arm64 主条目，sha512 base64）。
 // 本脚本把两次构建各产的 latest-mac.yml 合并成一份。
 //
 // 合并语义（裁定口径）：

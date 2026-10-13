@@ -18,7 +18,6 @@ export default defineConfig({
     include: [
       "apps/editor/src/**/*.{test,spec}.{ts,tsx}",
       "apps/hub/src/**/*.{test,spec}.{ts,tsx}",
-      "apps/workers/app-update/src/**/*.{test,spec}.ts",
       "apps/desktop-shell/src/__tests__/**/*.{test,spec}.mts",
       "packages/chat-adapter/__tests__/**/*.{test,spec}.{ts,tsx}",
       "packages/contracts/__tests__/**/*.{test,spec}.{ts,tsx}",

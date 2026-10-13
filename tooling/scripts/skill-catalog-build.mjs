@@ -9,7 +9,7 @@
 // 拉取 `<catalog-base>/skills/index.json`，bundle URL 为 `<catalog-base>/<bundleKey>`，
 // bundleKey 形如 `skills/bundles/<id>-<version>.json`），产物可直接整体拷入该分支推送。
 //
-// 校验/打包/sha512 逻辑复用共享模块 skill-bundle-core.mjs（与 skill-publish.mjs 共同消费）；
+// 校验/打包/sha512 逻辑复用共享模块 skill-bundle-core.mjs；
 // 生成物用 packages/contracts 的 Zod schema（SkillBundleSchema / SkillCatalogSchema）
 // 做一次 parse 自验，契约不符即非零退出。
 //

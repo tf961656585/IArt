@@ -31,11 +31,9 @@
   "exclude": [
     "node_modules",
     "src",
-    "workers",
     "packages",
     "apps/backend",
     "apps/desktop-shell",
-    "apps/hub",
-    "apps/workers"
+    "apps/hub"
   ]
 }
