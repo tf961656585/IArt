@@ -70,7 +70,7 @@ test('类型与边界门禁链路保持唯一顺序', () => {
 
   assert.equal(
     scripts['check:types-and-boundaries'],
-    'pnpm build:typecheck-deps && pnpm typecheck:workspaces && pnpm lint && pnpm guard:stable-business-types && pnpm guard:canvas-selection-ownership && pnpm guard:dialog-sizing && pnpm guard:media-fit-contain && pnpm guard:elevation-z && pnpm guard:escape-stack && pnpm guard:css-undefined-vars && pnpm guard:css-size-tokens',
+    'pnpm build:typecheck-deps && pnpm typecheck:workspaces && pnpm lint && pnpm guard:stable-business-types && pnpm guard:canvas-selection-ownership && pnpm guard:dialog-sizing && pnpm guard:media-fit-contain && pnpm guard:elevation-z && pnpm guard:escape-stack && pnpm guard:css-undefined-vars && pnpm guard:css-size-tokens && pnpm guard:spec-test-linkage',
   );
 
   assertCommandsInOrder(scripts['check:types-and-boundaries'], [
@@ -85,15 +85,16 @@ test('类型与边界门禁链路保持唯一顺序', () => {
     'pnpm guard:escape-stack',
     'pnpm guard:css-undefined-vars',
     'pnpm guard:css-size-tokens',
+    'pnpm guard:spec-test-linkage',
   ]);
 });
 
 test('关键入口不重复内联静态硬门禁子步骤', () => {
-  assert.doesNotMatch(scripts.prebuild, /check:types-and-boundaries|typecheck:workspaces|pnpm lint|guard:stable-business-types|guard:canvas-selection-ownership|guard:dialog-sizing|guard:media-fit-contain|guard:elevation-z|guard:escape-stack|guard:css-undefined-vars|guard:css-size-tokens/);
+  assert.doesNotMatch(scripts.prebuild, /check:types-and-boundaries|typecheck:workspaces|pnpm lint|guard:stable-business-types|guard:canvas-selection-ownership|guard:dialog-sizing|guard:media-fit-contain|guard:elevation-z|guard:escape-stack|guard:css-undefined-vars|guard:css-size-tokens|guard:spec-test-linkage/);
   assert.equal(scripts.build, 'pnpm check:preflight');
   assert.equal(scripts['desktop:dev:latest'], 'pnpm desktop:dev');
-  assert.doesNotMatch(scripts.build, /typecheck:workspaces|pnpm lint|guard:stable-business-types|guard:canvas-selection-ownership|guard:dialog-sizing|guard:media-fit-contain|guard:elevation-z|guard:escape-stack|guard:css-undefined-vars|guard:css-size-tokens|diagnose:gates|diagnose:preflight/);
-  assert.doesNotMatch(scripts['desktop:dev:latest'], /typecheck:workspaces|pnpm lint|guard:stable-business-types|guard:canvas-selection-ownership|guard:dialog-sizing|guard:media-fit-contain|guard:elevation-z|guard:escape-stack|guard:css-undefined-vars|guard:css-size-tokens|diagnose:gates|diagnose:preflight/);
+  assert.doesNotMatch(scripts.build, /typecheck:workspaces|pnpm lint|guard:stable-business-types|guard:canvas-selection-ownership|guard:dialog-sizing|guard:media-fit-contain|guard:elevation-z|guard:escape-stack|guard:css-undefined-vars|guard:css-size-tokens|guard:spec-test-linkage|diagnose:gates|diagnose:preflight/);
+  assert.doesNotMatch(scripts['desktop:dev:latest'], /typecheck:workspaces|pnpm lint|guard:stable-business-types|guard:canvas-selection-ownership|guard:dialog-sizing|guard:media-fit-contain|guard:elevation-z|guard:escape-stack|guard:css-undefined-vars|guard:css-size-tokens|guard:spec-test-linkage|diagnose:gates|diagnose:preflight/);
 });
 
 test('预飞硬门禁入口覆盖运行构建发布风险', () => {
@@ -131,6 +132,7 @@ test('预飞硬门禁入口覆盖运行构建发布风险', () => {
   assert.equal(scripts['guard:elevation-z'], 'node ./tooling/scripts/guard-elevation-z.mjs');
   assert.equal(scripts['guard:escape-stack'], 'node ./tooling/scripts/guard-escape-stack.mjs');
   assert.equal(scripts['guard:css-undefined-vars'], 'node ./tooling/scripts/guard-css-undefined-vars.mjs');
+  assert.equal(scripts['guard:spec-test-linkage'], 'node ./tooling/scripts/guard-spec-test-linkage.mjs');
   assert.equal(scripts['ensure:desktop-deps'], 'node ./tooling/dev/ensure-desktop-deps.mjs');
 });
 
@@ -216,7 +218,7 @@ test('诊断入口不替代硬门禁主链', () => {
   assert.equal(scripts['diagnose:gates'], 'node ./tooling/scripts/diagnose-gates.mjs');
   assert.equal(
     scripts['check:types-and-boundaries'],
-    'pnpm build:typecheck-deps && pnpm typecheck:workspaces && pnpm lint && pnpm guard:stable-business-types && pnpm guard:canvas-selection-ownership && pnpm guard:dialog-sizing && pnpm guard:media-fit-contain && pnpm guard:elevation-z && pnpm guard:escape-stack && pnpm guard:css-undefined-vars && pnpm guard:css-size-tokens',
+    'pnpm build:typecheck-deps && pnpm typecheck:workspaces && pnpm lint && pnpm guard:stable-business-types && pnpm guard:canvas-selection-ownership && pnpm guard:dialog-sizing && pnpm guard:media-fit-contain && pnpm guard:elevation-z && pnpm guard:escape-stack && pnpm guard:css-undefined-vars && pnpm guard:css-size-tokens && pnpm guard:spec-test-linkage',
   );
   assert.doesNotMatch(scripts.build, /diagnose:gates/);
   assert.doesNotMatch(scripts['desktop:dev:latest'], /diagnose:gates/);
@@ -253,6 +255,7 @@ test('诊断入口失败后继续运行后续门禁并最终失败', () => {
     'guard:escape-stack',
     'guard:css-undefined-vars',
     'guard:css-size-tokens',
+    'guard:spec-test-linkage',
   ]);
   assert.match(result.stdout, /未运行项：无/);
 });

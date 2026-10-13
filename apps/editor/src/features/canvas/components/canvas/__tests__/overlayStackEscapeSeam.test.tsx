@@ -25,10 +25,12 @@ import { useNodeCanvasKeyboardShortcuts } from '../useNodeCanvasKeyboardShortcut
  * 2. 编辑态（注释编辑会话）作为独立层先退出，宿主浮层保持；再按才退宿主。
  */
 
+// guard-seam-mock-exempt: toast 副作用隔离（sonner 非被测 Esc 分发语义）；消除条件：断言改用可注入 toast 端口后移除
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), info: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }));
 
+// guard-seam-mock-exempt: React Flow 渲染层替身（useStore 返回固定 transform，Esc 分发语义不经渲染层）；消除条件：无——jsdom 下渲染层替身是本接缝的固定形态
 vi.mock('@xyflow/react', async () => {
   const actual = await vi.importActual<typeof XyFlowNS>('@xyflow/react');
   return {
@@ -38,6 +40,7 @@ vi.mock('@xyflow/react', async () => {
   };
 });
 
+// guard-seam-mock-exempt: 选择桥替身——被测主链是 Esc 栈分发，选择动作仅作为可观察输出以 vi.fn 断言调用；消除条件：无——隔离非被测语义属固定形态
 vi.mock('../useCanvasSelectionBridge', () => ({
   useCanvasSelectionBridge: () => ({
     selectAnnotations: vi.fn(),

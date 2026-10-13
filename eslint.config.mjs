@@ -23,6 +23,7 @@ const eslintConfig = [
       "**/build/**",
       "**/dist/**",
       "dist-desktop/**",
+      ".publish/**",
       "apps/editor/dist-static/**",
       "apps/hub/dist-static/**",
       "next-env.d.ts",

@@ -64,6 +64,11 @@ const gates = [
     command: ['pnpm', 'guard:css-size-tokens'],
     cascade: 'Hub 尺寸令牌守卫失败说明 apps/hub/src 的 className 仍裸写尺寸类任意值，未收敛到 visual-design §7.1 字号阶梯档名或 CSS 变量令牌。',
   },
+  {
+    name: 'guard:spec-test-linkage',
+    command: ['pnpm', 'guard:spec-test-linkage'],
+    cascade: '测试↔spec 关联守卫失败说明 @spec 标注指向已废弃/已退役/不存在的验收 ID（旧行为测试滞留信号），或验收 ID 在多份 Active 产物重复定义。',
+  },
 ];
 
 const formatCommand = (command) => command.join(' ');

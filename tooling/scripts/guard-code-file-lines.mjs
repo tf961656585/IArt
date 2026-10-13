@@ -31,6 +31,7 @@ const IGNORED_DIRS = new Set([
   ".cache",
   ".git",
   ".next",
+  ".publish",
   "build",
   "coverage",
   "dist",

@@ -42,6 +42,7 @@ import {
 // promptDockApi 是 Editor 侧的 HTTP 边界（submitGenerationBatch / cancelTask）：本接缝在这条
 // 边界上用替身承载「真实形状的受理/取消响应」，其余（前置校验、受理回执投影、画布 action）
 // 全部走真实实现。工厂只提供被消费的两个导出（沿 cliProxyReceiver.generate.test.ts 惯例）。
+// guard-seam-mock-exempt: 外部 HTTP 边界替身——被测主链两端真实，仅 HTTP facade 按 schema 真实形态替身；消除条件：promptDockApi 改为可注入 fetch 上游后移除本替身
 vi.mock('@/client/api/promptDockApi', () => ({
   __esModule: true,
   cancelTask: vi.fn(),

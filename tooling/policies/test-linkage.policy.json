@@ -1,0 +1,49 @@
+{
+  "docs": {
+    "dirs": ["docs"],
+    "excludeDirNames": ["archive", "temp"],
+    "specTypes": ["spec", "contract"],
+    "activeStatuses": ["Active"],
+    "terminalStatuses": ["Superseded", "Deprecated", "Archived"]
+  },
+  "testSuffixes": [".test.ts", ".test.tsx", ".test.mts", ".test.mjs"],
+  "excludeGlobs": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/dist-static/**",
+    "**/.publish/**",
+    "**/coverage/**",
+    "**/build/**",
+    "tooling/scripts/__tests__/**"
+  ],
+  "entryGlobs": [
+    "apps/editor/src/**/*.test.ts",
+    "apps/editor/src/**/*.test.tsx",
+    "apps/editor/src/**/*.spec.ts",
+    "apps/editor/src/**/*.spec.tsx",
+    "apps/hub/src/**/*.test.ts",
+    "apps/hub/src/**/*.test.tsx",
+    "apps/workers/app-update/src/**/*.test.ts",
+    "apps/desktop-shell/src/__tests__/**/*.test.mts",
+    "packages/chat-adapter/__tests__/**/*.test.ts",
+    "packages/chat-adapter/__tests__/**/*.test.tsx",
+    "packages/contracts/__tests__/**/*.test.ts",
+    "packages/contracts/__tests__/**/*.test.tsx",
+    "packages/domain/tests/**/*.test.ts",
+    "packages/model-asset-runtime/__tests__/**/*.test.ts",
+    "packages/model-asset-runtime/__tests__/**/*.test.tsx",
+    "packages/utils/__tests__/**/*.test.ts",
+    "packages/ui/__tests__/**/*.test.ts",
+    "packages/ui/__tests__/**/*.test.tsx",
+    "testing/integration/**/*.test.ts",
+    "testing/integration/**/*.test.tsx",
+    "apps/backend/src/**/__tests__/*.test.ts",
+    "tooling/scripts/__tests__/*.test.mjs"
+  ],
+  "seamMock": {
+    "fileNamePattern": "seam",
+    "detect": ["vi.mock(", "vi.doMock(", "jest.mock("],
+    "exemptMarker": "guard-seam-mock-exempt",
+    "level": "warning"
+  }
+}

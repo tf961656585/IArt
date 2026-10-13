@@ -1,19 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type {
-  RuntimeMediaAssetRow,
+  RuntimeMediaAssetView,
   RuntimeTaskOutputRow,
   RuntimeTaskRow,
 } from '@iart/contracts';
-import snapshotBuilderModule from '../runtime-snapshot-builder.cts';
-
-const { buildTaskStateSnapshotPayload } = snapshotBuilderModule;
 
 const isTaskFinalStatus = (status: string) => status === 'succeeded' || status === 'failed';
 const normalizeTaskStatus = (status: unknown) =>
   typeof status === 'string' ? status.trim().toLowerCase() : '';
 
-void test('runtime snapshot builder: 只包含非终态任务并保留 outputs/mediaAssets map', () => {
+void test('runtime snapshot builder: 只包含非终态任务并保留 outputs/mediaAssets map', async () => {
+  const { buildTaskStateSnapshotPayload } = await import('../runtime-snapshot-builder.cts');
   const runningTask: RuntimeTaskRow = {
     taskId: 'task-running',
     status: 'polling',
@@ -36,12 +34,12 @@ void test('runtime snapshot builder: 只包含非终态任务并保留 outputs/m
     textValue: null,
     sortOrder: 0,
   };
-  const mediaAsset: RuntimeMediaAssetRow = {
+  const mediaAsset: RuntimeMediaAssetView = {
     assetId: 'asset-running',
     mediaType: 'image',
-    payloadJson: '{"original":{"url":"/files/out.png"}}',
-    createdAt: 1,
-    updatedAt: 2,
+    original: { url: 'local-media://projects/p/files/out.png', sourceFileName: null },
+    thumbnail: { url: null, status: 'missing' },
+    lifecycle: { createdAt: 1, updatedAt: 2 },
   };
 
   const snapshot = buildTaskStateSnapshotPayload({

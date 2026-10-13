@@ -163,6 +163,7 @@ beforeEach(async () => {
 });
 
 describe('dissolveAgentContainer：解散＝退出容器形态（AG-CT-010）', () => {
+  // @spec: AG-CT-010, AG-CT-006
   it('有成员 Agent 容器解散：成员 groupId 清空且原位、Agent 节点保留（成员数为 0）、会话保留、无 removedNodes 脏标记', () => {
     addAgentNode('a1', 100, 100);
     addMemberNode('n1', 'a1', 120, 120);
@@ -193,6 +194,7 @@ describe('dissolveAgentContainer：解散＝退出容器形态（AG-CT-010）', 
     expect(Object.keys(dirty.nodes)).toEqual(expect.arrayContaining(['n1', 'n2']));
   });
 
+  // @spec: AG-CT-006
   it('解散写一条成员关系历史：undo 整体恢复成员关系与位置，redo 再次解除', () => {
     addAgentNode('a1', 100, 100);
     addMemberNode('n1', 'a1', 120, 120);
@@ -244,6 +246,7 @@ describe('dissolveAgentContainer：解散＝退出容器形态（AG-CT-010）', 
 });
 
 describe('删除 Agent 不提供撤销兜底（AG-CT-011）', () => {
+  // @spec: AG-CT-011
   it('删除 Agent 节点：撤销不可达（历史重建为删除后基线），非 Agent 节点删除仍可撤销', () => {
     addAgentNode('a1', 100, 100);
     addMemberNode('n1', 'a1', 120, 120);

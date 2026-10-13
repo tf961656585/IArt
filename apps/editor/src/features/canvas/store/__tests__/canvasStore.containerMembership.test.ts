@@ -188,12 +188,12 @@ describe('Agent 容器成员关系（建立/迁移/解除）', () => {
   });
 });
 
-describe('Agent 容器删除 = 解散（AG-CT-004 / AG-CN-005 / AG-CN-007）', () => {
+describe('Agent 容器删除路径的成员解散保留（AG-CN-007）', () => {
   beforeEach(async () => {
     await resetStore();
   });
 
-  // @spec: AG-CT-004, AG-CN-005
+  // @spec: AG-CN-007
   it('删除 Agent 容器（默认路径）：成员保留于画布原位、成员关系在同一存储写入路径解除', () => {
     addAgentNode('a1', 100, 100);
     addTextInputNode('n1', 120, 120, 'a1');
@@ -224,7 +224,7 @@ describe('Agent 容器删除 = 解散（AG-CT-004 / AG-CN-005 / AG-CN-007）', (
     expect(findNode('n2')?.groupId).toBeUndefined();
   });
 
-  // @spec: AG-CN-006, AG-CT-004
+  // @spec: AG-CN-006, AG-CN-007
   it('组连删：删除组与其显式成员（含 Agent 容器），但 Agent 容器的成员按解散保留', () => {
     addTextInputNode('m1', 10, 10);
     const groupId = useCanvasStore.getState().createGroup(['m1'], undefined);
