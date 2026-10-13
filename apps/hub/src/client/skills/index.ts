@@ -5,13 +5,13 @@ import { SkillCatalogSchema, type SkillCatalog } from '@iart/contracts';
  *
  * spec: docs/hub/skill-store.md
  *
- * 从 R2 公共 URL 拉取 skills/index.json 目录指针。目录是 latest 指针语义
- * （每次发布覆盖同一 key），必须 cache-buster + no-store 双保险规避缓存。
+ * 从公开仓 GitHub raw（skill-catalog 分支）拉取 skills/index.json 目录指针。
+ * raw 分支有约 5 分钟 CDN 缓存，必须 cache-buster + no-store 双保险规避缓存。
  *
  * CSP 审计：Hub 渲染进程未配置 connect-src 限制，可直接 fetch 外部域名（与 cloud-policy.ts 同先例）。
  */
 
-// skill 目录公共读取地址（Cloudflare R2 公共 URL，无鉴权）。
+// skill 目录公共读取地址（GitHub raw 公开分支，无鉴权）。
 export const SKILL_CATALOG_URL = 'https://raw.githubusercontent.com/tf961656585/IArt/skill-catalog/skills/index.json';
 
 export class SkillCatalogFetchError extends Error {
@@ -95,7 +95,7 @@ export function compareSkillVersions(a: string, b: string): number {
 /**
  * 根据 bundleKey 构建完整 bundle 下载 URL。
  *
- * bundleKey 是 R2 存储键（如 skills/bundles/gpt-image-1.0.0.json），
+ * bundleKey 是目录里的 bundle 键（如 skills/bundles/gpt-image-1.0.0.json），
  * 公开 URL 为 https://raw.githubusercontent.com/tf961656585/IArt/skill-catalog/<bundleKey>。
  */
 export function buildBundleUrl(bundleKey: string): string {

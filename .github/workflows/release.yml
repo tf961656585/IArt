@@ -104,10 +104,9 @@ jobs:
         run: pnpm verify:packaged-native-runtimes
 
       - name: Merge latest-mac.yml (arm64 + x64)
-        run: node ./tooling/scripts/merge-mac-update-manifest.mjs \
-          dist-desktop/arm64/latest-mac.yml \
-          dist-desktop/x64/latest-mac.yml \
-          --out dist-desktop/latest-mac.yml
+        # 单行命令：run 的普通标量会把行尾 `\` 按字面折叠进 argv（首跑实锤），
+        # 禁止在此类 run 里用续行符。
+        run: node ./tooling/scripts/merge-mac-update-manifest.mjs dist-desktop/arm64/latest-mac.yml dist-desktop/x64/latest-mac.yml --out dist-desktop/latest-mac.yml
 
       - name: Upload to draft release
         run: |
@@ -134,7 +133,9 @@ jobs:
 
   release-win:
     name: Build & upload (Windows x64)
-    runs-on: windows-latest
+    # 钉 windows-2022（VS2022）：windows-latest 镜像已是 VS18(2026)，node-gyp 11.5.0
+    # 的 VS 探测器不认识该版本（find VS unknown version "undefined"），原生模块编译失败。
+    runs-on: windows-2022
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
