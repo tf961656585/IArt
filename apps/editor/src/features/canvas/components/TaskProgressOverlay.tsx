@@ -71,7 +71,7 @@ export function TaskProgressOverlay({
             <div className="text-sm font-semibold text-foreground">{title}</div>
             {detailText && <div className="mt-1 text-xs text-muted-foreground">{detailText}</div>}
           </div>
-          <Button variant="ghost" size="sm" className="h-7 px-2" onClick={onHide}>
+          <Button variant="ghost" size="2xs" onClick={onHide}>
             {hideLabel ?? '隐藏'}
           </Button>
         </div>
@@ -82,8 +82,7 @@ export function TaskProgressOverlay({
             {canCancel && status === 'running' && (
               <Button
                 variant="destructive"
-                size="sm"
-                className="h-7 px-2"
+                size="2xs"
                 onClick={onCancel}
               >
                 {cancelLabel ?? '取消'}

@@ -404,10 +404,8 @@ const SchemaFormRenderer = <FieldKey extends string = SchemaFieldKey>({
     ]
   );
 
-  const submitDisabled = busy || submitting;
-  const submitLabel = submitDisabled
-    ? translate("pages:modelWorkspace.actions.submitting", "提交中...")
-    : translate("pages:modelWorkspace.actions.generate", "开始生成");
+  // 提交态由 loading prop 承载（spinner + aria-busy + 自动禁用）；busy 是容器级忙（模型在跑），
+  // 只禁用不转圈。
 
   // 取消顶部吸顶行
   const _topRow = null;
@@ -535,8 +533,8 @@ const SchemaFormRenderer = <FieldKey extends string = SchemaFieldKey>({
       ) : null}
       {hideSubmit ? null : (
         <div className="flex justify-end">
-          <Button type="submit" disabled={submitDisabled}>
-            {submitLabel}
+          <Button type="submit" loading={submitting} disabled={busy}>
+            {translate("pages:modelWorkspace.actions.generate", "开始生成")}
           </Button>
         </div>
       )}

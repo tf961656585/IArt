@@ -63,7 +63,7 @@ export const GridPresetSelector = memo(function GridPresetSelector({
           <Button
             key={preset.label}
             type="button"
-            variant={isActive ? "default" : "outline"}
+            variant={isActive ? "primary" : "outline"}
             size="sm"
             className="gap-1.5 px-3"
             onClick={() => onSelect(preset.rows, preset.cols)}
@@ -75,7 +75,7 @@ export const GridPresetSelector = memo(function GridPresetSelector({
       })}
       <Button
         type="button"
-        variant={isCustom ? "default" : "outline"}
+        variant={isCustom ? "primary" : "outline"}
         size="sm"
         className="gap-1.5 px-3"
         onClick={handleCustom}

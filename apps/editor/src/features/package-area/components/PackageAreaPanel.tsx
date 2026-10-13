@@ -379,16 +379,18 @@ export function PackageAreaPanel() {
         <div className="flex items-center gap-1">
           {/* 「打开所在文件夹」常驻定位入口（spec docs/editor/本地文件快捷跳转.md
               LFJ-001/002/010）：与「执行打包」同一栏，定位最近一次打包产物目录。 */}
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="2xs"
             disabled={revealTarget === null}
             onClick={() => void handleRevealLatestPackage()}
-            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+            className="text-muted-foreground"
             aria-label="打开所在文件夹"
           >
-            <IconFolder size={14} />
+            <IconFolder size={14} className="size-3.5" />
             打开所在文件夹
-          </button>
+          </Button>
           <Popover
             open={packageName !== null}
             onOpenChange={(open) => {
@@ -397,15 +399,17 @@ export function PackageAreaPanel() {
             }}
           >
             <PopoverTrigger asChild>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="2xs"
                 disabled={entries.length === 0}
-                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+                className="text-muted-foreground"
                 aria-label="执行打包"
               >
-                <IconPackage size={14} />
+                <IconPackage size={14} className="size-3.5" />
                 执行打包
-              </button>
+              </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-72 space-y-2">
               <p className="text-xs text-muted-foreground">
@@ -424,8 +428,8 @@ export function PackageAreaPanel() {
                 <Button size="sm" variant="ghost" onClick={() => setPackageName(null)}>
                   取消
                 </Button>
-                <Button size="sm" disabled={packaging} onClick={() => void handleConfirmPackage()}>
-                  {packaging ? '打包中...' : '创建包'}
+                <Button size="sm" loading={packaging} onClick={() => void handleConfirmPackage()}>
+                  创建包
                 </Button>
               </div>
             </PopoverContent>

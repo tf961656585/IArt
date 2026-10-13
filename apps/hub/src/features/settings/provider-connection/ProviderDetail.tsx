@@ -138,12 +138,13 @@ export function ProviderDetail({
             {connection.lifecycle === 'enabled' ? '停用' : '启用'}
           </Button>
           {/* 破坏性动作独立成组（visual-design §8.6 律三）：删除类不混入常规动作组，
-              组内 4px、与常规组之间 8px（外层 gap-2）+ 语义色隔离 */}
+              组内 4px、与常规组之间 8px（外层 gap-2）+ 语义色隔离；
+              行内危险动作统一 ghost-destructive 形态（按钮样式标准 §4），不再手写 text-destructive */}
           <div className="flex items-center gap-1">
             {connection.has_credential ? (
-              <Button size="sm" variant="ghost" onClick={onClearCredential}>删除密钥</Button>
+              <Button size="sm" variant="ghost-destructive" onClick={onClearCredential}>删除密钥</Button>
             ) : null}
-            <Button size="sm" variant="ghost" className="text-destructive" onClick={onDelete}>删除</Button>
+            <Button size="sm" variant="ghost-destructive" onClick={onDelete}>删除</Button>
           </div>
         </div>
       ) : null}
@@ -326,8 +327,7 @@ export function ProviderDetail({
                       {row.kind === 'custom-generation' && editable ? (
                         <Button
                           size="sm"
-                          variant="ghost"
-                          className="text-destructive"
+                          variant="ghost-destructive"
                           aria-label={`删除模型「${row.record.model_id}」`}
                           onClick={() => onDeleteGenerationModel(row.record.model_id)}
                         >
@@ -348,10 +348,11 @@ export function ProviderDetail({
                       <div className="flex shrink-0 items-center gap-1">
                         {generationDefaultButton}
                         {/* 「移除」只对已装包模型行出现：自建记录即接入，摘掉接入等于删掉模型，
-                            那个动作叫「删除模型」，不叫「移除」（spec §4.4） */}
+                            那个动作叫「删除模型」，不叫「移除」（spec §4.4）。
+                            移除是行内卸除类动作 → ghost-destructive（按钮样式标准 §4） */}
                         <Button
                           size="sm"
-                          variant="ghost"
+                          variant="ghost-destructive"
                           aria-label={`移除 ${row.deployment.model_id}`}
                           onClick={() => onRemoveModel(row.deployment.deployment_id, row.deployment.model_id)}
                         >

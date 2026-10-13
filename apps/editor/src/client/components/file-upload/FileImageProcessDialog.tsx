@@ -1,5 +1,4 @@
 import Image from "next/image";
-import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -110,20 +109,13 @@ export const FileImageProcessDialog: React.FC<ProcessDialogProps> = ({
           variant="outline"
           size="sm"
           onClick={onRun}
-          disabled={processingImage}
+          loading={processingImage}
         >
-          {processingImage ? (
-            <>
-              <Loader2 className="mr-2 size-4 animate-spin" />
-              {labels.run}
-            </>
-          ) : (
-            labels.run
-          )}
+          {labels.run}
         </Button>
         <Button
           type="button"
-          variant="default"
+          variant="primary"
           size="sm"
           onClick={onApply}
           disabled={!processedSrc || processingImage}

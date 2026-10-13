@@ -113,9 +113,6 @@ svg { display:block; max-width:100%; }
   --color-danger: #d32f2f;
   --color-warning: #ed6c02;
   --color-success: #2e7d32;
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
   --shadow-sm: 0 1px 2px rgba(5,9,15,.28);
   --shadow-md: 0 6px 14px -4px rgba(11,16,26,.35);
   --shadow-lg: 0 16px 38px -8px rgba(10,18,34,.4);
@@ -124,7 +121,7 @@ svg { display:block; max-width:100%; }
   --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
   --container-max: 1280px;
-  --radius: 0.625rem;
+  --radius: 0.5rem; /* 圆角 calc 基底（按钮 rounded-md=6px，docs/ui-button-standard.md §10）：经 @theme inline 链解析 sm=4/md=6/lg=8/xl=12px；原 :root 裸值 --radius-sm/md/lg 双源已删 */
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -143,6 +140,8 @@ svg { display:block; max-width:100%; }
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.5 0 0);
+  --success: oklch(0.50 0.15 162); /* 语义状态色（docs/ui-button-standard.md §10；取值同 Hub：Editor 浅色卡同为纯白底，对比可复用 on white ≈5.3:1）*/
+  --warning: oklch(0.56 0.15 75); /* hue 75 同 Hub，on white ≈4.75:1。与上方遗留 form 皮肤家族 --color-success/--color-warning（hex）并存两套，收敛归后续批次 */
   /* 阴影梯度（docs/editor/visual-design.md §5.9：浅色冷调低 alpha ≤0.14） */
   --shadow-sm: 0 1px 2px 0 oklch(0.21 0.025 277 / 0.10);
   --shadow-md: 0 6px 14px -4px oklch(0.21 0.025 277 / 0.12);
@@ -248,6 +247,8 @@ svg { display:block; max-width:100%; }
   --color-danger: #ff6b6b;
   --color-warning: #ff9c54;
   --color-success: #36d17c;
+  --success: oklch(0.70 0.17 162); /* 语义状态色深色档（docs/ui-button-standard.md §10，值同 Hub 深档；Editor 深底 0.145/0.205 比 Hub 0.165/0.215 更暗，对比只增不减；与既有 --st-succeeded 深档 #10b981 同族 hue 162）*/
+  --warning: oklch(0.78 0.16 75); /* 值同 Hub 深档 */
   /* 语义状态色（深色档：明度翻转，docs/editor/visual-design.md §5.5） */
   --st-submitting: #0ea5e9;
   --st-generating: #3b82f6;
@@ -306,6 +307,7 @@ svg { display:block; max-width:100%; }
   --color-danger: #d32f2f;
   --color-warning: #ed6c02;
   --color-success: #2e7d32;
+  --success: oklch(0.50 0.15 162); --warning: oklch(0.56 0.15 75);
 }
 
 body { font-family: var(--font-sans); background: var(--color-bg); color: var(--color-fg); line-height:1.55; }
@@ -471,9 +473,9 @@ a:not([data-slot="button"]):not([data-slot="button"] *):hover { color: var(--col
   to { transform: translateX(calc(-1 * var(--iart-marquee-shift, 0px))); }
 }
 
-@theme inline { --radius-sm: calc(var(--radius) - 4px); --radius-md: calc(var(--radius) - 2px); --radius-lg: var(--radius); --radius-xl: calc(var(--radius) + 4px); --color-background: var(--background); --color-foreground: var(--foreground); --color-card: var(--card); --color-card-foreground: var(--card-foreground); --color-popover: var(--popover); --color-popover-foreground: var(--popover-foreground); --color-primary: var(--primary); --color-primary-foreground: var(--primary-foreground); --color-secondary: var(--secondary); --color-secondary-foreground: var(--secondary-foreground); --color-muted: var(--muted); --color-muted-foreground: var(--muted-foreground); --color-accent: var(--accent); --color-accent-foreground: var(--accent-foreground); --color-destructive: var(--destructive); --color-border: var(--border); --color-input: var(--input); --color-ring: var(--ring); --color-chart-1: var(--chart-1); --color-chart-2: var(--chart-2); --color-chart-3: var(--chart-3); --color-chart-4: var(--chart-4); --color-chart-5: var(--chart-5); }
+@theme inline { --radius-sm: calc(var(--radius) - 4px); --radius-md: calc(var(--radius) - 2px); --radius-lg: var(--radius); --radius-xl: calc(var(--radius) + 4px); --color-background: var(--background); --color-foreground: var(--foreground); --color-card: var(--card); --color-card-foreground: var(--card-foreground); --color-popover: var(--popover); --color-popover-foreground: var(--popover-foreground); --color-primary: var(--primary); --color-primary-foreground: var(--primary-foreground); --color-secondary: var(--secondary); --color-secondary-foreground: var(--secondary-foreground); --color-muted: var(--muted); --color-muted-foreground: var(--muted-foreground); --color-accent: var(--accent); --color-accent-foreground: var(--accent-foreground); --color-destructive: var(--destructive); --color-border: var(--border); --color-input: var(--input); --color-ring: var(--ring); --color-chart-1: var(--chart-1); --color-chart-2: var(--chart-2); --color-chart-3: var(--chart-3); --color-chart-4: var(--chart-4); --color-chart-5: var(--chart-5); /* 语义状态色（docs/ui-button-standard.md §10；取值同 Hub globals.css 同色相族）*/ --color-success: var(--success); --color-warning: var(--warning); }
 
-.dark { color-scheme: dark; --background: oklch(0.145 0 0); --foreground: oklch(0.985 0 0); --card: oklch(0.205 0 0); --card-foreground: oklch(0.985 0 0); --popover: oklch(0.205 0 0); --popover-foreground: oklch(0.985 0 0); --primary: oklch(0.922 0 0); --primary-foreground: oklch(0.205 0 0); --secondary: oklch(0.269 0 0); --secondary-foreground: oklch(0.985 0 0); --muted: oklch(0.269 0 0); --muted-foreground: oklch(0.708 0 0); --accent: oklch(0.269 0 0); --accent-foreground: oklch(0.985 0 0); --destructive: oklch(0.704 0.191 22.216); --border: oklch(1 0 0 / 10%); --input: oklch(1 0 0 / 15%); --ring: oklch(0.556 0 0); --chart-1: oklch(0.488 0.243 264.376); --chart-2: oklch(0.696 0.17 162.48); --chart-3: oklch(0.769 0.188 70.08); --chart-4: oklch(0.627 0.265 303.9); --chart-5: oklch(0.645 0.246 16.439); }
+.dark { color-scheme: dark; --background: oklch(0.145 0 0); --foreground: oklch(0.985 0 0); --card: oklch(0.205 0 0); --card-foreground: oklch(0.985 0 0); --popover: oklch(0.205 0 0); --popover-foreground: oklch(0.985 0 0); --primary: oklch(0.922 0 0); --primary-foreground: oklch(0.205 0 0); --secondary: oklch(0.269 0 0); --secondary-foreground: oklch(0.985 0 0); --muted: oklch(0.269 0 0); --muted-foreground: oklch(0.708 0 0); --accent: oklch(0.269 0 0); --accent-foreground: oklch(0.985 0 0); --destructive: oklch(0.704 0.191 22.216); --border: oklch(1 0 0 / 10%); --input: oklch(1 0 0 / 15%); --ring: oklch(0.556 0 0); --chart-1: oklch(0.488 0.243 264.376); --chart-2: oklch(0.696 0.17 162.48); --chart-3: oklch(0.769 0.188 70.08); --chart-4: oklch(0.627 0.265 303.9); --chart-5: oklch(0.645 0.246 16.439); /* 语义状态色深色档（.dark 单信号兜底，值同 [data-theme='dark'] 块）*/ --success: oklch(0.70 0.17 162); --warning: oklch(0.78 0.16 75); }
 
 @layer base {
   * {
@@ -579,19 +581,8 @@ a:not([data-slot="button"]):not([data-slot="button"] *):hover { color: var(--col
   animation: iart-hatch-spin 1s linear infinite;
 }
 
-/* 取消白圆钮（运行态常驻，对齐真实 hover 圆钮群 h-6 w-6 bg-white/90） */
-.task-cancel {
-  position: absolute; top: 8px; right: 8px; z-index: 6;
-  width: 24px; height: 24px; padding: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: none; border-radius: 9999px;
-  background: rgba(255,255,255,.9); color: oklch(0.145 0 0);
-  box-shadow: 0 1px 2px rgba(0,0,0,.2);
-  font-size: 13px; cursor: pointer;
-  transition: background .15s, transform .15s;
-}
-.task-cancel:hover { background: var(--scrim-white); transform: scale(1.06); }
-.task-cancel:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* 取消白圆钮样式已收进 TaskNode.tsx 组件局部（ui-button-standard §7 宿主局部控件）；
+   .task-cancel 类名仅作下方 .task-node.morphing 淡出组规则的状态钩子保留。 */
 
 /* 进度 hairline：2px 底部细线（scaleX 更新，不触发布局），仅 generating */
 .task-hatch-hairline {
@@ -624,24 +615,8 @@ a:not([data-slot="button"]):not([data-slot="button"] *):hover { color: var(--col
   max-height: 72px; overflow-y: auto;
 }
 .task-failure .acts { display: flex; gap: 6px; margin-top: 8px; }
-.act-primary {
-  height: 26px; padding: 0 10px; border: none; border-radius: var(--radius-sm);
-  background: rgba(255,255,255,.9); color: oklch(0.145 0 0);
-  font-size: 11px; font-weight: 500; cursor: pointer;
-}
-.act-primary:hover { background: var(--scrim-white); }
-.act-danger {
-  height: 26px; padding: 0 10px;
-  border: 1px solid rgba(255,255,255,.28); border-radius: var(--radius-sm);
-  background: transparent; color: var(--scrim-text);
-  font-size: 11px; font-weight: 500; cursor: pointer;
-  transition: background .15s, color .15s, border-color .15s;
-}
-.act-danger:hover {
-  background: rgba(255,255,255,.12); color: var(--scrim-danger-text);
-  border-color: color-mix(in srgb, var(--scrim-danger-text) 50%, transparent);
-}
-.act-primary:focus-visible, .act-danger:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* 失败 overlay 动作钮（重试/删除）已迁共享 Button（primary / ghost-destructive · 2xs），
+   .act-primary / .act-danger 类体系退役（ui-button-standard §4）。 */
 
 /* 取消 note（scrim-55，视觉重量低于失败） */
 .task-cancelled-note {
@@ -699,9 +674,9 @@ a:not([data-slot="button"]):not([data-slot="button"] *):hover { color: var(--col
   border-color: color-mix(in srgb, var(--muted-foreground) 40%, transparent);
   border-top-color: var(--st-generating);
 }
-/* 白 pill 徽章 / 取消圆钮：浅色在中性占位上加细边增强可见性 */
+/* 白 pill 徽章 / 取消圆钮：浅色在中性占位上加细边增强可见性
+   （取消圆钮浅色细边已随组件局部化迁入 TaskNode.tsx） */
 [data-theme='light'] .task-status-badge { border-color: var(--border); }
-[data-theme='light'] .task-cancel { border: 1px solid var(--border); }
 /* 失败 overlay：实色卡片 + 失败色强调 */
 [data-theme='light'] .task-failure {
   background: var(--card); color: var(--foreground);
@@ -710,19 +685,6 @@ a:not([data-slot="button"]):not([data-slot="button"] *):hover { color: var(--col
 [data-theme='light'] .task-failure .sum { color: var(--st-failed-text); }
 [data-theme='light'] .task-failure summary,
 [data-theme='light'] .task-failure pre { color: var(--muted-foreground); }
-[data-theme='light'] .act-primary {
-  background: var(--secondary); color: var(--secondary-foreground);
-  border: 1px solid var(--border);
-}
-[data-theme='light'] .act-primary:hover { background: var(--accent); }
-[data-theme='light'] .act-danger {
-  border: 1px solid var(--border); background: transparent; color: var(--st-failed-text);
-}
-[data-theme='light'] .act-danger:hover {
-  background: color-mix(in srgb, var(--st-failed) 10%, transparent);
-  border-color: color-mix(in srgb, var(--st-failed) 30%, transparent);
-  color: var(--st-failed-text);
-}
 /* 取消 note：实色卡片 */
 [data-theme='light'] .task-cancelled-note {
   background: var(--card); color: var(--foreground);
@@ -820,25 +782,8 @@ a:not([data-slot="button"]):not([data-slot="button"] *):hover { color: var(--col
 .node-chrome-top .grp { display: flex; align-items: center; gap: 2px; }
 .node-chrome-top .sep { width: 1px; align-self: stretch; margin: 4px 6px; background: var(--border); }
 
-/* D18 · 工具钮（ghost 28×28） */
-.tool-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; padding: 0; border: none;
-  border-radius: var(--radius-md);
-  background: transparent; color: var(--foreground);
-  transition: background .12s, transform .08s;
-}
-.tool-btn:hover { background: var(--accent); }
-.tool-btn:active { transform: scale(.96); }
-.tool-btn:focus-visible { outline: 2px solid var(--chrome-ring); outline-offset: 2px; }
-.tool-btn[disabled] { opacity: .4; cursor: not-allowed; }
-.tool-btn[aria-busy="true"] { opacity: .65; }
-.tool-spinner {
-  width: 12px; height: 12px; border-radius: 9999px; flex: none;
-  border: 2px solid color-mix(in srgb, var(--foreground) 30%, transparent);
-  border-top-color: transparent; animation: chrome-spin 1s linear infinite;
-}
-@keyframes chrome-spin { to { transform: rotate(360deg); } }
+/* D18 · 工具钮已迁共享 Button（ghost · 2xs · loading prop），.tool-btn/.tool-spinner 退役
+   （ui-button-standard §4/§6；busy spinner 由 Button loading prop 承载）。 */
 
 /* D17/D21 · 底栏（路由动作 chrome） */
 .node-chrome-bottom {
@@ -854,25 +799,9 @@ a:not([data-slot="button"]):not([data-slot="button"] *):hover { color: var(--col
 [data-theme='dark'] .node-chrome-bottom { box-shadow: inset 0 1px 0 oklch(1 0 0 / 8%), var(--shadow-md); }
 .node-chrome-bottom .sep { width: 1px; height: 16px; flex: none; background: var(--border); }
 
-/* 使用钮（ghost 文字钮，高 28；H3：不用灰/500 档做文字色） */
-.usage-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 28px; padding: 0 10px; border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent; color: var(--foreground);
-  font-size: 12px; font-weight: 500; white-space: nowrap;
-  transition: background .12s, color .12s, border-color .12s;
-}
-.usage-btn:hover { background: var(--accent); }
-.usage-btn:focus-visible { outline: 2px solid var(--chrome-ring); outline-offset: 2px; }
-.usage-btn[data-active="true"] {
-  background: color-mix(in srgb, var(--st-generating) 14%, transparent);
-  color: var(--st-generating-text);
-  border-color: color-mix(in srgb, var(--st-generating) 30%, transparent);
-}
-.usage-btn[data-active="true"]:hover { background: color-mix(in srgb, var(--st-generating) 20%, transparent); }
-.usage-btn.danger { color: var(--st-failed-text); }
-.usage-btn.danger:hover { background: color-mix(in srgb, var(--st-failed) 10%, transparent); }
+/* 使用钮已迁共享 Button（ghost / ghost-destructive · 2xs；data-active 激活态收进组件局部），
+   .usage-btn 类体系退役（ui-button-standard §4）。以下两条为 §10 登记例外的填充规则，
+   原样保留（editor visual-design §7.1：实底红 #b91c1c + 白字、两主题固定）。 */
 .usage-btn.confirm-fill { background: var(--st-failed-fill); color: var(--scrim-text); } /* 恒定白字（700 档底 ≈5.9:1） */
 .usage-btn.confirm-fill:hover { background: var(--st-failed-fill-hover); }
 
@@ -978,7 +907,7 @@ a:not([data-slot="button"]):not([data-slot="button"] *):hover { color: var(--col
 
 @media (prefers-reduced-motion: reduce) {
   .node-chrome-top, .node-chrome-bottom { transition: opacity .12s; transform: none; }
-  .tool-btn:active, .asset-media-quick button:hover { transform: none; }
+  .asset-media-quick button:hover { transform: none; }
   .ref-ghost { transition: opacity .12s; transform: none; }
 }
 

@@ -145,8 +145,7 @@ export const FileUploadPreviewList: React.FC<PreviewListProps> = ({
                 label={labels.remove}
                 icon={<Trash2 className="size-4" />}
                 inspectorGridActive={inspectorGridActive}
-                variant={inspectorGridActive ? "ghost" : "destructive"}
-                destructiveHover={inspectorGridActive}
+                variant="ghost-destructive"
                 onClick={() => onRemove(idx)}
               />
             </div>
@@ -208,16 +207,14 @@ function PreviewAction({
   icon,
   inspectorGridActive,
   variant,
-  destructiveHover,
   disabled,
   onClick,
 }: {
   label: string;
   icon: React.ReactNode;
   inspectorGridActive: boolean;
-  variant: "outline" | "ghost" | "destructive";
+  variant: "outline" | "ghost" | "ghost-destructive";
 } & Partial<{
-  destructiveHover: boolean | undefined;
   disabled: boolean | undefined;
 }> & {
   onClick: () => void;
@@ -231,7 +228,7 @@ function PreviewAction({
       size="icon-sm"
       className={
         inspectorGridActive
-          ? `size-6 bg-background/90 shadow-sm ${destructiveHover ? "hover:bg-destructive hover:text-destructive-foreground" : ""}`
+          ? "size-6 bg-background/90 shadow-sm"
           : "transition-transform hover:-translate-y-px"
       }
       onClick={onClick}

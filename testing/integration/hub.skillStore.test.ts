@@ -46,9 +46,9 @@ describe('Hub Skill 商店页', () => {
     expect(hooksSrc).toContain('const ok = await installSkill(item.skill, item.target);');
     expect(hooksSrc).toContain('`已更新 ${succeeded} 个，全部完成`');
 
-    /* 更新入口按钮：计数与可见性由 pendingUpdates 驱动 */
+    /* 更新入口按钮：计数与可见性由 pendingUpdates 驱动；busy 走 Button loading prop（BTN-005） */
     const tabSrc = loadHubSrcFile(SKILLS_TAB_SRC);
-    expect(tabSrc).toContain('`全部更新（${pendingUpdates.length}）`');
+    expect(tabSrc).toContain('全部更新（{pendingUpdates.length}）');
     expect(tabSrc).toContain('void updateAll()');
   });
 });

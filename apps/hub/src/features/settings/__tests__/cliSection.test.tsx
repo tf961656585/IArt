@@ -283,7 +283,10 @@ describe('CliSection 命令入口注册/卸除（CLI-016）', () => {
 
     const button = await screen.findByRole('button', { name: '注册 iart 命令' });
     fireEvent.click(button);
-    expect(await screen.findByRole('button', { name: '正在注册...' })).toBeDisabled();
+    // loading 态由 Button 的 loading prop 承载：文案不变，置 aria-busy 并自动禁用（按钮样式标准 §6）
+    const busyButton = await screen.findByRole('button', { name: '注册 iart 命令' });
+    expect(busyButton).toBeDisabled();
+    expect(busyButton).toHaveAttribute('aria-busy', 'true');
 
     resolveRegister?.({ ok: true });
     expect(await screen.findByText('已注册')).toBeInTheDocument();

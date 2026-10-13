@@ -1,17 +1,20 @@
 import * as React from "react"
 import { Slot } from "@radix-ui/react-slot"
 import { cva, type VariantProps } from "class-variance-authority"
+import { Loader2 } from "lucide-react"
 
 import { cn } from "./lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring dark:focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 motion-safe:active:scale-[0.96] [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring dark:focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        primary: "bg-primary text-primary-foreground hover:bg-primary/90",
         destructive:
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
+        "ghost-destructive":
+          "text-destructive hover:bg-destructive/10 dark:hover:bg-destructive/20",
         outline:
           "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50",
         secondary:
@@ -23,7 +26,7 @@ const buttonVariants = cva(
       size: {
         default: "h-9 px-4 py-2 has-[>svg]:px-3",
         sm: "h-8 rounded-md gap-1.5 px-3 has-[>svg]:px-2.5",
-        xs: "h-8 rounded-md gap-1.5 px-2.5 text-[11px]",
+        "2xs": "h-7 px-2 text-xs",
         lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
         icon: "size-9",
         "icon-sm": "size-8",
@@ -31,7 +34,7 @@ const buttonVariants = cva(
       },
     },
     defaultVariants: {
-      variant: "default",
+      variant: "primary",
       size: "default",
     },
   }
@@ -45,19 +48,47 @@ const Button = React.forwardRef<
   HTMLButtonElement,
   React.ComponentProps<"button"> &
     VariantProps<typeof buttonVariants> &
-    ButtonDefaultedProps
->(({ className, variant, size, asChild = false, ...props }, ref) => {
-  const Comp = asChild ? Slot : "button"
+    ButtonDefaultedProps & {
+      loading?: boolean | undefined
+    }
+>(
+  (
+    {
+      className,
+      variant,
+      size,
+      asChild = false,
+      loading = false,
+      disabled,
+      children,
+      ...props
+    },
+    ref
+  ) => {
+    const Comp = asChild ? Slot : "button"
 
-  return (
-    <Comp
-      data-slot="button"
-      className={cn(buttonVariants({ variant, size, className }))}
-      ref={ref}
-      {...props}
-    />
-  )
-})
+    // 2xs 档 spinner 用 size-3（12px），其余档跟随基底 svg 默认 size-4；
+    // 显式写 size-* 而非 h-*/w-*，避免被基底 [&_svg:not([class*='size-'])]:size-4
+    // 以更高特异性覆盖回 16px。
+    const spinnerSize = size === "2xs" ? "size-3" : "size-4"
+
+    return (
+      <Comp
+        data-slot="button"
+        className={cn(buttonVariants({ variant, size, className }))}
+        ref={ref}
+        {...props}
+        disabled={disabled || loading}
+        aria-busy={loading || undefined}
+      >
+        {loading && !asChild ? (
+          <Loader2 aria-hidden="true" className={cn("animate-spin", spinnerSize)} />
+        ) : null}
+        {children}
+      </Comp>
+    )
+  }
+)
 
 Button.displayName = "Button"
 

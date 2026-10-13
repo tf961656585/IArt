@@ -40,6 +40,8 @@ export function ProviderNoticeBar({
     >
       <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       <span className="min-w-0 flex-1">{notice.text}</span>
+      {/* 提示条内微型关闭钮（图标 14px）：icon 系最小档 icon-sm 会把提示条撑高，
+          几何不变红线不放行迁移——原生 button 待登记按钮标准白名单（§7 出路②） */}
       <button
         type="button"
         onClick={onDismiss}

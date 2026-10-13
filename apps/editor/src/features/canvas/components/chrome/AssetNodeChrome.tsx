@@ -23,8 +23,10 @@ import {
   IconX,
 } from '@tabler/icons-react';
 
+import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { listRuntimeProjectedImageToImageModels } from '@/client/config/runtimeModelSelection';
+import { cn } from '@/lib/utils';
 import { useCanvasSelectionBridge } from '../canvas/useCanvasSelectionBridge';
 import type { ImageMeta, VideoMeta } from '../../types/node';
 import { topToolGroupsFor, type AssetChromeTool, type AssetChromeToolId } from './chromeModel';
@@ -93,6 +95,32 @@ const MEDIA_ARIA: Record<string, string> = {
   video: '视频加工工具',
   audio: '音频加工工具',
 };
+
+/**
+ * 底栏动作钮（原 .usage-btn 退役后的共享 Button 组合，docs/ui-button-standard.md §4/§5）：
+ * ghost 2xs（28px 高）+ 1px 透明边框，承载「用作参考」data-active 激活态的描边与
+ * 生成蓝底（editor visual-design §7：st-generating 低 alpha 底 + st-generating-text 字）。
+ */
+const CHROME_ACTION_BUTTON_CLASS = 'border border-transparent';
+const REF_ACTIVE_CLASS = [
+  'data-[active=true]:border-[color-mix(in_srgb,var(--st-generating)_30%,transparent)]',
+  'data-[active=true]:bg-[color-mix(in_srgb,var(--st-generating)_14%,transparent)]',
+  'data-[active=true]:text-[var(--st-generating-text)]',
+  'data-[active=true]:hover:bg-[color-mix(in_srgb,var(--st-generating)_20%,transparent)]',
+  'data-[active=true]:hover:text-[var(--st-generating-text)]',
+].join(' ');
+
+/**
+ * 删除确认填充钮的组件局部基座（docs/ui-button-standard.md §10 / editor visual-design §7.1
+ * 登记例外）：`usage-btn confirm-fill` 类名与 globals.css 的 `.usage-btn.confirm-fill`
+ * 填充规则（实底红 #b91c1c + 白字、两主题固定）原样保留；本常量只补位原 .usage-btn
+ * 基座退役后的布局几何（inline-flex 28px / 6px gap / 10px 内距 / 12px 字号），不改例外视觉。
+ */
+const CONFIRM_FILL_BASE_CLASS = [
+  'inline-flex h-7 items-center gap-1.5 rounded-md border border-transparent px-2.5',
+  'text-xs font-medium whitespace-nowrap transition-colors duration-150',
+  'focus-visible:outline-2 focus-visible:outline-[var(--chrome-ring)] focus-visible:outline-offset-2',
+].join(' ');
 
 export const AssetNodeChrome = memo(function AssetNodeChrome({
   canvasRef,
@@ -228,23 +256,20 @@ export const AssetNodeChrome = memo(function AssetNodeChrome({
                   return (
                     <Tooltip key={tool.id}>
                       <TooltipTrigger asChild>
-                        <button
+                        <Button
                           type="button"
-                          className="tool-btn"
+                          variant="ghost"
+                          size="2xs"
+                          loading={busy}
                           disabled={Boolean(actions.processingTool) || !ctx}
-                          aria-busy={busy}
                           aria-label={label}
                           onClick={(e) => {
                             e.stopPropagation();
                             if (!busy) openTool(tool);
                           }}
                         >
-                          {busy ? (
-                            <span className="tool-spinner" aria-hidden="true" />
-                          ) : (
-                            <Icon size={16} />
-                          )}
-                        </button>
+                          {busy ? null : <Icon size={16} />}
+                        </Button>
                       </TooltipTrigger>
                       <TooltipContent side="top" align="center">
                         {label}
@@ -268,21 +293,25 @@ export const AssetNodeChrome = memo(function AssetNodeChrome({
       >
         {actions.deleteConfirm ? (
           <>
-            <button
+            <Button
               type="button"
-              className="usage-btn"
+              variant="ghost"
+              size="2xs"
+              className={CHROME_ACTION_BUTTON_CLASS}
               data-act="del-cancel"
               onClick={(e) => {
                 e.stopPropagation();
                 actions.cancelDelete();
               }}
             >
-              <IconX size={14} />
+              <IconX size={14} className="size-3.5" />
               <span>取消</span>
-            </button>
+            </Button>
+            {/* 删除确认填充：ui-button-standard §10 登记例外（实底红两主题固定），
+                类名与填充样式原样保留，基座几何由 CONFIRM_FILL_BASE_CLASS 组件局部承载 */}
             <button
               type="button"
-              className="usage-btn confirm-fill"
+              className={cn('usage-btn confirm-fill', CONFIRM_FILL_BASE_CLASS)}
               data-act="del-confirm"
               onClick={(e) => {
                 e.stopPropagation();
@@ -296,10 +325,12 @@ export const AssetNodeChrome = memo(function AssetNodeChrome({
         ) : (
           <>
             {!multi && (
-              <button
+              <Button
                 type="button"
-                className="usage-btn"
-                data-active={bottomView.refsActive}
+                variant="ghost"
+                size="2xs"
+                className={cn(CHROME_ACTION_BUTTON_CLASS, REF_ACTIVE_CLASS)}
+                data-active={bottomView.refsActive ? 'true' : undefined}
                 data-act="ref"
                 title={bottomView.refsActive ? '从参考区移除' : '加入参考区'}
                 onClick={(e) => {
@@ -307,32 +338,35 @@ export const AssetNodeChrome = memo(function AssetNodeChrome({
                   actions.toggleRefs();
                 }}
               >
-                {bottomView.refsActive ? <IconCheck size={14} /> : <IconBookmark size={14} />}
+                {bottomView.refsActive ? <IconCheck size={14} className="size-3.5" /> : <IconBookmark size={14} className="size-3.5" />}
                 <span>{bottomView.refsActive ? '取消参考' : '用作参考'}</span>
-              </button>
+              </Button>
             )}
             {multi && (
-              <button
+              <Button
                 type="button"
-                className="usage-btn"
-                data-active={bottomView.refsActive}
+                variant="ghost"
+                size="2xs"
+                className={cn(CHROME_ACTION_BUTTON_CLASS, REF_ACTIVE_CLASS)}
+                data-active={bottomView.refsActive ? 'true' : undefined}
                 data-act="ref-batch"
                 onClick={(e) => {
                   e.stopPropagation();
                   actions.toggleRefs();
                 }}
               >
-                {bottomView.refsActive ? <IconCheck size={14} /> : <IconBookmark size={14} />}
+                {bottomView.refsActive ? <IconCheck size={14} className="size-3.5" /> : <IconBookmark size={14} className="size-3.5" />}
                 <span>
                   {bottomView.refsActive ? '取消参考' : '用作参考'} ·{' '}
                   {selection.assetNodes.length} 项
                 </span>
-              </button>
+              </Button>
             )}
             {bottomView.showReuse && (
-              <button
+              <Button
                 type="button"
-                className="usage-btn"
+                variant="ghost"
+                size="2xs"
                 data-act="reuse"
                 title="用这条资产的生成参数再生成一次"
                 onClick={(e) => {
@@ -340,13 +374,14 @@ export const AssetNodeChrome = memo(function AssetNodeChrome({
                   actions.reuse();
                 }}
               >
-                <IconHistory size={14} />
+                <IconHistory size={14} className="size-3.5" />
                 <span>复用</span>
-              </button>
+              </Button>
             )}
-            <button
+            <Button
               type="button"
-              className="usage-btn"
+              variant="ghost"
+              size="2xs"
               data-act="package-area"
               title="把选中的素材加入打包区"
               onClick={(e) => {
@@ -354,22 +389,23 @@ export const AssetNodeChrome = memo(function AssetNodeChrome({
                 actions.addToPackageArea();
               }}
             >
-              <IconPackages size={14} />
+              <IconPackages size={14} className="size-3.5" />
               <span>加入打包区{multi ? ` · ${selection.assetNodes.length} 项` : ''}</span>
-            </button>
+            </Button>
             <div className="sep" aria-hidden="true" />
-            <button
+            <Button
               type="button"
-              className="usage-btn danger"
+              variant="ghost-destructive"
+              size="2xs"
               data-act="del"
               onClick={(e) => {
                 e.stopPropagation();
                 actions.requestDelete();
               }}
             >
-              <IconTrash size={14} />
+              <IconTrash size={14} className="size-3.5" />
               <span>{multi ? `删除 ${selection.assetNodes.length} 项` : '删除'}</span>
-            </button>
+            </Button>
           </>
         )}
       </div>

@@ -37,12 +37,12 @@ function buildTargetButton(
   busy: boolean,
   disabled: boolean,
   onInstall: () => void,
-): { label: string; variant: 'default' | 'outline' | 'ghost'; disabled: boolean; onClick: (() => void) | undefined } {
+): { label: string; variant: 'primary' | 'outline' | 'ghost'; disabled: boolean; onClick: (() => void) | undefined } {
   if (status.kind === 'not-installed') {
     return { label: '安装', variant: 'outline', disabled: busy || disabled, onClick: onInstall };
   }
   if (status.kind === 'update-available') {
-    return { label: '更新', variant: 'default', disabled: busy || disabled, onClick: onInstall };
+    return { label: '更新', variant: 'primary', disabled: busy || disabled, onClick: onInstall };
   }
   return { label: '已安装', variant: 'ghost', disabled: true, onClick: undefined };
 }
@@ -86,23 +86,29 @@ export function SkillCard({ skill, installedState, targetRows, busyKeys, disable
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
                   {status.kind !== 'not-installed' ? (
+                    /* 「打开所在文件夹」= 去某处看内容（文件管理器里查看安装目录），
+                        按按钮样式标准 §4「link 是去、ghost 是做」→ link */
                     <Button
                       size="sm"
-                      variant="ghost"
+                      variant="link"
                       aria-label={`打开 ${row.label} 的安装文件夹`}
                       onClick={() => onReveal(skill, row.target)}
                     >
                       打开所在文件夹
                     </Button>
                   ) : null}
+                  {/* 忙碌态由 loading prop 承载（spinner + aria-busy + 自动禁用），不改写文案；
+                      variant 按目标状态分流（安装 outline / 更新 primary / 已安装 ghost 禁用），
+                      非字面量取值待登记 BTN-003 白名单 */}
                   <Button
                     size="sm"
                     variant={button.variant}
                     disabled={button.disabled}
-                    aria-label={busy ? `正在安装到 ${row.label}` : `${button.label}（${row.label}）`}
+                    loading={busy}
+                    aria-label={`${button.label}（${row.label}）`}
                     onClick={button.onClick}
                   >
-                    {busy ? '正在安装…' : button.label}
+                    {button.label}
                   </Button>
                 </div>
               </div>

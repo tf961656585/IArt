@@ -16,10 +16,6 @@
   .agent-session-breathe {
     animation: agent-session-breath-opacity 1.6s ease-in-out infinite;
   }
-  /* 审批面板提交中的执行钮 spinner */
-  .agent-session-spin {
-    animation: agent-session-spin 700ms linear infinite;
-  }
   /* 流式文本尾光标：挂在 markdown 渲染容器上，落在最后一个块级元素的文本之后 */
   .agent-session-caret-host > :last-child::after {
     content: '';
@@ -34,7 +30,6 @@
   @media (prefers-reduced-motion: reduce) {
     .agent-session-pulse,
     .agent-session-breathe,
-    .agent-session-spin,
     .agent-session-caret-host > :last-child::after {
       animation: none;
     }
@@ -50,7 +45,4 @@
 }
 @keyframes agent-session-blink {
   50% { opacity: 0; }
-}
-@keyframes agent-session-spin {
-  to { transform: rotate(360deg); }
 }

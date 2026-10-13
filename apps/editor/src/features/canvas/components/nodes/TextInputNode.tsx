@@ -234,7 +234,7 @@ export const TextInputNode = memo(function TextInputNode({ id, selected, data }:
         </details>
       ) : null}
       {taskArchiveTaskId ? (
-        <Button type="button" size="sm" variant="secondary" className="pointer-events-auto mt-2 h-7 px-2" onClick={handleOpenTaskArchive}>
+        <Button type="button" size="2xs" variant="secondary" className="pointer-events-auto mt-2" onClick={handleOpenTaskArchive}>
           打开任务文件夹
         </Button>
       ) : null}

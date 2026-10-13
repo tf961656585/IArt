@@ -50,7 +50,7 @@ export function ConfirmDialog({
           <Button type="button" variant="ghost" onClick={() => onResolve(false)}>
             取消
           </Button>
-          <Button type="button" variant={danger ? 'destructive' : 'default'} onClick={() => onResolve(true)}>
+          <Button type="button" variant={danger ? 'destructive' : 'primary'} onClick={() => onResolve(true)}>
             {confirmLabel}
           </Button>
         </DialogFooter>

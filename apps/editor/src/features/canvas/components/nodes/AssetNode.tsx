@@ -104,7 +104,6 @@ export const AssetNode = memo(function AssetNode({ id, selected }: NodeProps) {
         type="button"
         variant="secondary"
         size="icon"
-        className="rounded-full"
         aria-label="下载"
         onClick={(event) => {
           event.stopPropagation();
@@ -117,7 +116,6 @@ export const AssetNode = memo(function AssetNode({ id, selected }: NodeProps) {
         type="button"
         variant="secondary"
         size="icon"
-        className="rounded-full"
         aria-label="打开文件所在位置"
         title="打开文件所在位置"
         onClick={(event) => {
@@ -131,7 +129,6 @@ export const AssetNode = memo(function AssetNode({ id, selected }: NodeProps) {
         type="button"
         variant="secondary"
         size="icon"
-        className="rounded-full"
         aria-label="关闭预览"
         onClick={() => {
           setPreviewOpen(false);

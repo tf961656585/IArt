@@ -19,7 +19,7 @@ export const ImageCropAspectRatioSelector = memo(function ImageCropAspectRatioSe
         <Button
           key={entry.preset}
           type="button"
-          variant={current === entry.preset ? "default" : "outline"}
+          variant={current === entry.preset ? "primary" : "outline"}
           size="sm"
           className="px-3"
           onClick={() => onSelect(entry.preset)}

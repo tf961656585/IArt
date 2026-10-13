@@ -11,7 +11,7 @@ import { Progress } from "@/components/ui/progress";
 type CanvasPreparationAction = {
   key: string;
   label: string;
-  variant: "default" | "outline" | undefined;
+  variant: "primary" | "outline" | undefined;
   onClick: () => void;
   disabled: boolean | undefined;
 } | null;
@@ -147,7 +147,7 @@ export function CanvasPreparationScreen({
             {visibleActions.map((action) => (
               <Button
                 key={action.key}
-                variant={action.variant ?? "default"}
+                variant={action.variant ?? "primary"}
                 onClick={action.onClick}
                 disabled={action.disabled}
               >

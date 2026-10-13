@@ -79,8 +79,7 @@ export function PromptFieldActions({
           <Button
             type="button"
             variant="ghost"
-            size="icon"
-            className="h-7 w-7"
+            size="2xs"
             title="收藏此提示词"
             disabled={!value.trim()}
           >
@@ -115,8 +114,7 @@ export function PromptFieldActions({
           <Button
             type="button"
             variant="ghost"
-            size="icon"
-            className="h-7 w-7"
+            size="2xs"
             title="从收藏中选择"
             disabled={items.length === 0}
           >

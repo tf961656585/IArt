@@ -253,8 +253,9 @@ export function CustomModelDialog({
 
         <DialogFooter>
           {onDelete === undefined ? null : (
-            // 破坏性动作放左侧、与「保存」拉开距离：它动的是整个模型，不是这次表单里的配置值
-            <Button type="button" variant="ghost" className="mr-auto text-destructive" onClick={onDelete}>
+            // 破坏性动作放左侧、与「保存」拉开距离：它动的是整个模型，不是这次表单里的配置值。
+            // 行内危险动作统一 ghost-destructive（按钮样式标准 §4），不再手写 text-destructive
+            <Button type="button" variant="ghost-destructive" className="mr-auto" onClick={onDelete}>
               删除模型
             </Button>
           )}

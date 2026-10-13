@@ -146,6 +146,8 @@ export function AddModelDialog({
         </DialogHeader>
 
         {showToggle ? (
+          // 分段选项卡（复合控件，按钮样式标准 §7 出路①）：选项是控件的组成件，
+          // 视觉语义（选中填充/aria-pressed）由本分段控件整体承载，不走共享 Button
           <div role="group" aria-label="模型来源" className="flex w-fit items-center gap-0.5 rounded-md border border-border bg-muted p-0.5">
             <button
               type="button"

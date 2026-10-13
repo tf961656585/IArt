@@ -66,10 +66,10 @@ export function PromptDockFullParamsSheet({
     return (
       <Button
         type="button"
-        size="sm"
+        size="2xs"
         variant="ghost"
         disabled
-        className="h-7 gap-1 rounded-lg px-2 text-[11px] text-muted-foreground"
+        className="gap-1 rounded-lg text-muted-foreground"
         data-testid="promptdock-sheet-trigger"
       >
         完整参数
@@ -94,9 +94,9 @@ export function PromptDockFullParamsSheet({
       <PopoverTrigger asChild>
         <Button
           type="button"
-          size="sm"
+          size="2xs"
           variant="ghost"
-          className="h-7 gap-1 rounded-lg px-2 text-[11px] font-medium text-foreground hover:bg-secondary"
+          className="gap-1 rounded-lg"
           data-testid="promptdock-sheet-trigger"
         >
           <span aria-hidden="true">⚙</span>
@@ -129,11 +129,11 @@ export function PromptDockFullParamsSheet({
           <div className="flex items-center gap-1">
             <Button
               type="button"
-              size="sm"
+              size="2xs"
               variant="ghost"
               disabled={modifiedCount === 0}
               onClick={resetAll}
-              className="h-6 px-2 text-[11px] text-muted-foreground"
+              className="text-muted-foreground"
             >
               重置全部
             </Button>

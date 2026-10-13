@@ -130,31 +130,27 @@ export function PromptCollectionDialog({ open, onOpenChange, onApply }: Props) {
 
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                       <Button
-                        size="icon"
+                        size="icon-sm"
                         variant="ghost"
-                        className="h-8 w-8"
                         onClick={() => setEditItem(item)}
                         title="编辑"
                       >
                         <IconEdit size={16} />
                       </Button>
                       <Button
-                        size="icon"
+                        size="icon-sm"
                         variant="ghost"
-                        className="h-8 w-8"
                         onClick={() => handleCopy(item.content)}
                         title="复制"
                       >
                         <IconCopy size={16} />
                       </Button>
+                      {/* 行内危险（再次点击确认）：ghost-destructive 承载 destructive 前景，
+                          确认态补实底色（ui-button-standard §4） */}
                       <Button
-                        size="icon"
-                        variant="ghost"
-                        className={
-                          deleteConfirmId === item.id
-                            ? 'h-8 w-8 text-destructive hover:text-destructive bg-destructive/10'
-                            : 'h-8 w-8 text-destructive hover:text-destructive'
-                        }
+                        size="icon-sm"
+                        variant="ghost-destructive"
+                        className={deleteConfirmId === item.id ? 'bg-destructive/10' : undefined}
                         onClick={() => handleDelete(item.id)}
                         title={deleteConfirmId === item.id ? '再次点击确认删除' : '删除'}
                       >

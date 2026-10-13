@@ -290,8 +290,8 @@ export function ConstrainedImageSizeSelector({
         <Button
           type="button"
           variant={projected.kind === 'auto' ? 'secondary' : 'outline'}
-          size="xs"
-          className="h-7 w-full text-xs"
+          size="2xs"
+          className="w-full"
           disabled={disabled}
           onClick={handleAuto}
         >
@@ -357,7 +357,7 @@ export function ConstrainedImageSizeSelector({
             variant="outline"
             size="sm"
             disabled={disabled}
-            className="h-8 w-full min-w-0 justify-between gap-1 px-2 shrink overflow-hidden"
+            className="w-full min-w-0 justify-between gap-1 px-2 shrink overflow-hidden"
           >
             <span className="min-w-0 flex-1 truncate text-left text-xs font-medium">{activeSummary}</span>
             <ChevronDown className="size-3 opacity-50" />

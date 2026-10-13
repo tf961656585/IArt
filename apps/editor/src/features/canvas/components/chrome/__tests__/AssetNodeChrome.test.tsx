@@ -172,7 +172,7 @@ describe('AssetNodeChrome · 顶栏（D19 图片 12 工具）', () => {
     seedStore([assetNode('a1')], ['a1']);
     renderChrome();
     const top = bar('asset-chrome-top');
-    const labels = Array.from(top.querySelectorAll('.tool-btn')).map(
+    const labels = Array.from(top.querySelectorAll('button')).map(
       (b) => b.getAttribute('aria-label') ?? '',
     );
     expect(labels).toEqual([

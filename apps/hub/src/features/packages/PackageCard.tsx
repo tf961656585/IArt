@@ -125,8 +125,8 @@ export function PackageCard({ pkg, onPreview, onRename, onDelete, onReveal }: Pa
               </Badge>
               <Button
                 variant="secondary"
-                size="sm"
-                className="absolute bottom-2 right-2 h-7 opacity-0 transition group-hover:opacity-100"
+                size="2xs"
+                className="absolute bottom-2 right-2 opacity-0 transition group-hover:opacity-100"
                 onClick={(event) => {
                   event.stopPropagation();
                   onPreview();
@@ -214,7 +214,7 @@ export function PackageCard({ pkg, onPreview, onRename, onDelete, onReveal }: Pa
             </Button>
             <Button
               variant="destructive"
-              disabled={deleting}
+              loading={deleting}
               onClick={() => {
                 setDeleting(true);
                 void onDelete().finally(() => {
@@ -223,7 +223,7 @@ export function PackageCard({ pkg, onPreview, onRename, onDelete, onReveal }: Pa
                 });
               }}
             >
-              <Trash2 /> {deleting ? '正在删除...' : '删除'}
+              <Trash2 /> 删除
             </Button>
           </DialogFooter>
         </DialogContent>

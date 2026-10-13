@@ -188,9 +188,8 @@ export function ThinkingTierFields({ idPrefix, selection }: { idPrefix: string; 
                     <div key={tier} className="flex items-center gap-0.5">
                       <Button
                         type="button"
-                        size="sm"
+                        size="2xs"
                         variant="outline"
-                        className="h-7 px-2 text-2xs"
                         aria-label={`启用档位「${tier}」`}
                         disabled={blocked}
                         onClick={() => onAdd(tier)}
@@ -198,7 +197,9 @@ export function ThinkingTierFields({ idPrefix, selection }: { idPrefix: string; 
                         {`＋ ${tier}`}
                       </Button>
                       {custom ? (
-                        // 池子级的删除：自定义档位才有，内置常用档只读
+                        // 池子级的删除：自定义档位才有，内置常用档只读。
+                        // 芯片内微型图标钮（h-6 w-6，图标 14px）：icon 系最小档放不下，
+                        // 几何不变红线不放行——原生 button 待登记白名单（§7 出路②）
                         <button
                           type="button"
                           aria-label={`删除档位「${tier}」`}
@@ -263,6 +264,8 @@ function TierRow({
         + (isDragging ? 'opacity-60' : '')
       }
     >
+      {/* 拖拽排序手柄（dnd-kit 可排序行复合控件的组成件，按钮样式标准 §7 出路①）：
+          视觉语义由排序行整体承载，不是独立动作按钮 */}
       <button
         type="button"
         aria-label={`拖动排序「${tier}」`}
@@ -278,6 +281,8 @@ function TierRow({
       {isDefault ? (
         <>
           <span className="shrink-0 rounded-sm bg-muted px-1 text-2xs text-muted-foreground">默认档位</span>
+          {/* 档位行行高由这颗 24px 微型文字钮决定（py-2×2 + h-6 = 40px）；尺寸体系最小档 2xs（28px）
+              会把每行撑高 4px，违反迁移几何不变红线——待登记按钮标准白名单（§8 确需突破档位） */}
           <Button type="button" size="sm" variant="ghost" className="h-6 px-1.5 text-2xs" onClick={onClearDefault}>
             取消默认档位
           </Button>
@@ -287,6 +292,8 @@ function TierRow({
           设为默认档位
         </Button>
       )}
+      {/* 行内微型图标钮（图标 h-3.5=14px）：icon 系最小档 icon-sm（32px）会撑高档位行 8px，
+          几何不变红线不放行——原生 button 待登记白名单（§7 出路②） */}
       <button
         type="button"
         aria-label={`移除档位「${tier}」`}

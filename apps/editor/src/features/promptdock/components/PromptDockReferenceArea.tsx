@@ -132,8 +132,8 @@ export function PromptDockReferenceArea() {
       ))}
       <Button
         variant="ghost"
-        size="sm"
-        className="h-7 gap-1 px-2 text-xs"
+        size="2xs"
+        className="gap-1"
         onClick={addSelectedAssets}
         disabled={eligibleCount === 0}
         title={eligibleCount === 0 ? '在画布选中素材后可加入' : undefined}

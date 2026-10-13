@@ -871,7 +871,8 @@ describe('Agent 会话视图', () => {
     expect(sendDecisionSpy).toHaveBeenCalledTimes(1);
     const submit = screen.getByTestId('agent-tool-proposal-submit');
     expect(submit).toHaveAttribute('aria-busy', 'true');
-    expect(submit.querySelector('.agent-session-spin')).not.toBeNull();
+    // loading 态由共享 Button 内建 spinner 承载（spec docs/ui-button-standard.md §6）。
+    expect(submit.querySelector('.animate-spin')).not.toBeNull();
     expect(submit).toBeDisabled();
     expect(screen.getByTestId('agent-tool-proposal-reject')).toBeDisabled();
   });

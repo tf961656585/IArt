@@ -280,7 +280,7 @@ export function ManageInstallTargetsDialog({ open, onOpenChange }: ManageInstall
                           </Button>
                           <Button
                             size="sm"
-                            variant="ghost"
+                            variant="ghost-destructive"
                             aria-label={`删除 ${entry.name}`}
                             disabled={busyId === entry.id}
                             onClick={() => setRemoving(entry)}
@@ -334,8 +334,9 @@ export function ManageInstallTargetsDialog({ open, onOpenChange }: ManageInstall
               </div>
               {addNotice ? <div className="text-xs text-destructive">{addNotice}</div> : null}
               <div className="flex justify-end">
-                <Button type="button" disabled={adding} onClick={() => void addTarget()}>
-                  {adding ? '正在添加…' : '添加'}
+                {/* 忙碌态由 loading prop 承载（spinner + aria-busy + 自动禁用），不改写文案 */}
+                <Button type="button" loading={adding} onClick={() => void addTarget()}>
+                  添加
                 </Button>
               </div>
             </div>

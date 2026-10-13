@@ -209,9 +209,9 @@ export const AudioInputNode = memo(function AudioInputNode({ id, data: _data, se
         {taskArchiveTaskId ? (
           <Button
             type="button"
-            size="sm"
+            size="2xs"
             variant="secondary"
-            className="mt-2 h-7 px-2"
+            className="mt-2"
             onClick={handleOpenTaskArchive}
           >
             打开任务文件夹
@@ -388,9 +388,9 @@ export const AudioInputNode = memo(function AudioInputNode({ id, data: _data, se
                   <span className="text-xs font-medium text-destructive">{mediaErrorText}</span>
                   <Button
                     type="button"
-                    size="sm"
+                    size="2xs"
                     variant="secondary"
-                    className="pointer-events-auto h-7 px-3"
+                    className="pointer-events-auto"
                     onClick={(event) => {
                       event.stopPropagation();
                       void handleRetryMedia();
@@ -404,7 +404,6 @@ export const AudioInputNode = memo(function AudioInputNode({ id, data: _data, se
                   type="button"
                   size="icon"
                   variant="secondary"
-                  className="h-9 w-9 rounded-full"
                   aria-label="上传音频"
                   onClick={(event) => {
                     event.stopPropagation();
@@ -464,9 +463,9 @@ export const AudioInputNode = memo(function AudioInputNode({ id, data: _data, se
       {resolvedAudioUrl && (
         <Button
           type="button"
-          size="sm"
+          size="2xs"
           variant="outline"
-          className="w-full h-7 text-xs mt-2"
+          className="w-full mt-2"
           onClick={(e) => {
             e.stopPropagation();
             handleOpenSegmentDialog();

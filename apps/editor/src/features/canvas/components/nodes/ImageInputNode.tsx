@@ -353,7 +353,7 @@ export const ImageInputNode = memo(function ImageInputNode({ id, data: _data, se
       {(failurePresentation !== null && failurePresentation !== undefined ? failurePresentation.backendMessage : undefined) || (failurePresentation !== null && failurePresentation !== undefined ? failurePresentation.rawDetailText : undefined) ? ( <details className="pointer-events-auto mt-1">
           <summary className="cursor-pointer select-none text-[10px] text-white/80">详情</summary> <pre className="mt-1 whitespace-pre-wrap break-words text-[10px] text-white/90">{(failurePresentation !== null && failurePresentation !== undefined ? failurePresentation.backendMessage : undefined) ?? (failurePresentation !== null && failurePresentation !== undefined ? failurePresentation.rawDetailText : undefined)}</pre>
         </details> ) : null}
-      {taskArchiveTaskId ? ( <Button type="button" size="sm" variant="secondary" className="pointer-events-auto mt-2 h-7 px-2" onClick={handleOpenTaskArchive}>
+      {taskArchiveTaskId ? ( <Button type="button" size="2xs" variant="secondary" className="pointer-events-auto mt-2" onClick={handleOpenTaskArchive}>
           打开任务文件夹 </Button>
       ) : null} </div>
   ) : null;

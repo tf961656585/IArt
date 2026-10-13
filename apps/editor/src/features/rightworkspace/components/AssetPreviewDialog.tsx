@@ -101,14 +101,15 @@ export function AssetPreviewDialog({
     previewUrl !== null && previewUrl !== '' && classifyMediaUrl(previewUrl).capabilities.canRevealFile;
 
   // 三类媒体共用同一颗定位按钮（右下角，与左下角导航槽 / 右上角关闭钮不争位）；
-  // 形态与画布资产节点预览工具栏的定位按钮一致（variant secondary + 圆形 icon 钮）。
+  // 形态与画布资产节点预览工具栏的定位按钮一致（variant secondary + icon 钮；
+  // 圆角统一 6px，按钮圆角口径见 docs/ui-button-standard.md §10）。
   const revealAction =
     canRevealFile && previewUrl !== null ? (
       <Button
         type="button"
         variant="secondary"
         size="icon"
-        className="absolute right-3 bottom-3 rounded-full"
+        className="absolute right-3 bottom-3"
         aria-label="打开文件所在位置"
         title="打开文件所在位置"
         data-testid="asset-preview-reveal"

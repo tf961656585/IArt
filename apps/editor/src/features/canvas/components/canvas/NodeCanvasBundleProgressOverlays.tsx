@@ -60,8 +60,7 @@ export function NodeCanvasBundleProgressOverlays({
           bundleImportWarningsDialog.warnings.length > 0 ? (
             <Button
               variant="outline"
-              size="sm"
-              className="h-7 px-2"
+              size="2xs"
               onClick={() =>
                 setBundleImportWarningsDialog((prev) => ({
                   ...prev,

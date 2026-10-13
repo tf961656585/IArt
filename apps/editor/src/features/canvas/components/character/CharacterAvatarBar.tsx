@@ -156,7 +156,7 @@ export function CharacterAvatarBar() {
       <Button
         variant="ghost"
         size="icon"
-        className="w-12 h-12 rounded-full"
+        className="w-12 h-12"
         onClick={openLibrary}
         title="打开角色库"
       >

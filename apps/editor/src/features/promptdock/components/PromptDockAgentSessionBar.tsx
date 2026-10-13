@@ -63,9 +63,9 @@ export function PromptDockAgentSessionBar() {
       )}
       <Button
         type="button"
-        size="sm"
+        size="2xs"
         variant="ghost"
-        className="h-7 flex-none px-2 text-xs"
+        className="flex-none"
         onClick={unbindAgentSession}
         data-testid="promptdock-agent-new-session"
       >

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { formatDuration } from '@/shared/utils/duration';
+import { Button } from '@/components/ui/button';
 import {
   rejectAgentToolRound,
   submitAgentToolDecisions,
@@ -276,15 +277,17 @@ export function AgentToolProposalPanel({
         <span className="text-[11px] text-muted-foreground" data-testid="agent-tool-proposal-summary">
           共 {items.length} 项 · 将执行 {selectedCount} 项
         </span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="2xs"
           onClick={toggleAll}
           disabled={locked}
-          className="ml-auto text-[11px] underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          className="ml-auto"
           data-testid="agent-tool-proposal-toggle-all"
         >
           {allChecked ? '全不选' : '全选'}
-        </button>
+        </Button>
         {expiresAt === null ? null : (
           <span
             className={cn(
@@ -311,31 +314,26 @@ export function AgentToolProposalPanel({
       </ul>
 
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button
+        <Button
           type="button"
-          className="inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          size="2xs"
+          loading={submitting}
           disabled={locked}
-          aria-busy={submitting}
           onClick={submitSelected}
           data-testid="agent-tool-proposal-submit"
         >
-          {submitting ? (
-            <span
-              aria-hidden="true"
-              className="agent-session-spin inline-block size-2.5 rounded-full border-[1.5px] border-current border-t-transparent"
-            />
-          ) : null}
           {SUBMIT_LABEL}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
-          className="rounded-md px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          variant="ghost"
+          size="2xs"
           disabled={locked}
           onClick={rejectRound}
           data-testid="agent-tool-proposal-reject"
         >
           {REJECT_LABEL}
-        </button>
+        </Button>
         {expired ? (
           <span
             className="flex flex-1 flex-col text-[11px] text-muted-foreground"

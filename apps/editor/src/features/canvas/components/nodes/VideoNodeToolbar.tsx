@@ -46,7 +46,6 @@ export const VideoNodeToolbar = memo(function VideoNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={false}
               onClick={(e) => {
                 e.stopPropagation();
@@ -68,7 +67,6 @@ export const VideoNodeToolbar = memo(function VideoNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={false}
               onClick={(e) => {
                 e.stopPropagation();
@@ -90,7 +88,6 @@ export const VideoNodeToolbar = memo(function VideoNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={false}
               onClick={(e) => {
                 e.stopPropagation();

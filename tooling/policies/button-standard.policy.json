@@ -1,0 +1,388 @@
+{
+  "spec": "docs/ui-button-standard.md",
+  "comment": "按钮样式标准守卫 policy（guard:button-standard 消费）。四节对应 spec §7/§8/§9 的 BTN-001..004。文件路径一律仓库根相对 POSIX 路径。扫描面：BTN-001/002/003 扫 tsxZones 下 .tsx（排除 __tests__ 与 *.test.*）；BTN-004 扫 btn004Zone 下 .ts/.tsx/.css（排除同上）。packages/ui 包内组件实现天然合法，不在扫描面。",
+  "tsxZones": [
+    "apps/hub/src",
+    "apps/editor/src"
+  ],
+  "btn004Zone": "apps/editor/src",
+  "ignorePaths": [
+    "node_modules/**",
+    "**/dist/**",
+    "**/dist-static/**",
+    "**/out/**",
+    "**/.next/**",
+    "**/build/**",
+    "**/coverage/**"
+  ],
+  "btn001": {
+    "comment": "共享 Button className 几何覆写禁令（spec §8）。forbiddenTokenPatterns 逐 token 匹配（响应式前缀 sm:/md: 等先剥离；h-auto/min-h-*/max-h-* 等布局参与类天然不命中 h-\\d）。exemptions 逐文件登记允许的具体 token；文件内出现登记外的违禁 token 仍报红。",
+    "forbiddenTokenPatterns": [
+      "^h-\\d",
+      "^h-\\[",
+      "^px-\\[",
+      "^py-\\[",
+      "^text-\\[",
+      "^text-2xs$",
+      "^rounded-full$",
+      "^size-"
+    ],
+    "exemptions": [
+      {
+        "file": "apps/editor/src/features/canvas/components/nodes/audio/SegmentList.tsx",
+        "allowedTokens": ["h-5", "text-[11px]"],
+        "note": "20px 音频 chip 钮（音频段行内删除）：行内密度场景，28px 最小档放不下，几何不变红线"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/character/CharacterCard.tsx",
+        "allowedTokens": ["h-6"],
+        "note": "收藏卡 24px 微型图标钮 ×2：卡片面行内动作，28px 最小档撑破卡面几何"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/character/CharacterAvatarBar.tsx",
+        "allowedTokens": ["h-12"],
+        "note": "48px 头像条按钮：头像条承载面，高度与头像面同源"
+      },
+      {
+        "file": "apps/hub/src/features/settings/provider-connection/ThinkingTierFields.tsx",
+        "allowedTokens": ["h-6", "text-2xs"],
+        "note": "默认档位 24px 微型文字钮 ×2：档位行行高 py-2×2 + h-6 = 40px，2xs（28px）会撑高每行 4px，几何不变红线"
+      },
+      {
+        "file": "apps/editor/src/features/promptdock/components/PromptDockAgentServiceRow.tsx",
+        "allowedTokens": ["size-7"],
+        "note": "窄容器降级（<480px）溢出触发钮 28px：icon 系最小档 icon-sm（32px）放不下窄行，几何不变红线"
+      },
+      {
+        "file": "apps/editor/src/components/ai-elements/artifact.tsx",
+        "allowedTokens": ["size-8"],
+        "note": "零消费者 vendored 库目录（同 guard:media-fit-contain 豁免先例），不churn vendored 代码"
+      },
+      {
+        "file": "apps/editor/src/components/ai-elements/message.tsx",
+        "allowedTokens": ["size-6"],
+        "note": "零消费者 vendored 库目录（同 guard:media-fit-contain 豁免先例），不churn vendored 代码"
+      },
+      {
+        "file": "apps/editor/src/components/ai-elements/plan.tsx",
+        "allowedTokens": ["size-8"],
+        "note": "零消费者 vendored 库目录（同 guard:media-fit-contain 豁免先例），不churn vendored 代码"
+      },
+      {
+        "file": "apps/editor/src/components/ai-elements/prompt-input-attachments.tsx",
+        "allowedTokens": ["size-5"],
+        "note": "零消费者 vendored 库目录（同 guard:media-fit-contain 豁免先例），不churn vendored 代码"
+      },
+      {
+        "file": "apps/editor/src/components/ai-elements/queue.tsx",
+        "allowedTokens": ["size-auto"],
+        "note": "零消费者 vendored 库目录；size-auto 等价 h-auto 布局参与类，非几何档位覆写"
+      }
+    ]
+  },
+  "btn002": {
+    "comment": "原生 <button> 三条件边界（spec §7）：①复合控件组成件、②宿主场景完整定义的局部控件、③白名单登记。condition 字段登记命中出路；白名单按文件粒度放行。",
+    "whitelist": [
+      {
+        "file": "apps/hub/src/features/settings/provider-connection/ThinkingTierFields.tsx",
+        "condition": "①+②",
+        "note": "① dnd 拖动排序手柄（可排序行复合控件组成件）；② 移除档位图标钮（图标 h-3.5=14px，icon-sm 32px 撑高档位行 8px，几何不变红线）"
+      },
+      {
+        "file": "apps/hub/src/features/settings/provider-connection/AddModelDialog.tsx",
+        "condition": "①",
+        "note": "分段选项卡选项 ×2（分段选项卡复合控件的组成件，视觉语义由父控件承载）"
+      },
+      {
+        "file": "apps/hub/src/features/help/HelpTab.tsx",
+        "condition": "①",
+        "note": "手风琴头 ×2（折叠控件触发器组成件）"
+      },
+      {
+        "file": "apps/hub/src/features/settings/provider-connection/ParameterOverridesEditor.tsx",
+        "condition": "②",
+        "note": "参数芯片移除 ×钮（芯片宿主场景完整定义 hover/focus/disabled）"
+      },
+      {
+        "file": "apps/hub/src/features/settings/provider-connection/InfoHint.tsx",
+        "condition": "②",
+        "note": "h-3.5 微型圆钮（字段 ? 气泡触发器，icon 系最小档放不下）"
+      },
+      {
+        "file": "apps/hub/src/features/settings/provider-connection/ProviderNoticeBar.tsx",
+        "condition": "②",
+        "note": "通知条关闭 ×钮（横幅宿主场景完整定义）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/nodes/AgentNode.tsx",
+        "condition": "②",
+        "note": "AGENT_BUTTON_CLASS 24×24 chip 钮 + LOD 气泡钮（节点宿主样式体系完整定义）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/nodes/GroupNode.tsx",
+        "condition": "②",
+        "note": "GROUP_BUTTON_CLASS 组头钮（节点宿主样式体系完整定义）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/nodes/TaskNode.tsx",
+        "condition": "②",
+        "note": "task-cancel 24×24 白圆钮（画布孵化节点悬停钮群 h-6 口径，2xs 28px 放不下；task-cancel 类名仅作 morphing 淡出状态钩子）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/nodes/AssetNode.tsx",
+        "condition": "②",
+        "note": "媒体面 24/32px 圆钮群（节点宿主样式体系完整定义）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/nodes/ImageInputNode.tsx",
+        "condition": "②",
+        "note": "媒体面 24/32px 圆钮群（节点宿主样式体系完整定义）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/nodes/VideoInputNode.tsx",
+        "condition": "②",
+        "note": "媒体面 24/32px 圆钮群（节点宿主样式体系完整定义）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/nodes/AudioInputNode.tsx",
+        "condition": "②",
+        "note": "媒体面 24/32px 圆钮群（节点宿主样式体系完整定义）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/nodes/EnhancedTextInputSegmentCard.tsx",
+        "condition": "②",
+        "note": "文本段拖拽排序手柄（dnd-kit 可排序卡复合控件组成件，视觉语义由排序卡整体承载）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/canvas/NodeCanvasOverlays.tsx",
+        "condition": "②",
+        "note": "ESC 取消浮层钮 ×2（画布覆层宿主场景完整定义）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/canvas/CanvasContextMenuList.tsx",
+        "condition": "①",
+        "note": "menuitem ×3（右键菜单复合控件组成件，menuitem 角色语义由菜单整体承载）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/canvas/ContainerTidyGridPicker/ContainerTidyGridPicker.tsx",
+        "condition": "①",
+        "note": "网格选项格（整理网格选择器复合控件的组成件）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/toolbar/canvasObjectFinder/CanvasObjectFinder.tsx",
+        "condition": "①",
+        "note": "filter chip（筛选 chip 组复合控件的组成件，aria-pressed 表达选中态）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/floating/PromptFieldActions.tsx",
+        "condition": "①",
+        "note": "浮层字段动作列表项（动作列表复合控件组成件）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/nodes/shared/PromptPresetTokenEditor.tsx",
+        "condition": "①",
+        "note": "预设 chip 移除 X ×2（token 编辑器 chip 复合控件组成件）"
+      },
+      {
+        "file": "apps/editor/src/features/promptdock/components/PromptDockReferenceAreaChip.tsx",
+        "condition": "①",
+        "note": "参考区 chip 移除 X（chip 复合控件组成件）"
+      },
+      {
+        "file": "apps/editor/src/features/promptdock/components/PromptDockFormRow.tsx",
+        "condition": "①",
+        "note": "表单行步进/微调钮（行复合控件组成件）"
+      },
+      {
+        "file": "apps/editor/src/features/promptdock/components/PromptDockFrameControl.tsx",
+        "condition": "①",
+        "note": "画幅 radio ×2 + 画幅 chip（画幅选择器复合控件组成件）"
+      },
+      {
+        "file": "apps/editor/src/features/promptdock/components/PromptDockTaskCountStepper.tsx",
+        "condition": "①",
+        "note": "步进器 +/- ×2（stepper 复合控件组成件）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/character/CharacterLibraryDialog.tsx",
+        "condition": "①",
+        "note": "搜索清除 X（搜索框复合控件组成件）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/character/CharacterAvatar.tsx",
+        "condition": "①",
+        "note": "20px 删除角标（头像角标复合控件组成件）"
+      },
+      {
+        "file": "apps/editor/src/components/ai-elements/inline-citation.tsx",
+        "condition": "①",
+        "note": "引用标记前后钮（引用复合控件组成件；零消费者 vendored 库目录）"
+      },
+      {
+        "file": "apps/editor/src/components/ai-elements/queue.tsx",
+        "condition": "①",
+        "note": "CollapsibleTrigger（队列折叠复合控件组成件；零消费者 vendored 库目录）"
+      },
+      {
+        "file": "apps/editor/src/features/rightworkspace/components/AgentSessionToolActivity.tsx",
+        "condition": "①",
+        "note": "折叠头（工具活动折叠组复合控件组成件）"
+      },
+      {
+        "file": "apps/editor/src/features/rightworkspace/components/AgentSessionMediaAlbum.tsx",
+        "condition": "①",
+        "note": "折叠头/明细行（相册折叠组与明细行复合控件组成件）"
+      },
+      {
+        "file": "apps/editor/src/features/rightworkspace/components/AgentSessionMedia.tsx",
+        "condition": "①+②",
+        "note": "① 音频播放钮；② 会话热区/覆层 chip/26×34 缩略 chip（会话宿主场景完整定义）"
+      },
+      {
+        "file": "apps/editor/src/features/rightworkspace/components/AgentSessionToolEntries.tsx",
+        "condition": "①+②",
+        "note": "yolo 取消钮 h-5（工具条目行复合控件组成件，行内 20px 密度）"
+      },
+      {
+        "file": "apps/editor/src/features/rightworkspace/RightWorkspace.tsx",
+        "condition": "②",
+        "note": "拖拽手柄（右栏可排序区宿主场景完整定义）"
+      },
+      {
+        "file": "apps/editor/src/features/rightworkspace/components/AgentMessageMarkdown.tsx",
+        "condition": "②",
+        "note": "正文图触发器（消息正文宿主场景完整定义，避免按钮嵌按钮）"
+      },
+      {
+        "file": "apps/editor/src/features/package-area/components/PackageAreaPanel.tsx",
+        "condition": "②",
+        "note": "拖拽排序媒体卡（包区可排序宿主场景完整定义）"
+      },
+      {
+        "file": "apps/editor/src/features/workspace/schema/renderers/FileUploadInputRenderer.tsx",
+        "condition": "②",
+        "note": "72×72 上传瓦片（上传面宿主场景完整定义）"
+      },
+      {
+        "file": "apps/editor/src/components/ui/zoomable-image-preview/ZoomableImagePreview.tsx",
+        "condition": "②",
+        "note": "HUD 触发器（预览面宿主场景完整定义，避免按钮嵌按钮）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/chrome/AssetNodeChrome.tsx",
+        "condition": "§10 登记例外",
+        "note": "删除确认填充钮（实底红 #b91c1c + 白字、两主题固定，docs/ui-button-standard.md §10 登记例外，仅限画布删除确认场景）"
+      }
+    ]
+  },
+  "btn003": {
+    "comment": "variant/size 枚举校验（spec §4/§5）：字面量必须属于枚举（variant: primary/secondary/outline/ghost/link/destructive/ghost-destructive；size: lg/default/sm/2xs/icon/icon-sm/icon-lg），非字面量（{} 表达式与 buttonVariants({...}) 属性）须逐文件豁免登记。",
+    "exemptions": [
+      {
+        "file": "apps/editor/src/features/canvas/components/CanvasPreparationScreen.tsx",
+        "note": "variant={action.variant ?? \"primary\"}：动作清单联合类型已收窄到枚举"
+      },
+      {
+        "file": "apps/hub/src/features/prompt-preset/PresetItem.tsx",
+        "note": "条件 variant：预设项静止/删除确认二态切换（ghost-destructive/destructive）"
+      },
+      {
+        "file": "apps/hub/src/features/settings/provider-connection/ConfirmDialog.tsx",
+        "note": "条件 variant：确认弹窗危险/常规二态切换（destructive/primary）"
+      },
+      {
+        "file": "apps/editor/src/client/components/imageSizeConstrainedResolution.tsx",
+        "note": "条件 variant：auto 档/手动档二元切换（secondary/outline）"
+      },
+      {
+        "file": "apps/editor/src/components/ai-elements/artifact.tsx",
+        "note": "转发 variant/size props（零消费者 vendored 库目录）"
+      },
+      {
+        "file": "apps/editor/src/components/ai-elements/checkpoint.tsx",
+        "note": "转发 variant/size props（零消费者 vendored 库目录）"
+      },
+      {
+        "file": "apps/editor/src/components/ai-elements/message.tsx",
+        "note": "转发 variant/size props（零消费者 vendored 库目录）"
+      },
+      {
+        "file": "apps/editor/src/components/ai-elements/suggestion.tsx",
+        "note": "转发 variant/size props（零消费者 vendored 库目录）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/dialogs/ImageAnnotateDialogBody.tsx",
+        "note": "条件 variant：标注工具激活态二元切换（primary/outline）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/dialogs/ImageChromaKeyDialog.tsx",
+        "note": "条件 variant：取色模式二元切换（primary/outline）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/dialogs/ImageCropAspectRatioSelector.tsx",
+        "note": "条件 variant：当前选中比例档二元切换（primary/outline）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/dialogs/ImageSplitGridPresetSelector.tsx",
+        "note": "条件 variant ×2：当前预设/自定义档二元切换（primary/outline）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/toolbar/CanvasToolbar.tsx",
+        "note": "条件 variant：吸附开关二元切换（secondary/ghost）"
+      },
+      {
+        "file": "apps/editor/src/features/rightworkspace/PackageAreaToggleButton.tsx",
+        "note": "条件 variant：包区开合二元切换（secondary/ghost）"
+      },
+      {
+        "file": "apps/hub/src/features/skills/SkillCard.tsx",
+        "note": "variant={button.variant}：卡片动作清单转发，清单类型已收窄到枚举"
+      }
+    ]
+  },
+  "btn004": {
+    "comment": "Editor 私有按钮 CSS 类与组件内按钮类常量只许减少不得新增（spec §9 BTN-004）。banned 命中即红，exceptions 按名字登记允许文件；扫描前剥离注释（字符串感知、保留行号），类名按词边界匹配（task-cancel 不误伤 task-cancelled-note/task-cancel-contract）。",
+    "banned": [
+      "usage-btn",
+      "tool-btn",
+      "act-primary",
+      "act-danger",
+      "task-cancel",
+      "confirm-fill",
+      "AGENT_BUTTON_CLASS",
+      "GROUP_BUTTON_CLASS"
+    ],
+    "exceptions": [
+      {
+        "names": ["usage-btn", "confirm-fill"],
+        "files": [
+          "apps/editor/src/features/canvas/components/chrome/AssetNodeChrome.tsx",
+          "apps/editor/src/app/globals.css"
+        ],
+        "note": "§10 登记例外：画布删除确认填充（.usage-btn.confirm-fill 复合选择器与组件侧复合类名原样保留，实底红两主题固定）"
+      },
+      {
+        "names": ["task-cancel"],
+        "files": [
+          "apps/editor/src/features/canvas/components/nodes/TaskNode.tsx",
+          "apps/editor/src/app/globals.css"
+        ],
+        "note": "类名仅作 globals.css .task-node.morphing 淡出组规则的状态钩子保留，不再承载按钮样式"
+      },
+      {
+        "names": ["AGENT_BUTTON_CLASS"],
+        "files": [
+          "apps/editor/src/features/canvas/components/nodes/AgentNode.tsx"
+        ],
+        "note": "组件内按钮类常量：定义与消费均限本文件（BTN-002 白名单同源）"
+      },
+      {
+        "names": ["GROUP_BUTTON_CLASS"],
+        "files": [
+          "apps/editor/src/features/canvas/components/nodes/GroupNode.tsx"
+        ],
+        "note": "组件内按钮类常量：定义与消费均限本文件（BTN-002 白名单同源）"
+      }
+    ]
+  }
+}

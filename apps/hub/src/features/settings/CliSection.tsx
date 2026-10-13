@@ -18,7 +18,7 @@ export function CliSection() {
     <SettingsSection
       title="命令行工具"
       action={
-        <Button size="sm" variant="ghost" onClick={() => void refresh()} disabled={loading}>
+        <Button size="sm" variant="outline" onClick={() => void refresh()} disabled={loading}>
           刷新
         </Button>
       }
@@ -52,14 +52,16 @@ export function CliSection() {
                       : '当前平台不支持'}
                 </span>
               </div>
-              {/* entryRegistered null = 平台不支持一键注册，不渲染动作 */}
+              {/* entryRegistered null = 平台不支持一键注册，不渲染动作。
+                  注册/卸除是正反向动作对（§4）：同尺寸 sm；卸除是行内危险动作 → ghost-destructive；
+                  忙碌态由 loading prop 承载（spinner + aria-busy + 自动禁用），不改写文案 */}
               {status.entryRegistered === false ? (
-                <Button size="sm" onClick={() => void register()} disabled={pending !== null}>
-                  {pending === 'register' ? '正在注册...' : '注册 iart 命令'}
+                <Button size="sm" loading={pending === 'register'} disabled={pending !== null} onClick={() => void register()}>
+                  注册 iart 命令
                 </Button>
               ) : status.entryRegistered === true ? (
-                <Button size="sm" variant="ghost" onClick={() => void unregister()} disabled={pending !== null}>
-                  {pending === 'unregister' ? '正在卸除...' : '卸除注册'}
+                <Button size="sm" variant="ghost-destructive" loading={pending === 'unregister'} disabled={pending !== null} onClick={() => void unregister()}>
+                  卸除注册
                 </Button>
               ) : null}
             </div>

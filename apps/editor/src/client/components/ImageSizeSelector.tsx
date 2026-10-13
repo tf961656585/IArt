@@ -469,7 +469,7 @@ export const ImageSizeSelector: React.FC<ImageSizeSelectorProps> = ({
             variant="outline"
             size="sm"
             disabled={disabled}
-            className="h-8 w-full min-w-0 justify-between gap-1 px-2 shrink overflow-hidden"
+            className="w-full min-w-0 justify-between gap-1 px-2 shrink overflow-hidden"
           >
             <span className="min-w-0 flex-1 truncate text-left text-xs font-medium">
               {(activeOption !== null && activeOption !== undefined ? activeOption.label : undefined) ?? ''} · {aspectRatioLabel}{' '}

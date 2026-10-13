@@ -6,6 +6,7 @@ import { IconPlayerPause, IconPlayerPlay } from '@tabler/icons-react';
 import type { MediaAsset } from '@iart/contracts';
 import { cn } from '@/lib/utils';
 import { formatDuration } from '@/shared/utils/duration';
+import { Button } from '@/components/ui/button';
 import { addAssetIdsToReferences } from '@/features/promptdock/referenceOps';
 import { announceReferenceAddResult } from '@/features/promptdock/referenceFeedback';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
@@ -447,15 +448,17 @@ const AudioBar = ({ item, inBand = false }: { item: SessionMediaItem; inBand?: b
         {durationText}
       </span>
       {playable ? (
-        <button
+        <Button
           type="button"
+          variant="link"
+          size="2xs"
           onClick={() => setPreviewOpen(true)}
           aria-label={`预览 ${item.name}`}
           data-testid="agent-media-audio-preview"
-          className="flex-none text-[11px] underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex-none"
         >
           预览
-        </button>
+        </Button>
       ) : null}
 
       {playable ? (

@@ -416,7 +416,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
           tooltip={t("fileUpload.select")}
           type="button"
           onClick={() => inputRef.current !== null && inputRef.current !== undefined ? inputRef.current.click() : undefined}
-          variant={inspectorGridActive ? "outline" : "default"}
+          variant={inspectorGridActive ? "outline" : "primary"}
           size="icon-lg"
           aria-label={t("fileUpload.select")}
           className={

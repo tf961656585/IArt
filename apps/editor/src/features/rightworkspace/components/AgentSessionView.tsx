@@ -16,6 +16,7 @@ import {
   useAgentStreamingText,
 } from '@/features/agent/agentSessionStore';
 import { formatBeijingDateDivider, getBeijingDateKey } from '@/shared/utils/time';
+import { Button } from '@/components/ui/button';
 import { AgentMessageMarkdown } from './AgentMessageMarkdown';
 import { AgentSessionMessage, MessageBody } from './AgentSessionMessage';
 import { AgentSessionToolActivity } from './AgentSessionToolActivity';
@@ -361,8 +362,10 @@ export function AgentSessionView({ agentSessionId }: { agentSessionId: string })
       {/* 「回到底部」：跟随停止（用户上翻历史）后的恢复出口（R3）。显隐判据是
           几何是否在底部（isAtBottom，含 isNearBottom 语义），与「跟随是否被
           劫持」无关——处于底部即隐藏，离开即出现。 */}
-      <button
+      <Button
         type="button"
+        variant="outline"
+        size="icon-sm"
         onClick={() => {
           stopScroll();
           void scrollToBottom({ animation: 'smooth' });
@@ -370,11 +373,11 @@ export function AgentSessionView({ agentSessionId }: { agentSessionId: string })
         aria-label="回到底部"
         data-testid="agent-session-scroll-to-bottom"
         className={
-          'absolute bottom-3 left-1/2 z-10 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border bg-popover text-popover-foreground shadow-md transition-opacity hover:bg-accent ' +
+          'absolute bottom-3 left-1/2 z-10 -translate-x-1/2 bg-popover shadow-md transition-opacity ' +
           (isAtBottom ? 'pointer-events-none opacity-0' : 'opacity-100')
         }
       >
-        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none">
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" className="size-3.5">
           <path
             d="M8 2.5v10.5m0 0 4.5-4.5M8 13 3.5 8.5"
             stroke="currentColor"
@@ -383,7 +386,7 @@ export function AgentSessionView({ agentSessionId }: { agentSessionId: string })
             strokeLinejoin="round"
           />
         </svg>
-      </button>
+      </Button>
 
       {/* 批量审批面板：有未决提案时常驻列表下方（不随滚动跑出视野；提交后由 live 态驱动收起） */}
       {pendingProposals !== null ? (

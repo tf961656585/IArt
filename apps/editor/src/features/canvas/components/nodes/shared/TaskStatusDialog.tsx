@@ -139,8 +139,7 @@ export function TaskStatusDialog({
                     <Button
                       type="button"
                       variant="ghost"
-                      size="sm"
-                      className="h-7 px-2"
+                      size="2xs"
                       onClick={() => void copyText(failure.copyText)}
                     >
                       <IconCopy size={15} />

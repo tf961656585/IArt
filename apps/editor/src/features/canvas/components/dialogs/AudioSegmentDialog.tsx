@@ -513,11 +513,10 @@ export function AudioSegmentDialog({ open, onOpenChange, audioUrl, duration: ini
                   </span>
                   {/* 时长 */}
                   <span className="text-xs text-muted-foreground whitespace-nowrap w-12 text-right">({formatDuration(seg.endTime - seg.startTime)})</span>
-                  {/* 删除按钮 */}
+                  {/* 删除按钮（行内危险 → ghost-destructive，ui-button-standard §4） */}
                   <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                    size="2xs"
+                    variant="ghost-destructive"
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDeleteSegment(seg.id);

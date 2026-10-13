@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { IconX } from '@tabler/icons-react';
 import { useOverlayLayer } from '@iart/ui';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
 import { agentSessionIdOf } from '@/features/canvas/components/chrome/agentChromeModel';
@@ -184,14 +185,16 @@ export function RightWorkspace() {
         >
           {headerTitle}
         </span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-sm"
           onClick={close}
-          className="flex shrink-0 items-center justify-center rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="shrink-0 text-muted-foreground"
           aria-label={activeKind ? `关闭 ${CONTENT_TITLE[activeKind]}` : '关闭'}
         >
           <IconX size={16} />
-        </button>
+        </Button>
       </div>
 
       {/* 内容面板 */}

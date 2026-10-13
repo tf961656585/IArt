@@ -57,6 +57,8 @@ export function HelpTab() {
             <CardContent className="flex flex-col gap-3 p-4">
               <h2 className="text-lg font-medium text-foreground">常见问题</h2>
               <div className="space-y-3">
+                {/* FAQ 手风琴（复合控件，按钮样式标准 §7 出路①）：折叠头是 Collapsible 的组成件，
+                    视觉语义由手风琴控件整体承载，不走共享 Button */}
                 <Collapsible className="group">
                   <CollapsibleTrigger asChild>
                     <button

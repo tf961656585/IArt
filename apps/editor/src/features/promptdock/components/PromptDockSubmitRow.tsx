@@ -1,6 +1,6 @@
 'use client';
 
-import { IconArrowUp, IconLoader2, IconPlayerStopFilled } from '@tabler/icons-react';
+import { IconArrowUp, IconPlayerStopFilled } from '@tabler/icons-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -48,9 +48,11 @@ export function PromptDockSubmitRow({
       return (
         <Button
           type="button"
+          variant="primary"
+          size="icon-sm"
           onClick={() => stopCurrentAgentRound(inFlight.agentSessionId)}
           aria-label="停止"
-          className="h-8 w-8 flex-none rounded-full bg-primary p-0 text-primary-foreground hover:bg-primary/90 active:scale-[0.97]"
+          className="flex-none"
           data-testid="promptdock-stop"
         >
           <IconPlayerStopFilled size={16} aria-hidden="true" />
@@ -61,17 +63,16 @@ export function PromptDockSubmitRow({
     return (
       <Button
         type="button"
+        variant="primary"
+        size="icon-sm"
         onClick={onSubmit}
         disabled={!canSubmit}
+        loading={submitting}
         aria-label="发送"
-        className="h-8 w-8 flex-none rounded-full bg-primary p-0 text-primary-foreground hover:bg-primary/90 active:scale-[0.97] disabled:opacity-40"
+        className="flex-none disabled:opacity-40"
         data-testid="promptdock-submit"
       >
-        {submitting ? (
-          <IconLoader2 size={16} className="animate-spin" aria-hidden="true" />
-        ) : (
-          <IconArrowUp size={16} aria-hidden="true" />
-        )}
+        {submitting ? null : <IconArrowUp size={16} aria-hidden="true" />}
       </Button>
     );
   }
@@ -80,9 +81,11 @@ export function PromptDockSubmitRow({
   return (
     <Button
       type="button"
+      variant="primary"
+      size="sm"
       onClick={onSubmit}
       disabled={!canSubmit}
-      className="h-8 flex-none rounded-full bg-primary px-3 text-sm text-primary-foreground hover:bg-primary/90 active:scale-[0.97]"
+      className="flex-none"
       data-testid="promptdock-submit"
     >
       {submitting ? '提交中…' : '生成'}

@@ -1,4 +1,4 @@
-import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@iart/ui';
+import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } from '@iart/ui';
 import { Activity, AlertCircle, Inbox, LayoutGrid, RefreshCw } from 'lucide-react';
 import { useHubStore } from '../../client/store/hub-store';
 import { TaskItem } from './TaskItem';
@@ -90,16 +90,23 @@ export function TaskMonitorTab() {
       ) : (
         <>
           <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-4 py-2">
-            {FILTER_OPTIONS.map((option) => (
-              <Button
-                key={option.value || 'all'}
-                size="sm"
-                variant={activeFilter === option.value ? 'secondary' : 'ghost'}
-                onClick={() => filterTasks(option.value)}
-              >
-                {option.label}
-              </Button>
-            ))}
+            {/* 筛选片选中态按属性驱动（按钮样式标准 §6：不得用形态表达选择态）：
+                aria-pressed + 条件令牌类承载选中填充，视觉与原 secondary 填充一致 */}
+            {FILTER_OPTIONS.map((option) => {
+              const active = activeFilter === option.value;
+              return (
+                <Button
+                  key={option.value || 'all'}
+                  size="sm"
+                  variant="ghost"
+                  aria-pressed={active}
+                  className={cn(active && 'bg-secondary text-secondary-foreground hover:bg-secondary/80')}
+                  onClick={() => filterTasks(option.value)}
+                >
+                  {option.label}
+                </Button>
+              );
+            })}
           </div>
           <div className="flex-1 overflow-y-auto p-4">
             {tasks.length > 0 ? (

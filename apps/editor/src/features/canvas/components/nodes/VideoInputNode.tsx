@@ -433,9 +433,9 @@ export const VideoInputNode = memo(function VideoInputNode({ id, data: _data, se
         {taskArchiveTaskId ? (
           <Button
             type="button"
-            size="sm"
+            size="2xs"
             variant="secondary"
-            className="pointer-events-auto mt-2 h-7 px-2"
+            className="pointer-events-auto mt-2"
             onClick={handleOpenTaskArchive}
           >
             打开任务文件夹

@@ -46,15 +46,22 @@ export function UpdateSection() {
         <div className="min-w-0 whitespace-pre-line text-xs text-muted-foreground">{statusText}</div>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Button size="sm" onClick={() => void checkUpdates(true)} disabled={!isElectron || projection.checking || projection.downloading}>
-            {projection.checking ? '正在检查...' : '重新检查'}
+          {/* 打开更新日志/打开日志文件夹 = 去某处看内容（按钮样式标准 §4 link 判据「link 是去、ghost 是做」）→ link；
+              复制诊断 = 对当前对象执行的写入动作 → ghost */}
+          <Button
+            size="sm"
+            loading={projection.checking}
+            disabled={!isElectron || projection.downloading}
+            onClick={() => void checkUpdates(true)}
+          >
+            重新检查
           </Button>
           {isElectron ? (
             <>
-              <Button size="sm" variant="ghost" onClick={() => void openLog()}>
+              <Button size="sm" variant="link" onClick={() => void openLog()}>
                 打开更新日志
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => void openLogFolder()}>
+              <Button size="sm" variant="link" onClick={() => void openLogFolder()}>
                 打开日志文件夹
               </Button>
               <Button size="sm" variant="ghost" onClick={() => void copyDiagnostics()}>

@@ -285,7 +285,7 @@ export function ImageAnnotateDialogBody(props: {
         <div className="ml-auto flex items-center gap-2">
           <Button
             type="button"
-            variant={activeTool === "text" ? "default" : "outline"}
+            variant={activeTool === "text" ? "primary" : "outline"}
             size="sm"
             disabled={saving}
             onClick={() =>

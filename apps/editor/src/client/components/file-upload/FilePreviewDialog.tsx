@@ -125,7 +125,7 @@ export const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
         <DialogFooter>
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="sm"
             asChild={undefined}
             onClick={() => onOpenChange(false)}

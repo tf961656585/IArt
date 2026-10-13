@@ -329,6 +329,8 @@ function OptionListEditor({
           className="flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 text-2xs"
         >
           {String(option)}
+          {/* 芯片组成件的移除钮（按钮样式标准 §7 出路①）：视觉语义由芯片整体承载，
+              芯片内放不下任何尺寸档——不走共享 Button */}
           <button
             type="button"
             aria-label={`${removeButtonAriaPrefix}「${String(option)}」`}
@@ -355,8 +357,7 @@ function OptionListEditor({
       <Button
         type="button"
         variant="outline"
-        size="sm"
-        className="h-7 px-2 text-2xs"
+        size="2xs"
         disabled={draft.trim() === ''}
         aria-label={addButtonAriaLabel}
         onClick={add}
@@ -934,9 +935,8 @@ export function ParameterOverridesEditor({
           action={
             <Button
               type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-2xs text-destructive"
+              variant="ghost-destructive"
+              size="2xs"
               aria-label={`删除参数「${entry.label.trim() === '' ? '新参数' : entry.label}」`}
               onClick={() => removeCustomAt(index)}
             >
@@ -956,8 +956,7 @@ export function ParameterOverridesEditor({
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
-                className="h-7 px-2 text-2xs"
+                size="2xs"
                 aria-label="添加这个自定义参数"
                 onClick={submitAdd}
               >
@@ -966,8 +965,7 @@ export function ParameterOverridesEditor({
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
-                className="h-7 px-2 text-2xs"
+                size="2xs"
                 aria-label="取消添加自定义参数"
                 onClick={() => {
                   setAddDraft({ label: '', wire_name: '', value_type: 'string', required: false });

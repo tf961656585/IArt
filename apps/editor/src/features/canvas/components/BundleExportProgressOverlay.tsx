@@ -120,7 +120,7 @@ export function BundleExportProgressOverlay({
               <div className="mt-1 text-xs text-muted-foreground">{detailText}</div>
             )}
           </div>
-          <Button variant="ghost" size="sm" className="h-7 px-2" onClick={onHide}>
+          <Button variant="ghost" size="2xs" onClick={onHide}>
             隐藏
           </Button>
         </div>
@@ -131,8 +131,7 @@ export function BundleExportProgressOverlay({
             {status === 'running' && (
               <Button
                 variant="destructive"
-                size="sm"
-                className="h-7 px-2"
+                size="2xs"
                 onClick={onCancel}
               >
                 取消导出

@@ -14,6 +14,8 @@ export function InfoHint({ text, subject }: { text: string; subject: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
+        {/* 微型圆形解释钮（h-3.5=14px）：icon 系最小档 icon-sm（32px）放不下，会把字段行撑高；
+            几何不变红线不放行迁移——原生 button 待登记按钮标准白名单（§7 出路②） */}
         <button
           type="button"
           aria-label={`${subject}说明`}

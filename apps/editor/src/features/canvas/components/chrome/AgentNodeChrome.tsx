@@ -4,9 +4,26 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { IconSparkles, IconTrash } from '@tabler/icons-react';
 import { Ungroup as IconUngroup } from 'lucide-react';
 
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+
 import { useChromePlacement } from './AssetNodeChrome.hooks';
 import { useAgentChromeActions, useAgentChromeState } from './AgentNodeChrome.hooks';
 import type { AgentNodeChromeProps } from './AgentNodeChrome.types';
+
+/**
+ * 底栏动作钮（原 .usage-btn 退役后的共享 Button 组合，docs/ui-button-standard.md §4/§5）：
+ * ghost 2xs（28px 高）+ 1px 透明边框，承载「使用 agent」data-active 已用态描边与
+ * 生成蓝底（editor visual-design §7：st-generating 低 alpha 底 + st-generating-text 字）。
+ */
+const CHROME_ACTION_BUTTON_CLASS = 'border border-transparent';
+const REF_ACTIVE_CLASS = [
+  'data-[active=true]:border-[color-mix(in_srgb,var(--st-generating)_30%,transparent)]',
+  'data-[active=true]:bg-[color-mix(in_srgb,var(--st-generating)_14%,transparent)]',
+  'data-[active=true]:text-[var(--st-generating-text)]',
+  'data-[active=true]:hover:bg-[color-mix(in_srgb,var(--st-generating)_20%,transparent)]',
+  'data-[active=true]:hover:text-[var(--st-generating-text)]',
+].join(' ');
 
 /**
  * Agent 节点选中态工具栏（spec docs/agent/02-Agent节点与画布投影.md「选中态工具栏」；
@@ -100,9 +117,11 @@ export const AgentNodeChrome = memo(function AgentNodeChrome({
     >
       {!multi && single !== null && (
         <>
-          <button
+          <Button
             type="button"
-            className="usage-btn"
+            variant="ghost"
+            size="2xs"
+            className={cn(CHROME_ACTION_BUTTON_CLASS, REF_ACTIVE_CLASS)}
             data-act="use-agent"
             // 已处于该会话时是幂等操作（spec 02）：按已用态呈现，不给点了没反应的按钮。
             data-active={alreadyInSession ? 'true' : undefined}
@@ -112,18 +131,19 @@ export const AgentNodeChrome = memo(function AgentNodeChrome({
               actions.useAgent(single.id, agentSessionId);
             }}
           >
-            <IconSparkles size={14} />
+            <IconSparkles size={14} className="size-3.5" />
             <span>使用 agent</span>
-          </button>
+          </Button>
           <div className="sep" aria-hidden="true" />
         </>
       )}
       {/* 解散（AG-CT-010）：仅容器形态（有成员）出现——解除组织关系，纯可逆不经删除路径 */}
       {dissolvableNodeIds.length > 0 && (
         <>
-          <button
+          <Button
             type="button"
-            className="usage-btn"
+            variant="ghost"
+            size="2xs"
             data-act="dissolve"
             aria-label="解散容器"
             onClick={(e) => {
@@ -131,15 +151,16 @@ export const AgentNodeChrome = memo(function AgentNodeChrome({
               dissolve(nodeIds);
             }}
           >
-            <IconUngroup size={14} />
+            <IconUngroup size={14} className="size-3.5" />
             <span>解散</span>
-          </button>
+          </Button>
           <div className="sep" aria-hidden="true" />
         </>
       )}
-      <button
+      <Button
         type="button"
-        className="usage-btn danger"
+        variant="ghost-destructive"
+        size="2xs"
         data-act="del"
         aria-label="删除 Agent"
         onClick={(e) => {
@@ -147,9 +168,9 @@ export const AgentNodeChrome = memo(function AgentNodeChrome({
           requestDelete(nodeIds);
         }}
       >
-        <IconTrash size={14} />
+        <IconTrash size={14} className="size-3.5" />
         <span>删除</span>
-      </button>
+      </Button>
     </div>
   );
 });

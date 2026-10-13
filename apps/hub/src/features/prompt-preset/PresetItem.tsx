@@ -39,7 +39,14 @@ export function PresetItem({ preset, isDeleteConfirming, onCopy, onEdit, onDelet
           <Button size="sm" variant="outline" onClick={onEdit}>
             编辑
           </Button>
-          <Button size="sm" variant="destructive" onClick={onDelete}>
+          {/* 行内两段式删除确认（按钮样式标准 §4/§6）：静止态是行内危险动作 → ghost-destructive；
+              进入确认态后这颗按钮就是最终执行钮，后果强度需匹配 → destructive 实底。
+              非字面量 variant 待登记 BTN-003 白名单 */}
+          <Button
+            size="sm"
+            variant={isDeleteConfirming ? 'destructive' : 'ghost-destructive'}
+            onClick={onDelete}
+          >
             {isDeleteConfirming ? '确认删除' : '删除'}
           </Button>
         </div>

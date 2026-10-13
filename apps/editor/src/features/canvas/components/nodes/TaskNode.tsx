@@ -7,6 +7,7 @@ import { useNodeFromStore } from '../../hooks/useNodeFromStore';
 import type { GraphNode, TaskNodeData } from '../../types/node';
 import { reuseTaskToDraft } from '@/features/promptdock/assetReuse';
 import { cancelTask } from '@/client/api/promptDockApi';
+import { Button } from '@/components/ui/button';
 import { resolveTaskFailurePresentation } from '../../utils/taskFailurePresentation';
 import { getTaskStatusOverlayText } from '../../utils/taskStatusMeta';
 
@@ -35,6 +36,22 @@ const STATUS_LABEL: Record<TaskNodeData['status'], string> = {
   failed: '失败',
   cancelled: '已取消',
 };
+
+/**
+ * 取消白圆钮（24×24 微型钮，画布孵化节点悬停钮群 h-6 口径）：Button 最小档 2xs 28px
+ * 放不下，按 docs/ui-button-standard.md §7 走「宿主场景完整状态的局部控件」保留原生
+ * button，样式收进组件局部。`task-cancel` 类名仅作 morphing 淡出状态钩子保留
+ * （globals.css `.task-node.morphing` 组规则引用），不再承载任何按钮样式。
+ */
+const TASK_CANCEL_BUTTON_CLASS = [
+  'task-cancel nodrag',
+  'absolute top-2 right-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border-0 p-0',
+  'bg-white/90 text-[oklch(0.145_0_0)] text-[13px] shadow-[0_1px_2px_rgba(0,0,0,0.2)] cursor-pointer',
+  'transition-[background-color,transform] duration-150',
+  'hover:bg-white hover:scale-[1.06]',
+  'focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-2',
+  '[[data-theme=light]_&]:border [[data-theme=light]_&]:border-border',
+].join(' ');
 
 const createFallbackTaskNode = (id: string): GraphNode<TaskNodeData> => ({
   id,
@@ -171,7 +188,7 @@ export const TaskNode = memo(function TaskNode({ id, selected }: NodeProps) {
         {isRunning ? (
           <button
             type="button"
-            className="task-cancel nodrag"
+            className={TASK_CANCEL_BUTTON_CLASS}
             aria-label="取消任务"
             onClick={(event) => {
               event.stopPropagation();
@@ -200,12 +217,12 @@ export const TaskNode = memo(function TaskNode({ id, selected }: NodeProps) {
               </details>
             ) : null}
             <div className="acts">
-              <button type="button" className="act-primary nodrag" onClick={handleRetry}>
+              <Button type="button" variant="primary" size="2xs" className="nodrag" onClick={handleRetry}>
                 重试
-              </button>
-              <button type="button" className="act-danger nodrag" onClick={handleDelete}>
+              </Button>
+              <Button type="button" variant="ghost-destructive" size="2xs" className="nodrag" onClick={handleDelete}>
                 删除
-              </button>
+              </Button>
             </div>
           </div>
         ) : null}

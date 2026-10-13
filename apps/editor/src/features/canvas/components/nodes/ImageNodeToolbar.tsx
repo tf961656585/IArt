@@ -105,7 +105,6 @@ export const ImageNodeToolbar = memo(function ImageNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={processing}
               onClick={(e) => {
                 e.stopPropagation();
@@ -127,7 +126,6 @@ export const ImageNodeToolbar = memo(function ImageNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={processing}
               onClick={(e) => {
                 e.stopPropagation();
@@ -149,7 +147,6 @@ export const ImageNodeToolbar = memo(function ImageNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={processing}
               onClick={(e) => {
                 e.stopPropagation();
@@ -171,7 +168,6 @@ export const ImageNodeToolbar = memo(function ImageNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={processing}
               onClick={(e) => {
                 e.stopPropagation();
@@ -193,7 +189,6 @@ export const ImageNodeToolbar = memo(function ImageNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={processing}
               onClick={(e) => {
                 e.stopPropagation();
@@ -215,7 +210,6 @@ export const ImageNodeToolbar = memo(function ImageNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={processing}
               onClick={(e) => {
                 e.stopPropagation();
@@ -237,7 +231,6 @@ export const ImageNodeToolbar = memo(function ImageNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={processing}
               onClick={(e) => {
                 e.stopPropagation();
@@ -259,7 +252,6 @@ export const ImageNodeToolbar = memo(function ImageNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={processing}
               onClick={(e) => {
                 e.stopPropagation();
@@ -281,7 +273,6 @@ export const ImageNodeToolbar = memo(function ImageNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={processing}
               onClick={(e) => {
                 e.stopPropagation();
@@ -303,7 +294,6 @@ export const ImageNodeToolbar = memo(function ImageNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={processing}
               onClick={(e) => {
                 e.stopPropagation();
@@ -325,7 +315,6 @@ export const ImageNodeToolbar = memo(function ImageNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={processing}
               onClick={(e) => {
                 e.stopPropagation();
@@ -347,7 +336,6 @@ export const ImageNodeToolbar = memo(function ImageNodeToolbar({
             <Button
               size="icon-sm"
               variant="secondary"
-              className="rounded-full"
               disabled={processing}
               onClick={(e) => {
                 e.stopPropagation();

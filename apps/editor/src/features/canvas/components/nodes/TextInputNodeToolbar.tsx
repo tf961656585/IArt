@@ -42,7 +42,6 @@ export const TextInputNodeToolbar = memo(function TextInputNodeToolbar({
               <Button
                 size="sm"
                 variant="secondary"
-                className="rounded-full"
                 onPointerDown={(e) => {
                   if (e.button !== 0) return;
                   // 防止按钮抢焦点导致 editor selection 失效（用于打开弹窗前采样）。
@@ -72,7 +71,6 @@ export const TextInputNodeToolbar = memo(function TextInputNodeToolbar({
             <Button
               size="sm"
               variant="secondary"
-              className="rounded-full"
               onClick={(e) => {
                 e.stopPropagation();
                 onAiEditClick();

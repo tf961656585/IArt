@@ -117,7 +117,7 @@ export const FileUploadInput = <FieldKey extends string>({
               <p className="text-xs text-muted-foreground">{helperText}</p>
             ) : null}
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
                 {translate("common:actions.close", "关闭")}
               </Button>
             </DialogFooter>

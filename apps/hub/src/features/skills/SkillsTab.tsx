@@ -55,9 +55,9 @@ export function SkillsTab() {
             <FolderCog /> 管理安装目标
           </Button>
           {showUpdateAll ? (
-            <Button onClick={() => void updateAll()} disabled={updatingAll || loading}>
+            <Button onClick={() => void updateAll()} disabled={loading} loading={updatingAll}>
               <CloudDownload />
-              {updatingAll ? '正在更新…' : `全部更新（${pendingUpdates.length}）`}
+              全部更新（{pendingUpdates.length}）
             </Button>
           ) : null}
         </div>

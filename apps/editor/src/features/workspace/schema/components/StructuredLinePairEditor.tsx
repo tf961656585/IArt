@@ -258,7 +258,7 @@ export function StructuredLinePairEditor({
               <div className="flex items-end">
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="ghost-destructive"
                   size="sm"
                   disabled={disabled}
                   onClick={() => {

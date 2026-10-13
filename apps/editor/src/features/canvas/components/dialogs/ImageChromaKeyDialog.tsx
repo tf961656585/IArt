@@ -251,7 +251,7 @@ export const ImageChromaKeyDialog = memo(function ImageChromaKeyDialog({
       stageToolbar={
         <div className="flex items-center gap-2">
           <Button
-            variant={eyedropperMode ? 'default' : 'outline'}
+            variant={eyedropperMode ? 'primary' : 'outline'}
             size="sm"
             onClick={() => setEyedropperMode(!eyedropperMode)}
             disabled={loading || !imageLoaded}
