@@ -65,17 +65,49 @@ jobs:
       - name: Build desktop static assets
         run: pnpm build:desktop-static
 
-      - name: Provision native desktop deps
+      # 双架构分两次构建（对齐 desktop-release-local.mjs 每架构一次构建 + 依赖切换的
+      # 现行路径）：ffmpeg-static（单文件二进制）与 better-sqlite3 electron 运行时
+      # （extraResources 单目录）是单槽位原生依赖，每次构建前用 ensure:desktop-deps
+      # 的对应形态激活目标架构原生依赖；sharp 平台包由 pnpm-workspace.yaml 的
+      # supportedArchitectures 一次性装齐双架构。
+      - name: Provision native desktop deps (arm64)
         run: pnpm ensure:desktop-deps
 
       - name: Generate mac icon
         run: pnpm generate:mac-icon
 
-      - name: Package (macOS arm64 + x64)
-        run: pnpm exec electron-builder --mac --arm64 --x64 --publish never
+      - name: Package (macOS arm64)
+        run: pnpm exec electron-builder --mac --arm64 --publish never -c.mac.identity=null
 
-      - name: Verify packaged native runtimes
+      - name: Stage arm64 artifacts
+        run: |
+          mkdir -p dist-desktop/arm64
+          mv dist-desktop/IARTStudio-*.zip dist-desktop/IARTStudio-*.dmg \
+             dist-desktop/*.blockmap dist-desktop/latest-mac.yml dist-desktop/arm64/
+
+      - name: Verify packaged native runtimes (arm64)
         run: pnpm verify:packaged-native-runtimes
+
+      - name: Switch native desktop deps to x64
+        run: pnpm ensure:desktop-deps:x64
+
+      - name: Package (macOS x64)
+        run: pnpm exec electron-builder --mac --x64 --publish never
+
+      - name: Stage x64 artifacts
+        run: |
+          mkdir -p dist-desktop/x64
+          mv dist-desktop/IARTStudio-*.zip dist-desktop/IARTStudio-*.dmg \
+             dist-desktop/*.blockmap dist-desktop/latest-mac.yml dist-desktop/x64/
+
+      - name: Verify packaged native runtimes (x64)
+        run: pnpm verify:packaged-native-runtimes
+
+      - name: Merge latest-mac.yml (arm64 + x64)
+        run: node ./tooling/scripts/merge-mac-update-manifest.mjs \
+          dist-desktop/arm64/latest-mac.yml \
+          dist-desktop/x64/latest-mac.yml \
+          --out dist-desktop/latest-mac.yml
 
       - name: Upload to draft release
         run: |
@@ -90,11 +122,11 @@ jobs:
               --title "IARTStudio $TAG" \
               --notes "Desktop release $TAG. Draft by CI; promote manually." || true
           fi
-          FILES=$(find dist-desktop -maxdepth 1 -type f \( \
-            -name '*.zip' -o -name '*.dmg' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.blockmap' \
-            -o -name 'latest.yml' -o -name 'latest-mac.yml' -o -name 'latest-linux.yml' \) | sort)
+          FILES=$(find dist-desktop/arm64 dist-desktop/x64 -maxdepth 1 -type f \( \
+            -name '*.zip' -o -name '*.dmg' -o -name '*.blockmap' \) ; \
+            [[ -f dist-desktop/latest-mac.yml ]] && echo dist-desktop/latest-mac.yml)
           if [[ -z "$FILES" ]]; then
-            echo "no release artifacts found in dist-desktop" >&2
+            echo "no release artifacts found" >&2
             exit 1
           fi
           echo "$FILES"
