@@ -1,0 +1,234 @@
+# release.yml —— 公开仓 GitHub Release 分发（批次 1：公开侧基座）。
+#
+# 触发：push tag `v*`（正式发版入口）与 workflow_dispatch（人工重跑/补传）。
+# 三平台三 job：mac（单次 electron-builder 调用同时构建 arm64+x64，保证 latest-mac.yml
+# 同时含双架构条目）、win（x64）、linux（x64，AppImage）。所有构建 --publish never，
+# 上传统一走 gh release create --draft + gh release upload --clobber：
+# - release 一律先建草稿，真实发版由人工在 GitHub 上转正式；
+# - 重复运行对同一 tag 幂等（草稿已有同名资产时 --clobber 覆盖）。
+# 上传清单是精选产物（安装包 + .blockmap + latest*.yml），不含 unpacked 中间目录。
+#
+# 构建步骤只依赖公开快照内存在的 scripts（desktop-release-local.mjs、skill-publish.mjs、
+# docs、AGENTS.md、apps/workers 均不入快照，workflow 不得引用）。
+# node 22 对齐 engines >=22.0.0 下限（LTS）；pnpm 10.29.2 对齐开发机现用版本
+# （pnpm-lock.yaml lockfileVersion 9.0 要求 pnpm >=9）。
+#
+# 已知边界（批次 1 验收时已确认）：mac job 单次 electron-builder 调用构建双架构时，
+# ffmpeg-static（单文件二进制）与 better-sqlite3 electron 运行时（extraResources 单目录）
+# 是单槽位依赖，两个架构产物会携带同一份宿主架构（arm64）的原生依赖；
+# verify:packaged-native-runtimes 的交叉架构校验会对此报红——属预期失败面，双架构
+# 原生依赖供给方案待后续批次裁定。
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-mac:
+    name: Build & upload (macOS arm64 + x64)
+    runs-on: macos-14
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm build:packages
+
+      - name: Build model asset packages
+        run: pnpm build:model-asset-packages
+
+      - name: Build backend & desktop-shell
+        run: |
+          pnpm --filter @iart/backend build
+          pnpm --filter @iart/desktop-shell build
+
+      - name: Build desktop static assets
+        run: pnpm build:desktop-static
+
+      - name: Provision native desktop deps
+        run: pnpm ensure:desktop-deps
+
+      - name: Generate mac icon
+        run: pnpm generate:mac-icon
+
+      - name: Package (macOS arm64 + x64)
+        run: pnpm exec electron-builder --mac --arm64 --x64 --publish never
+
+      - name: Verify packaged native runtimes
+        run: pnpm verify:packaged-native-runtimes
+
+      - name: Upload to draft release
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="v$(node -p "require('./package.json').version")"
+          fi
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+              --title "IARTStudio $TAG" \
+              --notes "Desktop release $TAG. Draft by CI; promote manually." || true
+          fi
+          FILES=$(find dist-desktop -maxdepth 1 -type f \( \
+            -name '*.zip' -o -name '*.dmg' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.blockmap' \
+            -o -name 'latest.yml' -o -name 'latest-mac.yml' -o -name 'latest-linux.yml' \) | sort)
+          if [[ -z "$FILES" ]]; then
+            echo "no release artifacts found in dist-desktop" >&2
+            exit 1
+          fi
+          echo "$FILES"
+          gh release upload "$TAG" $FILES --clobber --repo "$GITHUB_REPOSITORY"
+
+  release-win:
+    name: Build & upload (Windows x64)
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm build:packages
+
+      - name: Build model asset packages
+        run: pnpm build:model-asset-packages
+
+      - name: Build backend & desktop-shell
+        run: |
+          pnpm --filter @iart/backend build
+          pnpm --filter @iart/desktop-shell build
+
+      - name: Build desktop static assets
+        run: pnpm build:desktop-static
+
+      - name: Provision native desktop deps
+        run: pnpm ensure:desktop-deps
+
+      - name: Package (Windows x64)
+        run: pnpm exec electron-builder --win --x64 --publish never
+
+      - name: Verify packaged native runtimes
+        run: pnpm verify:packaged-native-runtimes
+
+      - name: Upload to draft release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="v$(node -p "require('./package.json').version")"
+          fi
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+              --title "IARTStudio $TAG" \
+              --notes "Desktop release $TAG. Draft by CI; promote manually." || true
+          fi
+          FILES=$(find dist-desktop -maxdepth 1 -type f \( \
+            -name '*.zip' -o -name '*.dmg' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.blockmap' \
+            -o -name 'latest.yml' -o -name 'latest-mac.yml' -o -name 'latest-linux.yml' \) | sort)
+          if [[ -z "$FILES" ]]; then
+            echo "no release artifacts found in dist-desktop" >&2
+            exit 1
+          fi
+          echo "$FILES"
+          gh release upload "$TAG" $FILES --clobber --repo "$GITHUB_REPOSITORY"
+
+  release-linux:
+    name: Build & upload (Linux x64 AppImage)
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm build:packages
+
+      - name: Build model asset packages
+        run: pnpm build:model-asset-packages
+
+      - name: Build backend & desktop-shell
+        run: |
+          pnpm --filter @iart/backend build
+          pnpm --filter @iart/desktop-shell build
+
+      - name: Build desktop static assets
+        run: pnpm build:desktop-static
+
+      - name: Provision native desktop deps
+        run: pnpm ensure:desktop-deps
+
+      - name: Package (Linux x64 AppImage)
+        run: pnpm exec electron-builder --linux --x64 --publish never
+
+      - name: Verify packaged native runtimes
+        run: pnpm verify:packaged-native-runtimes
+
+      - name: Upload to draft release
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="v$(node -p "require('./package.json').version")"
+          fi
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+              --title "IARTStudio $TAG" \
+              --notes "Desktop release $TAG. Draft by CI; promote manually." || true
+          fi
+          FILES=$(find dist-desktop -maxdepth 1 -type f \( \
+            -name '*.zip' -o -name '*.dmg' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.blockmap' \
+            -o -name 'latest.yml' -o -name 'latest-mac.yml' -o -name 'latest-linux.yml' \) | sort)
+          if [[ -z "$FILES" ]]; then
+            echo "no release artifacts found in dist-desktop" >&2
+            exit 1
+          fi
+          echo "$FILES"
+          gh release upload "$TAG" $FILES --clobber --repo "$GITHUB_REPOSITORY"

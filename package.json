@@ -310,6 +310,14 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "apps/desktop-shell/resources/icons/icon-512.png",
+      "maintainer": "IARTStudio",
+      "artifactName": "${productName}-${version}-linux-x64.${ext}"
     }
   },
   "overrides": {

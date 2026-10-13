@@ -32,6 +32,7 @@ const IGNORED_DIRS = new Set([
   ".git",
   ".next",
   ".publish",
+  ".skill-dist",
   "build",
   "coverage",
   "dist",

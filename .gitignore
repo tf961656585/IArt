@@ -55,3 +55,6 @@ apps/workers/upload/
 
 # publish-opensource 脚本的 main worktree（仅 local 分支使用）
 .publish/
+
+# skill 目录本地构建产物（skill-catalog-build.mjs，不入库）
+.skill-dist/
