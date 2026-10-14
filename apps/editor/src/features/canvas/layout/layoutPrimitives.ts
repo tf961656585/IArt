@@ -26,6 +26,38 @@ export const NODE_GAP = 120;
 export const alignToGrid = (value: number, grid: number): number =>
   Math.round(value / grid) * grid;
 
+/**
+ * 布局输入序重排（可选 order 入参，CLI canvas.layout --order 承载，spec CLI-030）。
+ *
+ * 布局引擎按传入数组序占格、内部零排序；本纯函数把调用层的显式顺序落实为输入数组序：
+ * order 中出现的节点按给定序排在最前（重复 id 按首次出现去重），未指定的节点保持原数组
+ * 相对序跟排在后。order 缺省或为空时原样返回输入副本——默认排序行为完全不变。
+ * 不读写 store、不感知分组语义；order 中的未知 id 无命中即无排位，不报错
+ * （CLI 侧由映射层前置校验拒绝越界 order，本函数保持纯重排语义）。
+ */
+export const applyLayoutInputOrder = <TNode extends { id: string }>(
+  nodes: readonly TNode[],
+  order: readonly string[] | undefined,
+): TNode[] => {
+  if (order === undefined || order.length === 0) return [...nodes];
+  const rankById = new Map<string, number>();
+  let nextRank = 0;
+  for (const id of order) {
+    if (rankById.has(id)) continue;
+    rankById.set(id, nextRank);
+    nextRank += 1;
+  }
+  if (rankById.size === 0) return [...nodes];
+  const ordered: TNode[] = [];
+  const rest: TNode[] = [];
+  for (const node of nodes) {
+    if (rankById.has(node.id)) ordered.push(node);
+    else rest.push(node);
+  }
+  ordered.sort((a, b) => (rankById.get(a.id) ?? 0) - (rankById.get(b.id) ?? 0));
+  return [...ordered, ...rest];
+};
+
 /** 对齐坐标点到网格 */
 export const alignPosition = (pos: NodePosition, grid: [number, number]): NodePosition => ({
   x: alignToGrid(pos.x, grid[0]),

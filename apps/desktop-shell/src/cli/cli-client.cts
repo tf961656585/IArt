@@ -231,6 +231,12 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
     }
     case "canvas.group.create":
       return `组已创建：${response.group_node_id}`;
+    case "canvas.group.dissolve":
+      return `组已解散：${response.group_node_id}，${response.member_ids.length} 个成员保留在画布上`;
+    case "canvas.node.move":
+      return `节点 ${response.node_id} 已移动到 (${response.position.x}, ${response.position.y})`;
+    case "canvas.node.delete":
+      return `已删除 ${response.deleted_node_ids.length} 个节点`;
     case "canvas.layout":
       return `已整理 ${Object.keys(response.positions).length} 个节点位置`;
     case "generate": {

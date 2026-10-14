@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computeLayoutWithElk } from '../elkLayoutEngine';
+import { applyLayoutInputOrder } from '../layoutPrimitives';
 import type { GraphNode, NodePosition, NodeSize } from '../../types';
 
 const SNAP_GRID: [number, number] = [15, 15];
@@ -350,5 +351,28 @@ describe('computeLayoutWithElk 网格摆放（容器内整理列数）', () => {
     expect(extra.y).toBeGreaterThanOrEqual(300);
     expect(small.x).toBe(0);
     expect(extra.x).toBeGreaterThanOrEqual(400);
+  });
+});
+
+// @spec: CLI-030
+describe('applyLayoutInputOrder（显式输入序，CLI canvas.layout --order）', () => {
+  const byIds = (nodes: ReturnType<typeof makeNode>[]): string[] => nodes.map((n) => n.id);
+
+  it('order 中节点按给定序排最前，未指定节点保持原数组相对序跟排', () => {
+    const nodes = [makeNode('a', 'asset', { x: 0, y: 0 }, { width: 10, height: 10 }), makeNode('b', 'asset', { x: 0, y: 0 }, { width: 10, height: 10 }), makeNode('c', 'asset', { x: 0, y: 0 }, { width: 10, height: 10 })];
+    expect(byIds(applyLayoutInputOrder(nodes, ['c', 'a']))).toEqual(['c', 'a', 'b']);
+  });
+
+  it('order 缺省或为空时原样返回输入副本（默认排序行为不变）', () => {
+    const nodes = [makeNode('a', 'asset', { x: 0, y: 0 }, { width: 10, height: 10 }), makeNode('b', 'asset', { x: 0, y: 0 }, { width: 10, height: 10 })];
+    expect(byIds(applyLayoutInputOrder(nodes, undefined))).toEqual(['a', 'b']);
+    expect(byIds(applyLayoutInputOrder(nodes, []))).toEqual(['a', 'b']);
+    expect(applyLayoutInputOrder(nodes, undefined)).not.toBe(nodes);
+  });
+
+  it('order 重复 id 按首次出现去重；order 中的未知 id 无命中即无排位', () => {
+    const nodes = [makeNode('a', 'asset', { x: 0, y: 0 }, { width: 10, height: 10 }), makeNode('b', 'asset', { x: 0, y: 0 }, { width: 10, height: 10 })];
+    expect(byIds(applyLayoutInputOrder(nodes, ['b', 'b']))).toEqual(['b', 'a']);
+    expect(byIds(applyLayoutInputOrder(nodes, ['ghost', 'b']))).toEqual(['b', 'a']);
   });
 });

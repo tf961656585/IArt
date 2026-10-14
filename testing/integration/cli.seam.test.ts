@@ -1,5 +1,5 @@
 // @vitest-environment node
-// @spec: CLI-005, CLI-007, CLI-008, CLI-010, CLI-012, CLI-014, CLI-020, CLI-021
+// @spec: CLI-005, CLI-007, CLI-008, CLI-010, CLI-012, CLI-014, CLI-020, CLI-021, CLI-027, CLI-030
 //
 // CLI 与本地 Agent 集成 · 主链接缝测试（spec docs/integrations/CLI与本地Agent集成.md
 // §4 架构 / §6 通道契约 / §10 边界条件）。
@@ -607,6 +607,90 @@ describe('链路 B：画布命令 / 任务取消全链', () => {
     );
     // 组名经 renameGroup 落到组节点（CLI-010 与画布节点组 spec 同语义）
     expect((groupNode?.data as { name?: string }).name).toBe('接缝组');
+  });
+
+  it('canvas group dissolve 全链：CLI 建组 → CLI 解散 → 组节点删除、成员保留原位且归属解除（CLI-027 主链）', async () => {
+    const memberA = createMemberNodeViaStoreAction(10, 10);
+    const memberB = createMemberNodeViaStoreAction(300, 10);
+    const created = await runCli([
+      'canvas', 'group', 'create',
+      '--project', OPEN_PROJECT_NAME,
+      '--name', '待解散组',
+      '--members', `${memberA},${memberB}`,
+      '--json',
+    ]);
+    expect(created.exitCode).toBe(0);
+    const createdResponse = parseCliResponse(created);
+    if (!createdResponse.ok || createdResponse.command !== 'canvas.group.create') {
+      throw new Error(`expected canvas.group.create success response, got ${created.stdout}`);
+    }
+    const groupId = createdResponse.group_node_id;
+    expect(useCanvasStore.getState().nodeGraph?.nodes.find((c) => c.id === memberA)?.groupId).toBe(groupId);
+    // 解散走真实全链：CLI → 控制服务 → 分发器 → 接收器 → 删除咽喉 removeNodes
+    const dissolved = await runCli([
+      'canvas', 'group', 'dissolve',
+      '--project', OPEN_PROJECT_NAME,
+      '--group', groupId,
+      '--json',
+    ]);
+    expect(dissolved.exitCode).toBe(0);
+    const response = parseCliResponse(dissolved);
+    if (!response.ok || response.command !== 'canvas.group.dissolve') {
+      throw new Error(`expected canvas.group.dissolve success response, got ${dissolved.stdout}`);
+    }
+    expect(response.dissolved).toBe(true);
+    expect(response.group_node_id).toBe(groupId);
+    expect(response.member_ids).toEqual([memberA, memberB]);
+    // 解散语义（画布节点组 spec「解散」）：组节点删除，成员保留原位、归属解除
+    const graph = useCanvasStore.getState().nodeGraph;
+    expect(graph?.nodes.find((c) => c.id === groupId)).toBeUndefined();
+    expect(groupNodes()).toHaveLength(0);
+    expect(graph?.nodes.find((c) => c.id === memberA)).toMatchObject({ groupId: undefined, position: { x: 10, y: 10 } });
+    expect(graph?.nodes.find((c) => c.id === memberB)).toMatchObject({ groupId: undefined, position: { x: 300, y: 10 } });
+  });
+
+  it('canvas layout --order 全链：CLI 建组建员 → 显式顺序整理组内 → 成员按指定序占格（CLI-030 主链）', async () => {
+    const memberA = createMemberNodeViaStoreAction(10, 10);
+    const memberB = createMemberNodeViaStoreAction(300, 10), memberC = createMemberNodeViaStoreAction(600, 10);
+    const created = await runCli([
+      'canvas', 'group', 'create',
+      '--project', OPEN_PROJECT_NAME,
+      '--name', '顺序组',
+      '--members', `${memberA},${memberB},${memberC}`,
+      '--json',
+    ]);
+    expect(created.exitCode).toBe(0);
+    const createdResponse = parseCliResponse(created);
+    if (!createdResponse.ok || createdResponse.command !== 'canvas.group.create') {
+      throw new Error(`expected canvas.group.create success response, got ${created.stdout}`);
+    }
+    const groupId = createdResponse.group_node_id;
+    const result = await runCli([
+      'canvas', 'layout',
+      '--project', OPEN_PROJECT_NAME,
+      '--scope', `group:${groupId}`,
+      '--order', `${memberC},${memberA}`,
+      '--json',
+    ]);
+    expect(result.exitCode).toBe(0);
+    const response = parseCliResponse(result);
+    if (!response.ok || response.command !== 'canvas.layout') {
+      throw new Error(`expected canvas.layout success response, got ${result.stdout}`);
+    }
+    const graph = useCanvasStore.getState().nodeGraph;
+    const yOf = (id: string): number => {
+      const node = graph?.nodes.find((c) => c.id === id);
+      if (!node) throw new Error(`node missing: ${id}`);
+      return node.position.y;
+    };
+    // order 首位 memberC 占第一行（y 最小），其次 memberA；未指定的 memberB 跟排最后
+    expect(Object.keys(response.positions).sort()).toEqual([memberA, memberB, memberC].sort());
+    expect(yOf(memberC)).toBeLessThan(yOf(memberA));
+    expect(yOf(memberA)).toBeLessThan(yOf(memberB));
+    for (const [nodeId, position] of Object.entries(response.positions)) {
+      const node = graph?.nodes.find((c) => c.id === nodeId);
+      expect(node?.position).toEqual(position);
+    }
   });
 
   it('task cancel 有窗形态全链：CLI → 代理通道 → 真实接收器 → 用户取消链受理 → 响应回 CLI（CLI-012 有窗形态主链）', async () => {

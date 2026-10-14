@@ -27,7 +27,8 @@ import { resolveCliProject, type CliProjectRegistryReader, type CliResolvedProje
 /**
  * CLI 命令执行器注册表（spec docs/integrations/CLI与本地Agent集成.md §4.2 分派规则）。
  *
- * 本批次（批次四）接入 18 条：项目生命周期 6 + 只读查询 7 + 画布命令 2 + 生成与任务 3；
+ * 本批次（批次四）接入 21 条：项目生命周期 6 + 只读查询 7 + 画布命令 5 + 生成与任务 3
+ * （画布命令含 2026-10-14 增补的 group dissolve / node move / node delete 与 layout --order）；
  * 另有应用状态感知 app.status（spec §5.5，CLI-020/021）：主进程直答打开集合，
  * 选中态逐窗口经代理执行通道只读查询（canvas.selection.get，不映射 action、不产生写入）。
  *
@@ -215,6 +216,20 @@ const proxyOutcomeToResult = (
   switch (response.command) {
     case "canvas.group.create":
       return okResult(command, { group_node_id: response.group_node_id });
+    case "canvas.group.dissolve":
+      return okResult(command, {
+        dissolved: response.dissolved,
+        group_node_id: response.group_node_id,
+        member_ids: response.member_ids,
+      });
+    case "canvas.node.move":
+      return okResult(command, {
+        node_id: response.node_id,
+        position: response.position,
+        moved_node_ids: response.moved_node_ids,
+      });
+    case "canvas.node.delete":
+      return okResult(command, { deleted: response.deleted, deleted_node_ids: response.deleted_node_ids });
     case "canvas.layout":
       return okResult(command, { positions: response.positions });
     case "task.cancel":
@@ -562,6 +577,48 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
     return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
   });
 
+  registry.set("canvas.group.dissolve", async (request) => {
+    if (request.command !== "canvas.group.dissolve") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
+    const resolution = resolveProjectOrFail(request, deps);
+    if (!resolution.ok) return resolution.result;
+    const guard = guardProjectOpenOrFail(request.command, resolution.project.path, deps);
+    if (guard !== null) return guard;
+    const outcome = await deps.proxy.dispatch(resolution.project.path, {
+      command: "canvas.group.dissolve",
+      group: request.group,
+    });
+    return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
+  });
+
+  registry.set("canvas.node.move", async (request) => {
+    if (request.command !== "canvas.node.move") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
+    const resolution = resolveProjectOrFail(request, deps);
+    if (!resolution.ok) return resolution.result;
+    const guard = guardProjectOpenOrFail(request.command, resolution.project.path, deps);
+    if (guard !== null) return guard;
+    const outcome = await deps.proxy.dispatch(resolution.project.path, {
+      command: "canvas.node.move",
+      node: request.node,
+      x: request.x,
+      y: request.y,
+    });
+    return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
+  });
+
+  registry.set("canvas.node.delete", async (request) => {
+    if (request.command !== "canvas.node.delete") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
+    const resolution = resolveProjectOrFail(request, deps);
+    if (!resolution.ok) return resolution.result;
+    const guard = guardProjectOpenOrFail(request.command, resolution.project.path, deps);
+    if (guard !== null) return guard;
+    const outcome = await deps.proxy.dispatch(resolution.project.path, {
+      command: "canvas.node.delete",
+      nodes: request.nodes,
+      ...(request.yes !== undefined ? { yes: request.yes } : {}),
+    });
+    return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
+  });
+
   registry.set("canvas.layout", async (request) => {
     if (request.command !== "canvas.layout") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
     const resolution = resolveProjectOrFail(request, deps);
@@ -572,6 +629,7 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
       command: "canvas.layout",
       scope: request.scope,
       ...(request.columns !== undefined ? { columns: request.columns } : {}),
+      ...(request.order !== undefined ? { order: request.order } : {}),
     });
     return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
   });

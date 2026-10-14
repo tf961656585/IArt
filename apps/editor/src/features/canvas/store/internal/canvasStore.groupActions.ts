@@ -8,6 +8,7 @@
  */
 
 import { computeAutoLayout } from '../../layout/autoLayout';
+import { applyLayoutInputOrder } from '../../layout/layoutPrimitives';
 import { normalizeNodeGraphSettings } from '../../types/nodeGraph';
 import type { GraphNode, GroupNodeData, NodePosition } from '../../types/node';
 import {
@@ -367,7 +368,13 @@ export const createCanvasGroupActions = (
     // 折叠态容器内整理不可执行；需先展开（spec：画布节点组.md「自动布局协作」）
     if (isContainerCollapsed(containerNode)) return null;
 
-    const members = getGroupMembers(nodeGraph, containerId);
+    // 成员集合先经 order 显式顺序重排（CLI --order 承载，spec CLI-030）：布局引擎按传入
+    // 数组序占格；缺省不传时保持 getGroupMembers 的现状数组序，默认排序行为不变。
+    // 重排不影响锚点计算（包围盒与序无关），仅改变占格顺序。
+    const members = applyLayoutInputOrder(
+      getGroupMembers(nodeGraph, containerId),
+      options ? options.order : undefined,
+    );
     if (members.length === 0) return null;
 
     const memberIds = new Set(members.map((m) => m.id));

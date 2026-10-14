@@ -20,11 +20,30 @@
  *   重新归属，与界面拖拽同语义」），解除归属与建组在同一历史合批内收口为一条撤销记录
  *   （historyBatchActive 既有合批模式，本映射不自建第二套入栈）；组名经 `renameGroup`
  *   落到组节点（renameGroup 非合批感知，独立成一条历史，用户可逐步撤销）。
+ * - `canvas.group.dissolve` → 按容器类型分述（spec CLI-027；docs/runtime/画布节点组.md「解散」）：
+ *   组 → 删除咽喉 `removeNodes([groupId], { deleteGroupMembers: false })`——画布级删除组与
+ *   解散是同一解散数据动作，成员关系解除、组节点删除、绑定组注释级联在同一存储写入路径收口
+ *   （不连删，成员保留原位）；Agent 容器 → `dissolveAgentContainer`（纯解除成员关系，头节点
+ *   保留回落单节点形态，会话与历史保留）。目标不存在 → `group_not_found`；目标非容器节点 →
+ *   `command_rejected`；无成员（单节点形态）的 Agent 节点 → `command_rejected`（AG-CN-015）。
+ *   响应回传解散前成员 id 列表。
+ * - `canvas.node.move` → `updateNodePositionsBatch`（与界面拖拽同一位置写入 action，伴随节点
+ *   跟随与容器 position 重派生走其既有展开逻辑，spec CLI-028）。目标不存在 → `node_not_found`；
+ *   目标是容器节点 → `command_rejected`（组位置是成员包围盒的派生量、不独立可写，移动一律
+ *   成员级）。响应回传目标最终坐标（store 现值）与实际发生位移的节点集合（容器派生位移不计入）。
+ * - `canvas.node.delete` → 删除咽喉 `removeNodes(ids, { deleteGroupMembers: false })`——与界面
+ *   删除（deleteSelectedElements → removeNodes）同一动作同一连带语义：伴随节点级联、绑定注释
+ *   级联、组节点删除即解散、Agent 删除前置钩子（先在途终止再删除）；CLI 不提供连删（连删是
+ *   界面显式危险动作）。请求集直接命中 Agent 节点时必须携带 `yes: true`（界面删除确认框的
+ *   CLI 对应物，AG-CT-011 禁旁路）。目标不存在 → `node_not_found`。响应回传实际删除集合
+ *   （请求集 + 伴随节点级联）。
  * - `canvas.layout` → `scope=all` 映射 `autoLayout`（columns 参数对全局整理无既有语义，
  *   契约允许携带、执行侧忽略——全局整理固定单列，docs/runtime/画布自动布局算法.md）；
  *   `scope={group}` 映射 `autoLayoutContainer`（组与 Agent 容器同一动作同一语义）；
- *   受影响节点的最终位置映射从 store 现值读取（不使用 action 返回值，容器内整理的返回
- *   位置是锚点补偿前的算法输出）。
+ *   `order` 显式顺序（spec CLI-030）在映射层前置校验（order 节点必须存在且属于本次整理
+ *   作用域，缺失 → `node_not_found`、越界 → `command_rejected`）后经 store options 透传为
+ *   布局输入序；缺省时不传 order，默认排序行为完全不变。受影响节点的最终位置映射从 store
+ *   现值读取（不使用 action 返回值，容器内整理的返回位置是锚点补偿前的算法输出）。
  * - `task.cancel` → `promptDockApi.cancelTask`（与 TaskNode 用户取消链同一函数，同语义；
  *   投影移除由 Backend 结算终态通知驱动，此处不新增「立即移除」旁路）。Backend 拒绝
  *   （非 2xx）映射 `command_rejected` 并携带 Backend 理由。
@@ -61,11 +80,13 @@ import {
   isContainerNode,
   isGroupMember,
 } from '@/features/canvas/services/groupMembership';
+import { expandRemovalWithCompanions } from '@/features/canvas/services/nodeCompanion/nodeCompanionManager';
 import {
   buildProgrammaticIntentFromCliParams,
   submitGenerationBatchFromIntent,
 } from '@/features/promptdock/programmaticSubmission';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
+import type { NodeGraph } from '@/features/canvas/types';
 
 // ---------------------------------------------------------------------------
 // 错误响应构造（spec §9：message 面向使用 CLI 的开发者，用户视角业务语言，不暴露内部术语）
@@ -257,6 +278,275 @@ const executeGroupCreate = (
   };
 };
 
+/**
+ * canvas.group.dissolve → 按容器类型分述的解散（spec CLI-027；docs/runtime/画布节点组.md「解散」）。
+ *
+ * 组：映射删除咽喉 removeNodes（deleteGroupMembers=false，不连删）——画布级删除组与解散是
+ * 同一个解散数据动作，成员关系解除、组节点删除、绑定组注释级联在同一存储写入路径收口；
+ * Agent 容器：映射 dissolveAgentContainer（纯解除成员关系，头节点保留、会话保留）。
+ * 成员列表在动作执行前从 store 现值捕获，随响应回传。
+ */
+const executeGroupDissolve = (
+  command: Extract<CliProxyCommand, { command: 'canvas.group.dissolve' }>,
+): CliProxyCommandResponse => {
+  const requestId = command.request_id;
+  const store = useCanvasStore.getState();
+  const nodeGraph = store.nodeGraph;
+  if (nodeGraph === null) {
+    return projectNotOpenResponse('canvas.group.dissolve', requestId);
+  }
+
+  const target = nodeGraph.nodes.find((node) => node.id === command.group);
+  if (!target) {
+    console.debug('[cliProxyReceiver] group dissolve rejected: container not found', {
+      request_id: requestId,
+      group: command.group,
+    });
+    return buildErrorResponse(
+      'canvas.group.dissolve',
+      requestId,
+      'group_not_found',
+      `画布上找不到这个组：${command.group}。请确认组标识后重试。`,
+    );
+  }
+  if (!isContainerNode(target)) {
+    console.debug('[cliProxyReceiver] group dissolve rejected: target is not a container', {
+      request_id: requestId,
+      group: command.group,
+      nodeType: target.type,
+    });
+    return buildErrorResponse(
+      'canvas.group.dissolve',
+      requestId,
+      'command_rejected',
+      `这个节点不是节点组：${command.group}。解散命令只作用于节点组或 Agent 容器。`,
+    );
+  }
+  if (target.type === 'agent') {
+    // Agent 容器解散仅对容器形态（有成员）可用（AG-CN-015）：无成员已是单节点形态、无组织关系可解除
+    const members = getGroupMembers(nodeGraph, command.group);
+    const dissolved = store.dissolveAgentContainer(command.group);
+    if (!dissolved) {
+      console.debug('[cliProxyReceiver] group dissolve rejected: agent node has no members', {
+        request_id: requestId,
+        group: command.group,
+      });
+      return buildErrorResponse(
+        'canvas.group.dissolve',
+        requestId,
+        'command_rejected',
+        `这个 Agent 节点当前没有成员，已呈单节点形态，无需解散：${command.group}。`,
+      );
+    }
+    return {
+      command: 'canvas.group.dissolve',
+      request_id: requestId,
+      dissolved: true,
+      group_node_id: command.group,
+      member_ids: members.map((member) => member.id),
+    };
+  }
+
+  // 组解散 = 画布级删除组的同一解散数据动作：走删除咽喉（不连删），成员保留原位、归属解除。
+  const members = getGroupMembers(nodeGraph, command.group);
+  store.removeNodes([command.group], { deleteGroupMembers: false });
+  return {
+    command: 'canvas.group.dissolve',
+    request_id: requestId,
+    dissolved: true,
+    group_node_id: command.group,
+    member_ids: members.map((member) => member.id),
+  };
+};
+
+/**
+ * canvas.node.move → updateNodePositionsBatch（spec CLI-028）。
+ *
+ * 与界面拖拽同一位置写入 action：伴随节点跟随（companion）与容器 position 重派生由该 action
+ * 的既有展开逻辑承载，映射层不另建第二套位置写入。容器节点拒绝：组/Agent 容器位置是成员
+ * 包围盒的派生量、不独立可写（移动一律成员级）。
+ * 响应回传目标节点最终坐标（store 现值）与实际发生位移的节点集合（按位移前后差值判定，
+ * 容器派生位移不计入 moved_node_ids）。
+ */
+const executeNodeMove = (
+  command: Extract<CliProxyCommand, { command: 'canvas.node.move' }>,
+): CliProxyCommandResponse => {
+  const requestId = command.request_id;
+  const store = useCanvasStore.getState();
+  const nodeGraph = store.nodeGraph;
+  if (nodeGraph === null) {
+    return projectNotOpenResponse('canvas.node.move', requestId);
+  }
+
+  const target = nodeGraph.nodes.find((node) => node.id === command.node);
+  if (!target) {
+    console.debug('[cliProxyReceiver] node move rejected: node not found', {
+      request_id: requestId,
+      node: command.node,
+    });
+    return buildErrorResponse(
+      'canvas.node.move',
+      requestId,
+      'node_not_found',
+      `画布上找不到这个节点：${command.node}。请确认节点标识后重试。`,
+    );
+  }
+  if (isContainerNode(target)) {
+    console.debug('[cliProxyReceiver] node move rejected: target is a container node', {
+      request_id: requestId,
+      node: command.node,
+      nodeType: target.type,
+    });
+    return buildErrorResponse(
+      'canvas.node.move',
+      requestId,
+      'command_rejected',
+      `这个节点是容器节点，位置由其成员派生、不能直接移动：${command.node}。请移动组内的成员节点。`,
+    );
+  }
+
+  // 位移前快照（全图 position）：动作后按差值判定实际位移集合（不依赖 action 返回值）。
+  const beforePositions = new Map(
+    nodeGraph.nodes.map((node) => [node.id, node.position] as const),
+  );
+  store.updateNodePositionsBatch([{ id: command.node, position: { x: command.x, y: command.y } }]);
+
+  const graphAfter = useCanvasStore.getState().nodeGraph;
+  const movedNodeIds: string[] = [];
+  let finalPosition = { x: command.x, y: command.y };
+  if (graphAfter !== null) {
+    for (const node of graphAfter.nodes) {
+      const before = beforePositions.get(node.id);
+      if (before === undefined) continue;
+      if (before.x === node.position.x && before.y === node.position.y) continue;
+      // 容器 position 是成员包围盒的派生量（成员位移后自动重派生），不属移动面
+      if (isContainerNode(node)) continue;
+      movedNodeIds.push(node.id);
+      if (node.id === command.node) {
+        finalPosition = { x: node.position.x, y: node.position.y };
+      }
+    }
+  }
+  return {
+    command: 'canvas.node.move',
+    request_id: requestId,
+    node_id: command.node,
+    position: finalPosition,
+    moved_node_ids: movedNodeIds,
+  };
+};
+
+/**
+ * canvas.node.delete → 删除咽喉 removeNodes（spec CLI-029）。
+ *
+ * 与界面删除（deleteSelectedElements → removeNodes）同一动作同一连带语义：伴随节点级联、
+ * 绑定注释级联、组节点删除即解散（不连删，成员保留）、Agent 删除前置钩子；CLI 不提供连删。
+ * 请求集直接命中 Agent 节点时必须携带 yes=true（界面删除确认框的 CLI 对应物，AG-CT-011
+ * 禁旁路）；确认后 removeNodes 的既有不可逆历史重建语义照常生效（删除 Agent 不提供撤销兜底）。
+ * 响应回传实际删除集合（请求集 + 伴随节点级联，按删除前图展开）。
+ */
+const executeNodeDelete = (
+  command: Extract<CliProxyCommand, { command: 'canvas.node.delete' }>,
+): CliProxyCommandResponse => {
+  const requestId = command.request_id;
+  const store = useCanvasStore.getState();
+  const nodeGraph = store.nodeGraph;
+  if (nodeGraph === null) {
+    return projectNotOpenResponse('canvas.node.delete', requestId);
+  }
+
+  // 去重保序：同一 id 重复出现按一个节点处理
+  const nodeIds = [...new Set(command.nodes)];
+  const missingIds: string[] = [];
+  const agentNodeIds: string[] = [];
+  for (const id of nodeIds) {
+    const node = nodeGraph.nodes.find((candidate) => candidate.id === id);
+    if (!node) {
+      missingIds.push(id);
+      continue;
+    }
+    if (node.type === 'agent') {
+      agentNodeIds.push(id);
+    }
+  }
+  if (missingIds.length > 0) {
+    console.debug('[cliProxyReceiver] node delete rejected: nodes not found', {
+      request_id: requestId,
+      missing: missingIds,
+    });
+    return buildErrorResponse(
+      'canvas.node.delete',
+      requestId,
+      'node_not_found',
+      `画布上找不到这些节点：${missingIds.join('、')}。请确认节点标识后重试。`,
+    );
+  }
+  if (agentNodeIds.length > 0 && command.yes !== true) {
+    console.debug('[cliProxyReceiver] node delete rejected: agent delete without explicit confirm', {
+      request_id: requestId,
+      agentNodes: agentNodeIds,
+    });
+    return buildErrorResponse(
+      'canvas.node.delete',
+      requestId,
+      'command_rejected',
+      `删除 Agent 节点会同时删除它的会话与全部消息历史，且无法恢复：${agentNodeIds.join('、')}。请携带 --yes 显式确认后重试。`,
+    );
+  }
+
+  // 实际删除集合按删除前图展开（请求集 + 伴随节点级联；deleteGroupMembers=false 不连删成员）
+  const deletedNodeIds = expandRemovalWithCompanions(nodeGraph, nodeIds);
+  store.removeNodes(nodeIds, { deleteGroupMembers: false });
+  return {
+    command: 'canvas.node.delete',
+    request_id: requestId,
+    deleted: true,
+    deleted_node_ids: deletedNodeIds,
+  };
+};
+
+/**
+ * canvas.layout 的 `order` 显式顺序前置校验（spec CLI-030）：order 节点必须存在且属于本次
+ * 整理作用域。缺失 → node_not_found；存在但越界（容器/他组成员等不在作用域）→ command_rejected。
+ * 校验失败时命令拒绝、画布零改动；order 缺省（空）时不校验、不透传。
+ */
+const validateLayoutOrder = (
+  requestId: string,
+  nodeGraph: NodeGraph,
+  orderIds: readonly string[],
+  eligibleIds: ReadonlySet<string>,
+): CliProxyCommandError | null => {
+  if (orderIds.length === 0) return null;
+  const nodeById = new Map(nodeGraph.nodes.map((node) => [node.id, node] as const));
+  const missing = orderIds.filter((id) => !nodeById.has(id));
+  if (missing.length > 0) {
+    console.debug('[cliProxyReceiver] layout rejected: order nodes not found', {
+      request_id: requestId,
+      missing,
+    });
+    return buildErrorResponse(
+      'canvas.layout',
+      requestId,
+      'node_not_found',
+      `顺序清单里有画布上不存在的节点：${missing.join('、')}。请确认节点标识后重试。`,
+    );
+  }
+  const outOfScope = orderIds.filter((id) => !eligibleIds.has(id));
+  if (outOfScope.length > 0) {
+    console.debug('[cliProxyReceiver] layout rejected: order nodes outside layout scope', {
+      request_id: requestId,
+      outOfScope,
+    });
+    return buildErrorResponse(
+      'canvas.layout',
+      requestId,
+      'command_rejected',
+      `这些节点不在本次整理范围内，不能指定摆放顺序：${outOfScope.join('、')}。scope=all 只能指定未分组节点，scope=group 只能指定该组成员。`,
+    );
+  }
+  return null;
+};
+
 const executeCanvasLayout = async (
   command: Extract<CliProxyCommand, { command: 'canvas.layout' }>,
 ): Promise<CliProxyCommandResponse> => {
@@ -267,12 +557,27 @@ const executeCanvasLayout = async (
     return projectNotOpenResponse('canvas.layout', requestId);
   }
 
+  // --order 去重保序（首次出现为准）；空数组视为未指定
+  const orderIds = [...new Set(command.order ?? [])];
+
   if (command.scope === 'all') {
     // columns 参数对全局整理无既有语义（全局整理固定单列），契约允许携带、执行侧忽略。
     const affectedNodeIds = nodeGraph.nodes
       .filter((node) => !isContainerNode(node) && !isGroupMember(node))
       .map((node) => node.id);
-    await store.autoLayout(undefined);
+    const orderRejection = validateLayoutOrder(
+      requestId,
+      nodeGraph,
+      orderIds,
+      new Set(affectedNodeIds),
+    );
+    if (orderRejection !== null) return orderRejection;
+    // order 缺省时不传 options：默认排序行为完全不变（数组序，spec CLI-030）
+    await store.autoLayout(
+      orderIds.length > 0
+        ? { measuredSizeByNodeId: undefined, derivedSizeByNodeId: undefined, order: orderIds }
+        : undefined,
+    );
     return readFinalPositions(requestId, affectedNodeIds);
   }
 
@@ -315,12 +620,20 @@ const executeCanvasLayout = async (
       '这个组还没有成员，无法整理布局。',
     );
   }
+  const orderRejection = validateLayoutOrder(
+    requestId,
+    nodeGraph,
+    orderIds,
+    new Set(members.map((member) => member.id)),
+  );
+  if (orderRejection !== null) return orderRejection;
 
   // measured 传 undefined：走 store 会话态缓存兜底（与全局整理同口径，视口外节点不可实时测量）
   const result = await store.autoLayoutContainer(groupId, {
     measuredSizeByNodeId: undefined,
     derivedSizeByNodeId: undefined,
     columns: command.columns,
+    ...(orderIds.length > 0 ? { order: orderIds } : {}),
   });
   if (result === null) {
     console.debug('[cliProxyReceiver] container layout returned null', {
@@ -505,6 +818,12 @@ export const executeCliProxyCommand = async (
   switch (command.command) {
     case 'canvas.group.create':
       return executeGroupCreate(command);
+    case 'canvas.group.dissolve':
+      return executeGroupDissolve(command);
+    case 'canvas.node.move':
+      return executeNodeMove(command);
+    case 'canvas.node.delete':
+      return executeNodeDelete(command);
     case 'canvas.layout':
       return executeCanvasLayout(command);
     case 'task.cancel':
@@ -585,6 +904,9 @@ export const handleCliProxyPayload = (
     });
     const commandName =
       rawCommand === 'canvas.group.create' ||
+      rawCommand === 'canvas.group.dissolve' ||
+      rawCommand === 'canvas.node.move' ||
+      rawCommand === 'canvas.node.delete' ||
       rawCommand === 'canvas.layout' ||
       rawCommand === 'task.cancel' ||
       rawCommand === 'generate' ||

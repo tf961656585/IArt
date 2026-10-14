@@ -1,5 +1,5 @@
 // @vitest-environment node
-// @spec: CLI-001, CLI-004, CLI-014, CLI-015
+// @spec: CLI-001, CLI-004, CLI-014, CLI-015, CLI-027, CLI-028, CLI-029, CLI-030
 //
 // CLI 客户端测试：对真实控制服务发真实请求（--json/人读输出、退出码三档）、
 // not_running（发现文件缺失 / 指向无监听端口）、响应被篡改成非法形状 → 退出码 2、
@@ -309,6 +309,81 @@ describe("parseCliArgs（参数名 → 契约字段映射表）", () => {
       name: "G",
       members: ["n1", "n2"],
     });
+  });
+
+  it("canvas group dissolve：--group 解析为契约 group 字段（CLI-027）", () => {
+    const parsed = parser.parseCliArgs(["canvas", "group", "dissolve", "--project", "P", "--group", "g1"]);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("unreachable");
+    expect(parsed.request).toEqual({
+      command: "canvas.group.dissolve",
+      project: "P",
+      group: "g1",
+    });
+
+    const missing = parser.parseCliArgs(["canvas", "group", "dissolve", "--project", "P"]);
+    expect(missing.ok).toBe(false);
+  });
+
+  it("canvas node move：--node/--x/--y 解析，坐标允许负数与小数（CLI-028）", () => {
+    const parsed = parser.parseCliArgs(["canvas", "node", "move", "--project", "P", "--node", "n1", "--x", "-120", "--y", "240.5"]);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("unreachable");
+    expect(parsed.request).toEqual({
+      command: "canvas.node.move",
+      project: "P",
+      node: "n1",
+      x: -120,
+      y: 240.5,
+    });
+
+    const inline = parser.parseCliArgs(["canvas", "node", "move", "--project=P", "--node=n1", "--x=3", "--y=-4"]);
+    expect(inline.ok).toBe(true);
+    if (!inline.ok) throw new Error("unreachable");
+    expect(inline.request).toEqual({ command: "canvas.node.move", project: "P", node: "n1", x: 3, y: -4 });
+
+    const notNumber = parser.parseCliArgs(["canvas", "node", "move", "--project", "P", "--node", "n1", "--x", "abc", "--y", "1"]);
+    expect(notNumber.ok).toBe(false);
+
+    const missingY = parser.parseCliArgs(["canvas", "node", "move", "--project", "P", "--node", "n1", "--x", "1"]);
+    expect(missingY.ok).toBe(false);
+  });
+
+  it("canvas node delete：--nodes 逗号拆分为数组，缺参报错（CLI-029）", () => {
+    const parsed = parser.parseCliArgs(["canvas", "node", "delete", "--project", "P", "--nodes", "n1,n2"]);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("unreachable");
+    expect(parsed.request).toEqual({
+      command: "canvas.node.delete",
+      project: "P",
+      nodes: ["n1", "n2"],
+    });
+
+    const repeated = parser.parseCliArgs(["canvas", "node", "delete", "--project", "P", "--nodes", "n1", "--nodes", "n2"]);
+    expect(repeated.ok).toBe(true);
+    if (!repeated.ok) throw new Error("unreachable");
+    expect(repeated.request).toEqual({ command: "canvas.node.delete", project: "P", nodes: ["n1", "n2"] });
+
+    const missing = parser.parseCliArgs(["canvas", "node", "delete", "--project", "P"]);
+    expect(missing.ok).toBe(false);
+  });
+
+  it("canvas layout：--order 逗号拆分为显式顺序数组（CLI-030）", () => {
+    const parsed = parser.parseCliArgs(["canvas", "layout", "--project", "P", "--scope", "group:g1", "--order", "m3,m1,m2"]);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("unreachable");
+    expect(parsed.request).toEqual({
+      command: "canvas.layout",
+      project: "P",
+      scope: { group: "g1" },
+      order: ["m3", "m1", "m2"],
+    });
+
+    // 缺省不带 --order：请求形状与既有行为完全一致（默认排序行为不变）
+    const bare = parser.parseCliArgs(["canvas", "layout", "--project", "P", "--scope", "all"]);
+    expect(bare.ok).toBe(true);
+    if (!bare.ok) throw new Error("unreachable");
+    expect(bare.request).toEqual({ command: "canvas.layout", project: "P", scope: "all" });
   });
 
   it("布尔 flag 与带值参数区分：--wait=x 报错、缺值报错、未知参数报错", () => {

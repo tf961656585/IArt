@@ -1,4 +1,4 @@
-// @spec: CLI-014
+// @spec: CLI-014, CLI-027, CLI-028, CLI-029, CLI-030
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -110,6 +110,9 @@ const requestSamples: Record<CliCommandName, Record<string, unknown>> = {
   'asset.get': { project: PROJECT, asset_id: 'asset_1' },
   'canvas.nodes.list': { project: PROJECT },
   'canvas.group.create': { project: PROJECT, name: '角色组', members: ['node_1'] },
+  'canvas.group.dissolve': { project: PROJECT, group: 'group_1' },
+  'canvas.node.move': { project: PROJECT, node: 'node_1', x: -120, y: 240.5 },
+  'canvas.node.delete': { project: PROJECT, nodes: ['node_1', 'node_2'] },
   'canvas.layout': { project: PROJECT, scope: 'all' },
   generate: { project: PROJECT, prompt: '一只猫在窗台', model: 'model-a' },
   'task.list': { project: PROJECT },
@@ -137,6 +140,9 @@ const successSamples: Record<CliCommandName, Record<string, unknown>> = {
   'asset.get': { asset: mediaAsset(), local_file_path: '/tmp/media/asset_1.png' },
   'canvas.nodes.list': { nodes: [canvasNode()] },
   'canvas.group.create': { group_node_id: 'group_1' },
+  'canvas.group.dissolve': { dissolved: true, group_node_id: 'group_1', member_ids: ['node_1', 'node_2'] },
+  'canvas.node.move': { node_id: 'node_1', position: { x: -120, y: 240.5 }, moved_node_ids: ['node_1'] },
+  'canvas.node.delete': { deleted: true, deleted_node_ids: ['node_1'] },
   'canvas.layout': { positions: { node_1: { x: 10, y: 20 } } },
   generate: {
     batch_id: 'batch_1',
@@ -189,9 +195,9 @@ describe('CLI 错误码枚举（spec §9）', () => {
 });
 
 describe('CLI 命令请求判别联合（spec §5）', () => {
-  it('命令清单共 19 条且判别值唯一', () => {
-    expect(CLI_COMMANDS).toHaveLength(19);
-    expect(new Set(CLI_COMMANDS).size).toBe(19);
+  it('命令清单共 22 条且判别值唯一', () => {
+    expect(CLI_COMMANDS).toHaveLength(22);
+    expect(new Set(CLI_COMMANDS).size).toBe(22);
     expect(() => CliCommandNameSchema.parse('project.list')).not.toThrow();
   });
 
@@ -241,6 +247,15 @@ describe('CLI 命令请求判别联合（spec §5）', () => {
       { command: 'canvas.group.create', project: PROJECT, members: ['node_1'] },
       { command: 'canvas.group.create', project: PROJECT, name: 'g' },
       { command: 'canvas.group.create', project: PROJECT, name: 'g', members: [] },
+      // canvas.group.dissolve：目标组标识必填（spec §5.3 / CLI-027）
+      { command: 'canvas.group.dissolve', project: PROJECT },
+      // canvas.node.move：node / x / y 必填（spec §5.3 / CLI-028）
+      { command: 'canvas.node.move', project: PROJECT, x: 1, y: 2 },
+      { command: 'canvas.node.move', project: PROJECT, node: 'node_1', y: 2 },
+      { command: 'canvas.node.move', project: PROJECT, node: 'node_1', x: 1 },
+      // canvas.node.delete：nodes（≥1）必填（spec §5.3 / CLI-029）
+      { command: 'canvas.node.delete', project: PROJECT },
+      { command: 'canvas.node.delete', project: PROJECT, nodes: [] },
       // canvas.layout：scope 必填
       { command: 'canvas.layout', project: PROJECT },
     ];
@@ -265,6 +280,15 @@ describe('CLI 命令请求判别联合（spec §5）', () => {
       { command: 'canvas.layout', project: PROJECT, scope: 'group:abc' },
       { command: 'canvas.layout', project: PROJECT, scope: { group: '' } },
       { command: 'canvas.layout', project: PROJECT, scope: 'all', columns: 0 },
+      // canvas.layout：order 必须是非空节点标识数组（spec CLI-030）
+      { command: 'canvas.layout', project: PROJECT, scope: 'all', order: [] },
+      { command: 'canvas.layout', project: PROJECT, scope: 'all', order: ['node_1', 2] },
+      { command: 'canvas.layout', project: PROJECT, scope: 'all', order: [''] },
+      // canvas.node.move：坐标必须是有限数值（可负、可小数）
+      { command: 'canvas.node.move', project: PROJECT, node: 'node_1', x: 'a', y: 1 },
+      { command: 'canvas.node.move', project: PROJECT, node: 'node_1', x: 1, y: null },
+      // canvas.node.delete：yes 是布尔显式确认（Agent 节点删除）
+      { command: 'canvas.node.delete', project: PROJECT, nodes: ['node_1'], yes: 'yes' },
       // task.wait：timeout 正整数秒
       { command: 'task.wait', project: PROJECT, task_id: 't', timeout: 0 },
       // --project 空串非法
@@ -488,6 +512,110 @@ describe('代理执行通道命令契约（spec §6.3）', () => {
         error: { code: 'unknown_code', message: 'x' },
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('代理执行通道画布操作命令契约（spec §6.3，CLI-027/028/029/030）', () => {
+  it('三条新命令的代理请求 parse 通过：参数与命令面同形、不带 project', () => {
+    expect(
+      CliProxyCommandSchema.safeParse({ command: 'canvas.group.dissolve', request_id: 'req_d1', group: 'group_1' })
+        .success,
+    ).toBe(true);
+    expect(
+      CliProxyCommandSchema.safeParse({
+        command: 'canvas.node.move',
+        request_id: 'req_d2',
+        node: 'node_1',
+        x: -120,
+        y: 240.5,
+      }).success,
+    ).toBe(true);
+    expect(
+      CliProxyCommandSchema.safeParse({
+        command: 'canvas.node.delete',
+        request_id: 'req_d3',
+        nodes: ['node_1'],
+        yes: true,
+      }).success,
+    ).toBe(true);
+    // 不带 project（项目上下文由画布窗口承载）；request_id 缺失被拒绝
+    expect(
+      CliProxyCommandSchema.safeParse({ command: 'canvas.group.dissolve', group: 'g' }).success,
+    ).toBe(false);
+    expect(
+      CliProxyCommandSchema.safeParse({ command: 'canvas.node.delete', request_id: 'r', nodes: [] }).success,
+    ).toBe(false);
+  });
+
+  it('canvas.layout 代理命令携带可选 order：缺省与既有形状一致（CLI-030）', () => {
+    expect(
+      CliProxyCommandSchema.safeParse({ command: 'canvas.layout', request_id: 'req_o1', scope: 'all', order: ['n3', 'n1'] })
+        .success,
+    ).toBe(true);
+    expect(
+      CliProxyCommandSchema.safeParse({ command: 'canvas.layout', request_id: 'req_o2', scope: 'all' }).success,
+    ).toBe(true);
+  });
+
+  it('三条新命令的代理结果 parse 通过：成员列表 / 最终坐标与位移集合 / 实删集合', () => {
+    expect(
+      CliProxyCommandResultSchema.safeParse({
+        command: 'canvas.group.dissolve',
+        request_id: 'req_d1',
+        dissolved: true,
+        group_node_id: 'group_1',
+        member_ids: ['node_1', 'node_2'],
+      }).success,
+    ).toBe(true);
+    expect(
+      CliProxyCommandResultSchema.safeParse({
+        command: 'canvas.node.move',
+        request_id: 'req_d2',
+        node_id: 'node_1',
+        position: { x: -120, y: 240.5 },
+        moved_node_ids: ['node_1'],
+      }).success,
+    ).toBe(true);
+    expect(
+      CliProxyCommandResultSchema.safeParse({
+        command: 'canvas.node.delete',
+        request_id: 'req_d3',
+        deleted: true,
+        deleted_node_ids: ['node_1'],
+      }).success,
+    ).toBe(true);
+    // 缺结果字段被拒绝
+    expect(
+      CliProxyCommandResultSchema.safeParse({ command: 'canvas.group.dissolve', request_id: 'r', dissolved: true })
+        .success,
+    ).toBe(false);
+    expect(
+      CliProxyCommandResultSchema.safeParse({
+        command: 'canvas.node.move',
+        request_id: 'r',
+        node_id: 'n',
+        position: { x: 0, y: 0 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('三条新命令的代理错误与 B 命令面错误响应 parse 通过（错误码走 §9 枚举）', () => {
+    for (const command of ['canvas.group.dissolve', 'canvas.node.move', 'canvas.node.delete']) {
+      expect(
+        CliProxyCommandErrorSchema.safeParse({
+          command,
+          request_id: 'req_e1',
+          error: { code: 'node_not_found', message: '画布上找不到这些节点。' },
+        }).success,
+      ).toBe(true);
+      expect(
+        CliCommandResponseSchema.safeParse({
+          command,
+          ok: false,
+          error: { code: 'command_rejected', message: '被画布侧校验拦截。' },
+        }).success,
+      ).toBe(true);
+    }
   });
 });
 

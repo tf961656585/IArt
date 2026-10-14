@@ -1,5 +1,5 @@
 // @vitest-environment node
-// @spec: CLI-007, CLI-012, CLI-014, CLI-015, CLI-020, CLI-021
+// @spec: CLI-007, CLI-012, CLI-014, CLI-015, CLI-020, CLI-021, CLI-027, CLI-028, CLI-029, CLI-030
 //
 // 画布命令 / 生成提交 / 任务取消执行器测试（spec §4.2 分派规则固定语义）：
 // - canvas.group.create / canvas.layout / generate：无窗口 → project_not_open（CLI-007，
@@ -178,6 +178,119 @@ describe("cli-command-executors 画布命令 / 生成提交（代理执行通道
     if (!parsed.ok || parsed.command !== "canvas.layout") throw new Error("unexpected");
     expect(parsed.positions).toEqual({ n1: { x: 5, y: 6 } });
     expect(proxyCalls[0]?.candidate).toMatchObject({ command: "canvas.layout", scope: { group: "g-1" }, columns: 3 });
+  });
+
+  it("canvas.layout：--order 显式顺序原样进代理候选（CLI-030）", async () => {
+    const { registry, proxyCalls } = buildRegistry({
+      windowOpen: true,
+      dispatchOutcome: { ok: true, response: { command: "canvas.layout", request_id: "r3b", positions: {} } },
+    });
+    const result = await runExecutor(registry, "canvas.layout", {
+      command: "canvas.layout",
+      project: "demo",
+      scope: "all",
+      order: ["n3", "n1"],
+    });
+    expect(parseResponse(result)).toMatchObject({ ok: true, command: "canvas.layout" });
+    expect(proxyCalls[0]?.candidate).toMatchObject({ command: "canvas.layout", scope: "all", order: ["n3", "n1"] });
+  });
+
+  it("canvas.group.dissolve：项目未打开 → project_not_open（CLI-007），不触达代理通道（CLI-027）", async () => {
+    const { registry, proxyCalls } = buildRegistry({ windowOpen: false });
+    const result = await runExecutor(registry, "canvas.group.dissolve", {
+      command: "canvas.group.dissolve",
+      project: "demo",
+      group: "g-1",
+    });
+    expect(parseResponse(result)).toMatchObject({ ok: false, error: { code: "project_not_open" } });
+    expect(proxyCalls).toHaveLength(0);
+    expect(result.errorCode).toBe("project_not_open");
+  });
+
+  it("canvas.group.dissolve：有窗口 → 解散结果直通（dissolved/group_node_id/member_ids）（CLI-027）", async () => {
+    const { registry, proxyCalls } = buildRegistry({
+      windowOpen: true,
+      dispatchOutcome: {
+        ok: true,
+        response: { command: "canvas.group.dissolve", request_id: "r-d1", dissolved: true, group_node_id: "g-1", member_ids: ["m1", "m2"] },
+      },
+    });
+    const result = await runExecutor(registry, "canvas.group.dissolve", {
+      command: "canvas.group.dissolve",
+      project: "demo",
+      group: "g-1",
+    });
+    const parsed = parseResponse(result);
+    if (!parsed.ok || parsed.command !== "canvas.group.dissolve") throw new Error("unexpected");
+    expect(parsed.dissolved).toBe(true);
+    expect(parsed.group_node_id).toBe("g-1");
+    expect(parsed.member_ids).toEqual(["m1", "m2"]);
+    expect(result.errorCode).toBeNull();
+    expect(proxyCalls[0]?.candidate).toMatchObject({ command: "canvas.group.dissolve", group: "g-1" });
+  });
+
+  it("canvas.node.move：项目未打开 → project_not_open；有窗口 → 参数原样进候选、结果直通（CLI-028）", async () => {
+    const closed = buildRegistry({ windowOpen: false });
+    const closedResult = await runExecutor(closed.registry, "canvas.node.move", {
+      command: "canvas.node.move",
+      project: "demo",
+      node: "n-1",
+      x: -5,
+      y: 6,
+    });
+    expect(parseResponse(closedResult)).toMatchObject({ ok: false, error: { code: "project_not_open" } });
+    expect(closed.proxyCalls).toHaveLength(0);
+
+    const open = buildRegistry({
+      windowOpen: true,
+      dispatchOutcome: {
+        ok: true,
+        response: { command: "canvas.node.move", request_id: "r-m1", node_id: "n-1", position: { x: -5, y: 6 }, moved_node_ids: ["n-1"] },
+      },
+    });
+    const openResult = await runExecutor(open.registry, "canvas.node.move", {
+      command: "canvas.node.move",
+      project: "demo",
+      node: "n-1",
+      x: -5,
+      y: 6,
+    });
+    const parsed = parseResponse(openResult);
+    if (!parsed.ok || parsed.command !== "canvas.node.move") throw new Error("unexpected");
+    expect(parsed.node_id).toBe("n-1");
+    expect(parsed.position).toEqual({ x: -5, y: 6 });
+    expect(parsed.moved_node_ids).toEqual(["n-1"]);
+    expect(open.proxyCalls[0]?.candidate).toMatchObject({ command: "canvas.node.move", node: "n-1", x: -5, y: 6 });
+  });
+
+  it("canvas.node.delete：项目未打开 → project_not_open；有窗口 → nodes/yes 原样进候选、结果直通（CLI-029）", async () => {
+    const closed = buildRegistry({ windowOpen: false });
+    const closedResult = await runExecutor(closed.registry, "canvas.node.delete", {
+      command: "canvas.node.delete",
+      project: "demo",
+      nodes: ["n-1"],
+    });
+    expect(parseResponse(closedResult)).toMatchObject({ ok: false, error: { code: "project_not_open" } });
+    expect(closed.proxyCalls).toHaveLength(0);
+
+    const open = buildRegistry({
+      windowOpen: true,
+      dispatchOutcome: {
+        ok: true,
+        response: { command: "canvas.node.delete", request_id: "r-x1", deleted: true, deleted_node_ids: ["n-1"] },
+      },
+    });
+    const openResult = await runExecutor(open.registry, "canvas.node.delete", {
+      command: "canvas.node.delete",
+      project: "demo",
+      nodes: ["n-1", "n-2"],
+      yes: true,
+    });
+    const parsed = parseResponse(openResult);
+    if (!parsed.ok || parsed.command !== "canvas.node.delete") throw new Error("unexpected");
+    expect(parsed.deleted).toBe(true);
+    expect(parsed.deleted_node_ids).toEqual(["n-1"]);
+    expect(open.proxyCalls[0]?.candidate).toMatchObject({ command: "canvas.node.delete", nodes: ["n-1", "n-2"], yes: true });
   });
 
   it("generate：项目未打开 → project_not_open（CLI-007，提交前拒绝）", async () => {

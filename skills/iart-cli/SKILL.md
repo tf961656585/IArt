@@ -45,7 +45,7 @@ description: |
 ## 3. 命令面速查
 
 统一形态 `iart <名词> <动作> [参数]`。最准的运行时事实永远是 `iart --help`；
-本节与其对齐并补充了帮助文本没写准的细节（标注 ⚠ 的三处以本节为准）。
+本节与其对齐并补充了帮助文本没写准的细节（标注 ⚠ 的两处以本节为准）。
 
 ### 项目生命周期（无需项目已打开）
 
@@ -80,7 +80,10 @@ description: |
 | 命令 | 说明 |
 |---|---|
 | `iart canvas group create --name N --members id1,id2 --project P` | 建组并纳入成员（至少 1 个，逗号分隔，可重复传参累积）；成员已属其他组则改归属到新组；返回 `group_node_id` |
-| `iart canvas layout --scope all\|group:<组id> [--columns N] --project P` | 整理布局。⚠ `--scope` 必填（帮助文本写「可选」是过时的）；返回受影响节点的最终位置 |
+| `iart canvas group dissolve --group <容器id> --project P` | 解散容器（组或 Agent 容器）：组解散删除组节点、成员保留画布原位且归属解除；Agent 容器解散解除成员关系、头节点保留回落单节点形态、会话保留。**不提供连删**（连删是界面显式危险动作）。返回 `group_node_id` 与解散前 `member_ids`；目标不存在 `group_not_found`、目标非容器或 Agent 无成员 `command_rejected` |
+| `iart canvas node move --node <id> --x N --y N --project P` | 移动单个节点到目标画布坐标（可负、可小数）。**容器节点不能直接移动**（组位置由成员派生，移动一律成员级，指定容器 `command_rejected`）；返回 `node_id`、最终 `position` 与实际位移的 `moved_node_ids` |
+| `iart canvas node delete --nodes id1,id2 [--yes] --project P` | 删除节点（与界面删除同一连带语义：删除组节点=解散、成员保留原位；Agent 节点删除会级联清除其会话且**不可恢复**）。请求集命中 Agent 节点时必须加 `--yes` 显式确认；**不提供连删**；返回实际删除的 `deleted_node_ids`（含连带级联） |
+| `iart canvas layout --scope all\|group:<组id> [--columns N] [--order id1,id2] --project P` | 整理布局（`--scope` 必填）；返回受影响节点的最终位置。`--order` 显式指定摆放顺序（数组序最高优先，未指定节点按现状数组序跟排；order 节点必须存在且属于本次整理作用域）——批量产物要按镜头/序号排格时用它；不带 `--order` 时整理行为与默认完全一致 |
 
 ### 生成与任务
 
@@ -180,7 +183,10 @@ iart generate --prompt "<提示词>" --model <model_id> --wait --json --project 
 ```bash
 iart canvas nodes list --project <路径或名称> --json  # 拿 node_id 与现有 group_id
 iart canvas group create --name <组名> --members <id1,id2> --project <路径或名称>
-iart canvas layout --scope all --project <路径或名称>  # 或 --scope group:<新组id> 只整理该组
+iart canvas layout --scope group:<组id> --order <按序的id列表> --project <路径或名称> --json  # 显式顺序排格（如分镜 1..8）；不带 --order 则保持默认
+iart canvas group dissolve --group <组id> --project <路径或名称>      # 解散组（成员保留原位、归属解除）
+iart canvas node move --node <id> --x <横坐标> --y <纵坐标> --project <路径或名称>   # 移动单个节点（容器不能直接移动）
+iart canvas node delete --nodes <id1,id2> --project <路径或名称>      # 删除节点；删 Agent 需加 --yes（会话不可恢复）
 ```
 
 ### R3 任务观测与取消

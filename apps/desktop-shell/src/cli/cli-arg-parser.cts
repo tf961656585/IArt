@@ -22,7 +22,10 @@ export const CLI_USAGE_TEXT = `iart — 驱动 IARTStudio 的命令行入口（�
   iart asset get <assetId> --project P
   iart canvas nodes list --project P
   iart canvas group create --name N --members id1,id2 --project P
-  iart canvas layout [--scope all|group:<id>] [--columns N] --project P
+  iart canvas group dissolve --group <组节点id> --project P
+  iart canvas node move --node <节点id> --x N --y N --project P
+  iart canvas node delete --nodes id1,id2 [--yes] --project P
+  iart canvas layout --scope all|group:<id> [--columns N] [--order id1,id2] --project P
   iart generate --prompt T --model M [--count N] [--ref id1,id2] [--arg k=v,k2=v2] [--wait] --project P
   iart task list --project P | task get <taskId> | task cancel <taskId> | task wait <taskId>
   iart app status         查看应用状态：已打开项目、焦点与画布选中
@@ -45,7 +48,7 @@ const failure = (message: string): CliArgParseResult => ({ ok: false, help: fals
 /** 参数解析用户可见错误（退出码 2 语义），由 parseCliArgs 统一捕获转 failure。 */
 class CliArgError extends Error {}
 
-type FlagKind = "string" | "number" | "boolean" | "stringList" | "kvList" | "scope";
+type FlagKind = "string" | "number" | "numberAny" | "boolean" | "stringList" | "kvList" | "scope";
 
 interface FlagSpec {
   /** 契约 params 字段名（snake_case）——CLI flag → 契约字段的显式映射。 */
@@ -68,6 +71,12 @@ const FLAG_SPECS = new Map<string, FlagSpec>([
   ["--ref", { field: "ref", kind: "stringList" }],
   ["--arg", { field: "arg", kind: "kvList" }],
   ["--members", { field: "members", kind: "stringList" }],
+  ["--group", { field: "group", kind: "string" }],
+  ["--node", { field: "node", kind: "string" }],
+  ["--nodes", { field: "nodes", kind: "stringList" }],
+  ["--order", { field: "order", kind: "stringList" }],
+  ["--x", { field: "x", kind: "numberAny" }],
+  ["--y", { field: "y", kind: "numberAny" }],
   ["--scope", { field: "scope", kind: "scope" }],
   ["--columns", { field: "columns", kind: "number" }],
   ["--yes", { field: "yes", kind: "boolean" }],
@@ -95,6 +104,9 @@ const COMMAND_SPECS = new Map<string, CommandSpec>([
   ["asset get", { command: "asset.get", positionals: ["asset_id"] }],
   ["canvas nodes list", { command: "canvas.nodes.list", positionals: [] }],
   ["canvas group create", { command: "canvas.group.create", positionals: [] }],
+  ["canvas group dissolve", { command: "canvas.group.dissolve", positionals: [] }],
+  ["canvas node move", { command: "canvas.node.move", positionals: [] }],
+  ["canvas node delete", { command: "canvas.node.delete", positionals: [] }],
   ["canvas layout", { command: "canvas.layout", positionals: [] }],
   ["generate", { command: "generate", positionals: [] }],
   ["task list", { command: "task.list", positionals: [] }],
@@ -127,6 +139,14 @@ const parseNonNegativeInt = (flagName: string, raw: string): number => {
     throw new CliArgError(`${flagName} 需要非负整数，收到：${raw}`);
   }
   return Number.parseInt(raw, 10);
+};
+
+/** 任意有限数值（可负、可小数）——画布坐标等不受正整数约束的参数（spec CLI-028）。 */
+const parseCoordinate = (flagName: string, raw: string): number => {
+  if (raw.trim().length === 0 || !Number.isFinite(Number(raw))) {
+    throw new CliArgError(`${flagName} 需要有限数值，收到：${raw}`);
+  }
+  return Number(raw);
 };
 
 /** `--scope all|group:<id>`：all 原样；group:<id> 映射为契约的 { group } 对象形态。 */
@@ -216,7 +236,7 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
         value = next;
         index += 1;
       }
-      if (flagSpec.kind === "string" || flagSpec.kind === "number" || flagSpec.kind === "scope") {
+      if (flagSpec.kind === "string" || flagSpec.kind === "number" || flagSpec.kind === "numberAny" || flagSpec.kind === "scope") {
         if (scalarValues.has(flagSpec.field)) {
           return failure(`参数 ${flagName} 重复`);
         }
@@ -337,14 +357,45 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
         members: requireStringList("members", "--members"),
       };
       break;
+    case "canvas.group.dissolve":
+      draft = {
+        command: "canvas.group.dissolve",
+        project: requireScalar("project", "--project"),
+        group: requireScalar("group", "--group"),
+      };
+      break;
+    case "canvas.node.move": {
+      const xRaw = requireScalar("x", "--x");
+      const yRaw = requireScalar("y", "--y");
+      draft = {
+        command: "canvas.node.move",
+        project: requireScalar("project", "--project"),
+        node: requireScalar("node", "--node"),
+        x: parseCoordinate("--x", xRaw),
+        y: parseCoordinate("--y", yRaw),
+      };
+      break;
+    }
+    case "canvas.node.delete": {
+      const yes = booleanFlags.has("yes");
+      draft = {
+        command: "canvas.node.delete",
+        project: requireScalar("project", "--project"),
+        nodes: requireStringList("nodes", "--nodes"),
+        ...(yes ? { yes: true } : {}),
+      };
+      break;
+    }
     case "canvas.layout": {
       const scopeRaw = requireScalar("scope", "--scope");
       const columns = optionalNumber("columns", "--columns");
+      const order = optionalStringList("order");
       draft = {
         command: "canvas.layout",
         project: requireScalar("project", "--project"),
         scope: parseScope(scopeRaw),
         ...(columns !== undefined ? { columns } : {}),
+        ...(order !== undefined ? { order } : {}),
       };
       break;
     }

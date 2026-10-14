@@ -45,6 +45,13 @@ export type CanvasAutoLayoutStoreOptions = {
   measuredSizeByNodeId: Readonly<Record<string, NodeSize | undefined>> | undefined;
   /** 组节点派生尺寸映射（来自投影层 groupDerivedProjection，可选） */
   derivedSizeByNodeId: Readonly<Record<string, NodeSize | undefined>> | undefined;
+  /**
+   * 显式摆放顺序（可选；CLI canvas.layout --order 承载，spec CLI-030）。
+   * 数组序即最高优先摆放序：order 中节点按给定序占格（重复 id 按首次出现去重），未指定的
+   * 参与节点按现状数组序跟排在后；缺省时完全不传——默认排序行为不变（布局引擎按传入数组序
+   * 占格、内部零排序，spec：画布自动布局算法.md「分区内流式摆放」插入序口径）。
+   */
+  order?: readonly string[] | undefined;
 };
 
 /**

@@ -1,5 +1,6 @@
 import { computeAutoLayout } from '../../layout/autoLayout';
 import type { AutoLayoutResult } from '../../layout/autoLayoutTypes';
+import { applyLayoutInputOrder } from '../../layout/layoutPrimitives';
 import type { EffectiveSizeSources } from '../../utils/effectiveSize';
 import { normalizeNodeGraphSettings } from '../../types/nodeGraph';
 import type { DesiredSize, NodeSize } from '../../types';
@@ -151,9 +152,14 @@ export const createCanvasLayoutActions = (
     // 参与布局会被重排到与真实渲染位置无关的虚构位置，
     // 其派生高度会污染自由节点 y 位置，删除 position 后留下 y 空洞（spec：画布自动布局算法.md
     // 「组节点在布局中的地位」+ 画布节点组.md「整理作用域」）。
-    const layoutEligibleNodes = nodeGraph.nodes.filter(
-      (n) =>
-        !isContainerNode(n) && !(typeof n.groupId === 'string' && n.groupId.length > 0),
+    // order 显式顺序（CLI --order 承载，spec CLI-030）：重排输入数组序；缺省不传时数组序
+    // 即现状口径，默认排序行为不变。
+    const layoutEligibleNodes = applyLayoutInputOrder(
+      nodeGraph.nodes.filter(
+        (n) =>
+          !isContainerNode(n) && !(typeof n.groupId === 'string' && n.groupId.length > 0),
+      ),
+      options?.order,
     );
 
     const desiredByNodeId = get().ui.desiredSizeByNodeId;
