@@ -1,6 +1,7 @@
 // @vitest-environment node
 //
 // runCliClientMain flush 序列测试（Windows 中文乱码批次，2026-10-14）。
+// @spec: CLI-022, CLI-023
 //
 // app.exit(n) 不等待 libuv 刷新：退出信号发出时仍滞留在流缓冲里的输出会被直接丢弃。
 // 故用真实 fs.createWriteStream 作为注入流断言「退出信号发出（promise resolve）时输出

@@ -1,6 +1,6 @@
 import { runCliClient } from "./cli-client.cjs";
 import { writeCliOutput } from "./cli-console-attach.cjs";
-import type { Writable } from "node:stream";
+import type { CliOutputTarget } from "./cli-console-writer.cjs";
 
 /**
  * CLI 客户端 bootstrap 入口（由 main.cts 在 --cli 分流后动态加载）。
@@ -8,15 +8,15 @@ import type { Writable } from "node:stream";
  * 执行一次命令、把结果写入 stdout/stderr、返回退出码；进程退出（app.exit(n)）由
  * main.cts 负责——本模块不 import electron，保持客户端纯模块可测。
  *
- * 输出流可注入（Windows 下为挂接父控制台后的接管流，见 cli-console-attach）；
- * 人读与 --json 两条消息组装逻辑保持不变。
+ * 输出目标可注入（Windows 下为标准句柄三元组合格时的控制台写入器，否则 process 流，
+ * 见 cli-console-attach / cli-console-writer）；人读与 --json 两条消息组装逻辑保持不变。
  *
  * flush 序列（Windows 中文乱码批次，2026-10-14）：app.exit 不等待 libuv 刷新，退出信号
  * 发出时未落盘的输出会被丢弃——故 stdout 写完成 →（若有）stderr 写完成 → 再返回退出码。
  */
 export interface CliClientMainStreams {
-  stdout: Writable;
-  stderr: Writable;
+  stdout: CliOutputTarget;
+  stderr: CliOutputTarget;
 }
 
 export const runCliClientMain = async (
@@ -34,9 +34,9 @@ export const runCliClientMain = async (
   return result.exitCode;
 };
 
-const writeCliOutputCatching = async (stream: Writable, text: string): Promise<void> => {
+const writeCliOutputCatching = async (target: CliOutputTarget, text: string): Promise<void> => {
   try {
-    await writeCliOutput(stream, text);
+    await writeCliOutput(target, text);
   } catch (cause: unknown) {
     process.emitWarning(`[cli] 输出流写入失败：${cause instanceof Error ? cause.message : String(cause)}`);
   }

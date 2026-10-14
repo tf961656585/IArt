@@ -1,11 +1,12 @@
 // @vitest-environment node
 //
 // main.cts CLI 分支 stdio 接线顺序 pin（Windows 中文乱码批次，2026-10-14）。
+// @spec: CLI-022, CLI-023
 //
-// Windows 下 AttachConsole 必须发生在任何 process.stdout/stderr 接触与 CLI 客户端
-// 动态加载之前——预挂接的具名化会把非 TTY 分类固化进 Node 的惰性缓存。这是顺序
-// 敏感接线，编译器与运行时测试都观测不到，只能源码级断言（风格照抄
-// main-window-open-coordinator.test.mts 的源码断言用例）。
+// Windows 下 prepareCliStdio（句柄三元组探测 → 按需 AttachConsole 兜底 → 决策 → 写入器接管）
+// 必须发生在 CLI 客户端动态加载之前，保证命令输出的每个字节都走决策后的通道；catch 路径
+// 与正常路径共用同一 flush 序列。这是顺序敏感接线，编译器与运行时测试都观测不到，只能
+// 源码级断言（风格照抄 main-window-open-coordinator.test.mts 的源码断言用例）。
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 

@@ -9,10 +9,11 @@ import { prepareCliStdio, writeCliOutput } from "./cli/cli-console-attach.cjs";
  * 不建 tray、不注册 IPC）。「不获取单实例锁、无窗口、执行完退出」的完整行为留真机验收，
  * 分流判定见 cli/launch-mode 纯函数测试。
  *
- * Windows 中文乱码根治（2026-10-14 批次）：CLI 分支任何 stdout/stderr 接触与动态 import
- * 之前，先挂接父控制台并产出接管后的输出流（prepareCliStdio，见 cli-console-attach），
- * 非 win32 不调用。app.exit 不等待 libuv 刷新——正常路径的输出由 runCliClientMain 在
- * 返回前按回调序列化落定；catch 路径的错误文本也必须经同一 flush 序列写完成后再退出。
+ * Windows 中文乱码根治（2026-10-14 批次）：CLI 分支在动态 import 之前先完成标准流通道
+ * 判定与接管（prepareCliStdio，见 cli-console-attach）——stdout/stderr 各自按句柄三元组
+ * 独立判定，控制台通道换 WriteConsoleW 写入器、其余回退 process 流；非 win32 不调用。
+ * app.exit 不等待 libuv 刷新——正常路径的输出由 runCliClientMain 在返回前按回调序列化
+ * 落定；catch 路径的错误文本也必须经同一 flush 序列写完成后再退出。
  *
  * GUI 模式经条件 require 加载 desktop-shell-bootstrap，保持既有「加载即执行」的
  * 模块加载语义（集成测试依赖 main.cjs → bootstrap.cjs 的同步副作用链）。
