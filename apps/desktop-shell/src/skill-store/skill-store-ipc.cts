@@ -14,7 +14,7 @@
  * 管理通道的意外异常按 invoke-failed 兜底，不向渲染层抛裸异常。
  */
 
-import { ipcMain, shell } from "electron";
+import { ipcMain, net, shell } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -42,29 +42,30 @@ import {
   removeCustomSkillInstallTarget,
   updateCustomSkillInstallTarget,
 } from "./skill-install-targets-store.cjs";
+import { appendMainLog } from "../main-log.cjs";
 
-/** 管理通道（add/update）统一执行：意外异常按 invoke-failed 兜底，出参经 contracts schema 构造。 */
+/** 管理通道（add/update）统一执行：意外异常按 invoke-failed 兜底并留主进程日志，出参经 contracts schema 构造。 */
 const runCustomTargetMutation = (
   operation: () => SkillCustomTargetMutationResult,
 ): SkillCustomTargetMutationResult => {
   try {
     return SkillCustomTargetMutationResultSchema.parse(operation());
   } catch (err) {
-    console.debug("[skill-store] custom target mutation failed", {
+    appendMainLog("warn", "[skill-store] custom target mutation failed", {
       error: err instanceof Error ? err.message : String(err),
     });
     return SkillCustomTargetMutationResultSchema.parse({ ok: false, error: "invoke-failed" });
   }
 };
 
-/** remove 通道统一执行：意外异常按 invoke-failed 兜底，出参经 contracts schema 构造。 */
+/** remove 通道统一执行：意外异常按 invoke-failed 兜底并留主进程日志，出参经 contracts schema 构造。 */
 const runCustomTargetRemoval = (
   operation: () => SkillRemoveCustomTargetResult,
 ): SkillRemoveCustomTargetResult => {
   try {
     return SkillRemoveCustomTargetResultSchema.parse(operation());
   } catch (err) {
-    console.debug("[skill-store] custom target removal failed", {
+    appendMainLog("warn", "[skill-store] custom target removal failed", {
       error: err instanceof Error ? err.message : String(err),
     });
     return SkillRemoveCustomTargetResultSchema.parse({ ok: false, error: "invoke-failed" });
@@ -73,20 +74,47 @@ const runCustomTargetRemoval = (
 
 export const registerSkillStoreIpcHandlers = (): void => {
   ipcMain.handle(SKILL_IPC_CHANNELS.GET_INSTALLED_STATE, () => {
-    const state = getInstalledSkillState();
-    return SkillInstalledStateSchema.parse(state);
+    try {
+      const state = getInstalledSkillState();
+      return SkillInstalledStateSchema.parse(state);
+    } catch (err) {
+      // 状态扫描失败不静默：留主进程文件日志后原样抛出，渲染层按既有兜底回退空状态
+      appendMainLog("warn", "[skill-store] get-installed-state failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   });
 
   ipcMain.handle(SKILL_IPC_CHANNELS.INSTALL, async (_event, payload: unknown) => {
     const parsed = SkillInstallRequestSchema.safeParse(payload);
     if (!parsed.success) {
+      appendMainLog("warn", "[skill-store] install: invalid request payload", {
+        issue: parsed.error.message,
+      });
       return SkillInstallResultSchema.parse({
         ok: false,
         error: `安装请求参数无效: ${parsed.error.message}`,
       });
     }
-    const result = await installSkill(parsed.data);
-    return SkillInstallResultSchema.parse(result);
+    try {
+      // 主进程出站统一走 default session 的 Chromium 网络栈（net.fetch），session 级代理
+      // 配置对其生效（spec docs/runtime/远端请求执行治理原则.md「代理治理」PROXY-003）。
+      const result = await installSkill(parsed.data, (url) => net.fetch(url));
+      return SkillInstallResultSchema.parse(result);
+    } catch (err) {
+      // installSkill 内部失败均已自行返回结构化结果；走到这里的只应是意外异常
+      // （如 contracts 依赖缺失、不可预期的运行时错误），必须留主进程文件日志
+      appendMainLog("error", "[skill-store] install: unexpected exception", {
+        skillId: parsed.data.skillId,
+        target: parsed.data.target,
+        error: err instanceof Error ? err.stack ?? err.message : String(err),
+      });
+      return SkillInstallResultSchema.parse({
+        ok: false,
+        error: `安装过程异常: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
   });
 
   // 定位 skill 安装目录（LFJ-007）：安装目录解析与存在性校验归主进程，
@@ -94,14 +122,17 @@ export const registerSkillStoreIpcHandlers = (): void => {
   ipcMain.handle(SKILL_IPC_CHANNELS.REVEAL_INSTALL_FOLDER, async (_event, payload: unknown) => {
     const parsed = SkillRevealInstallFolderRequestSchema.safeParse(payload);
     if (!parsed.success) {
-      console.debug("[skill-store] reveal install folder: invalid request");
+      appendMainLog("info", "[skill-store] reveal install folder: invalid request", {
+        issue: parsed.error.message,
+      });
       return SkillRevealInstallFolderResultSchema.parse({ ok: false, reason: "invalid-request" });
     }
 
     const resolvedSkillsRoot = resolveTargetSkillsDir(parsed.data.target);
     if (resolvedSkillsRoot === null) {
-      console.debug("[skill-store] reveal install folder: target 解析不到（内置与注册表均未命中）", {
+      appendMainLog("info", "[skill-store] reveal install folder: target 解析不到", {
         target: parsed.data.target,
+        skillId: parsed.data.skillId,
       });
       return SkillRevealInstallFolderResultSchema.parse({ ok: false, reason: "unknown-target" });
     }
@@ -110,7 +141,7 @@ export const registerSkillStoreIpcHandlers = (): void => {
     const installDir = path.resolve(path.join(skillsRoot, parsed.data.skillId));
     // skillId 来自远端目录数据，拒绝路径穿越（解析后必须仍位于目标根内）
     if (!installDir.startsWith(skillsRoot + path.sep)) {
-      console.debug("[skill-store] reveal install folder: skillId escapes target root", {
+      appendMainLog("info", "[skill-store] reveal install folder: skillId escapes target root", {
         skillId: parsed.data.skillId,
       });
       return SkillRevealInstallFolderResultSchema.parse({ ok: false, reason: "invalid-request" });
@@ -118,7 +149,7 @@ export const registerSkillStoreIpcHandlers = (): void => {
 
     const stat = await fs.promises.stat(installDir).catch(() => null);
     if (!(stat !== null && stat !== undefined ? stat.isDirectory() : undefined)) {
-      console.debug("[skill-store] reveal install folder: install dir missing", {
+      appendMainLog("info", "[skill-store] reveal install folder: install dir missing", {
         installDir,
       });
       return SkillRevealInstallFolderResultSchema.parse({ ok: false, reason: "path-missing" });

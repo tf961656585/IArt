@@ -172,7 +172,8 @@ const toCliEntryOperationResult = (
   }
   if (result.reason === "removed") return { ok: true, message: "已卸除命令入口，终端里的 iart 不再可用。" };
   if (result.reason === "absent") return { ok: true, message: "命令入口本就未注册，无需卸除。" };
-  return { ok: true, message: "这个 iart 指向其他程序，为避免误删未做改动。" };
+  // foreign_content 聚合可能伴随本应用形态已删除（混合场景），消息不得声称「未做改动」。
+  return { ok: true, message: "检测到指向其他程序的 iart 文件，为避免误删已保留。" };
 };
 
 const cliExecutorDeps = {
@@ -273,6 +274,20 @@ app.on("will-quit", () => {
   cliControlService = null;
   closeAll();
   runtime.stopBackend();
+});
+
+// ---- 跟随系统档保鲜（spec docs/runtime/远端请求执行治理原则.md「代理治理」）----
+// 窗口聚焦时请求 backend 重新解析系统代理，检出变化经 proxy:decision-changed 推回并
+// 应用到 session。尾随去抖 1 秒：焦点切换密集时不重复触发；非跟随系统档位下 backend
+// 解析结果不变、不会推送。
+let proxyRefreshTimer: NodeJS.Timeout | null = null;
+app.on("browser-window-focus", () => {
+  if (proxyRefreshTimer !== null) return;
+  proxyRefreshTimer = setTimeout(() => {
+    proxyRefreshTimer = null;
+    runtime.requestProxyRefresh();
+  }, 1000);
+  proxyRefreshTimer.unref();
 });
 
 protocol.registerSchemesAsPrivileged([

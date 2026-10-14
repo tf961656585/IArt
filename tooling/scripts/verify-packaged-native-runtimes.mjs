@@ -18,6 +18,14 @@ const packagedRuntimeSuffix = path.join(
   'package.json',
 );
 const sharpPackageSuffix = path.join('app.asar.unpacked', 'node_modules', 'sharp', 'package.json');
+// koffi（Windows CLI 控制台挂接 FFI）：主包与平台预编译包都必须物理存在于
+// app.asar.unpacked——koffi 运行时经 __dirname 相对路径寻找 @koromix/koffi-<平台> 包，
+// 且 .node 不经显式解包无法在 asar 内加载。
+const koffiMainPackageDir = (resourcesDir) => path.join(resourcesDir, 'app.asar.unpacked', 'node_modules', 'koffi');
+const koffiPlatformPackageDir = (resourcesDir, platform, arch) =>
+  path.join(resourcesDir, 'app.asar.unpacked', 'node_modules', '@koromix', `koffi-${platform}-${arch}`);
+const koffiNativeBinaryPath = (resourcesDir, platform, arch) =>
+  path.join(koffiPlatformPackageDir(resourcesDir, platform, arch), `${platform}_${arch}`, 'koffi.node');
 const oneByOnePngBase64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
 
@@ -427,12 +435,34 @@ const isCrossCompiledProduct = (betterSqliteRuntimeDir) => {
   return moduleArch && moduleArch !== process.arch;
 };
 
+// koffi 打包完整性：主包 package.json 与目标平台预编译 .node 必须存在。
+// Windows 产物在本机原生构建，expectedPlatform/Arch 即 win32/x64；
+// darwin 交叉构建 x64 产物时经 moduleArch 传入目标架构。
+const verifyKoffiRuntime = ({ resourcesDir, expectedPlatform = process.platform, expectedArch = process.arch }) => {
+  const issues = [];
+  const mainPackageJson = path.join(koffiMainPackageDir(resourcesDir), 'package.json');
+  if (!fs.existsSync(mainPackageJson)) {
+    issues.push(`缺少 koffi packaged runtime: ${mainPackageJson}`);
+  }
+  const binaryPath = koffiNativeBinaryPath(resourcesDir, expectedPlatform, expectedArch);
+  if (!fs.existsSync(binaryPath)) {
+    issues.push(`缺少 koffi ${expectedPlatform}_${expectedArch} 预编译二进制: ${binaryPath}`);
+  }
+  return { ok: issues.length === 0, issues };
+};
+
 const verifyPackagedResourceDir = ({ resourcesDir, electronLaunch, runner = spawnSync }) => {
   const betterSqliteRuntimeDir = getBetterSqliteRuntimeDir(resourcesDir);
   const issues = [];
   const verifiedRuntimeDirs = [];
   const crossCompiled = isCrossCompiledProduct(betterSqliteRuntimeDir);
   const moduleArch = detectNativeModuleArch(betterSqliteRuntimeDir);
+
+  // koffi 平台预编译与 better-sqlite3 同架构口径（darwin 交叉构建时以模块架构为准）。
+  const koffiResult = verifyKoffiRuntime({ resourcesDir, expectedArch: crossCompiled ? moduleArch : process.arch });
+  if (!koffiResult.ok) {
+    issues.push(...koffiResult.issues);
+  }
 
   if (!fs.existsSync(path.join(betterSqliteRuntimeDir, 'package.json'))) {
     issues.push(`缺少 better-sqlite3 packaged native runtime: ${betterSqliteRuntimeDir}`);
@@ -583,6 +613,10 @@ export const __test_only__ = {
   verifyPackagedNativeRuntimes,
   verifyRuntimeDependencyClosure,
   verifySharpRuntimeDir,
+  verifyKoffiRuntime,
+  koffiMainPackageDir,
+  koffiPlatformPackageDir,
+  koffiNativeBinaryPath,
   verifySharpPlatformArch,
   verifyFfmpegArch,
   verifyMachoArch,

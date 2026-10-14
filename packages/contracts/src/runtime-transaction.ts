@@ -16,6 +16,11 @@ export type {
   TaskStateNotification,
   TaskStateSnapshot,
 } from "./task-notification";
+export type {
+  EffectiveProxyDecision,
+  ProxyDecisionNotification,
+  ProxyRefreshRequest,
+} from "./proxy-decision";
 
 export {
   RuntimeTaskRowSchema,
@@ -52,6 +57,10 @@ import type {
   TaskStateNotification,
   TaskStateSnapshot,
 } from "./task-notification";
+import type {
+  ProxyDecisionNotification,
+  ProxyRefreshRequest,
+} from "./proxy-decision";
 import type { CredentialCryptoEncryptPayload, CredentialCryptoDecryptPayload, CredentialCryptoAvailablePayload } from "./credential-crypto-ipc";
 import {
   UnifiedGenerationStatusSchema,
@@ -184,6 +193,7 @@ export type BackendToMainMessage =
   | MediaAssetsChangedNotification
   | TaskStateNotification
   | TaskStateSnapshot
+  | ProxyDecisionNotification
   | ReadTasksPayload
   | ReadTaskByIdPayload
   | ReadBatchByIdPayload
@@ -201,4 +211,5 @@ export type MainToBackendMessage =
   | RuntimeTransactionResult
   | ProjectScopeRegisterMessage
   | ProjectScopeUnregisterMessage
-  | ProjectScopeSyncMessage;
+  | ProjectScopeSyncMessage
+  | ProxyRefreshRequest;

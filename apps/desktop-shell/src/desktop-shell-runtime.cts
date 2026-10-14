@@ -2,7 +2,7 @@ import { fork, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { app, safeStorage } from "electron";
+import { app, safeStorage, session } from "electron";
 import {
   resolveDesktopBackendRuntimeBootstrap,
 } from "./utils/backend-runtime-bootstrap.cjs";
@@ -34,8 +34,14 @@ import {
   CredentialCryptoEncryptPayloadSchema,
   CredentialCryptoDecryptPayloadSchema,
   CredentialCryptoAvailablePayloadSchema,
+  ProxyDecisionNotificationSchema,
 } from "@iart/contracts";
 import type { ProjectScopeCoordinator } from "./project-scope-coordinator.cjs";
+import {
+  createProxyDecisionApplier,
+  extractProxyCredentials,
+  UPDATER_SESSION_PARTITION,
+} from "./proxy/proxy-decision-applier.cjs";
 
 export type RuntimeControllerOptions = {
   coordinator: ProjectScopeCoordinator;
@@ -238,6 +244,39 @@ export const createRuntimeController = (
     sendResult,
   });
 
+  // ---- 生效代理决策应用（spec docs/runtime/远端请求执行治理原则.md「代理治理」）----
+  // 默认 session：Hub/Editor 窗口与主进程出站请求（net.fetch）共用；更新器 session 与
+  // electron-updater 库内 fromPartition 同名同对象。主进程不解析代理，只消费决策。
+  const proxyDecisionApplier = createProxyDecisionApplier({
+    getProxySessionTargets: () => [
+      session.defaultSession,
+      session.fromPartition(UPDATER_SESSION_PARTITION, { cache: false }),
+    ],
+    log: (level, message, meta) => {
+      if (level === "warn") {
+        console.warn(message, meta);
+      } else {
+        console.log(message, meta);
+      }
+    },
+  });
+
+  // 手动档代理含 user:pass 时 Chromium proxyRules 不解析凭据，由代理质询（authInfo.isProxy）
+  // 经 app 'login' 回填最近一次决策的凭据；非代理质询一律按取消处理（与无监听时的
+  // 默认行为一致，不改变网站 401 流程）。
+  app.on("login", (_event, _webContents, _authenticationResponseDetails, authInfo, callback) => {
+    if (!authInfo.isProxy) {
+      callback();
+      return;
+    }
+    const credentials = extractProxyCredentials(proxyDecisionApplier.getLatestDecision());
+    if (credentials === null) {
+      callback();
+      return;
+    }
+    callback(credentials.username, credentials.password);
+  });
+
   const normalizeProjectScope = (projectPath: string | null | undefined) =>
     typeof projectPath === "string" && projectPath.trim()
       ? projectPath.trim()
@@ -392,6 +431,15 @@ export const createRuntimeController = (
               ) {
                 taskForwarder(parsed.data as RuntimeMessageCandidate);
               }
+              return;
+            }
+            if (msg.type === "proxy:decision-changed") {
+              const parsed = ProxyDecisionNotificationSchema.safeParse(msg);
+              if (!parsed.success) {
+                console.warn("[desktop-runtime] invalid backend notification", msg.type);
+                return;
+              }
+              void proxyDecisionApplier.apply(parsed.data.decision);
               return;
             }
             // 凭证加解密（spec 03 §5.1）：Backend 是纯 Node fork 子进程、禁止 import('electron')，
@@ -565,6 +613,14 @@ export const createRuntimeController = (
     },
     setRecoverHubWindow: (recover: () => void) => {
       recoverHubWindow = recover;
+    },
+    /**
+     * 窗口聚焦保鲜触发（spec docs/runtime/远端请求执行治理原则.md「代理治理」）：
+     * 请求 backend 重新解析系统代理。fire-and-forget；backend 检出变化才推回新决策。
+     * backend 未运行时静默（sendRuntimeMessage 内部判空）。
+     */
+    requestProxyRefresh: () => {
+      sendRuntimeMessage({ type: "runtime:refresh-proxy" });
     },
     /**
      * 注册项目 scope 到 coordinator。

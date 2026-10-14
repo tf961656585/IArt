@@ -33,7 +33,20 @@ const createRuntime = (rootDir, productDir, options = {}) => {
     fs.mkdirSync(sharpDir, { recursive: true });
     fs.writeFileSync(path.join(sharpDir, 'package.json'), JSON.stringify({ name: 'sharp' }));
   }
+  if (options.koffi !== false) {
+    createKoffiRuntime(resourcesDir, { platform: process.platform, arch: process.arch });
+  }
   return runtimeDir;
+};
+
+// koffi（Windows CLI 控制台挂接 FFI）打包布局：主包 + 平台预编译包（<平台>_<架构>/koffi.node）。
+const createKoffiRuntime = (resourcesDir, { platform, arch }) => {
+  const mainDir = __test_only__.koffiMainPackageDir(resourcesDir);
+  fs.mkdirSync(mainDir, { recursive: true });
+  fs.writeFileSync(path.join(mainDir, 'package.json'), JSON.stringify({ name: 'koffi' }));
+  const binaryPath = __test_only__.koffiNativeBinaryPath(resourcesDir, platform, arch);
+  fs.mkdirSync(path.dirname(binaryPath), { recursive: true });
+  fs.writeFileSync(binaryPath, 'fake-node');
 };
 
 const createRuntimeWithoutSharp = (rootDir, productDir, options = {}) =>
@@ -340,8 +353,7 @@ test('verifyFfmpegArch: ffmpeg 二进制过小时失败（残缺文件兜底）'
   assert.match(result.message, /文件过小|疑似残缺/);
 });
 
-test('verifyPackagedResourceDir: 交叉编译产物缺 sharp x64 平台包时失败', () => {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cross-sharp-missing-'));
+test('verifyPackagedResourceDir: 交叉编译产物缺 sharp x64 平台包时失败', () => {  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cross-sharp-missing-'));
   const productDir = 'mac-x64/IARTStudio.app';
   const resourcesDir = getResourcesDir(rootDir, productDir);
   const runtimeDir = createRuntime(rootDir, productDir, {
@@ -374,4 +386,64 @@ test('verifyPackagedResourceDir: 交叉编译产物缺 sharp x64 平台包时失
       `期望检出 sharp/ffmpeg 缺失，实际 issues: ${JSON.stringify(result.issues)}`,
     );
   }
+});
+
+// ─── koffi（Windows CLI 控制台挂接 FFI）打包完整性 ───────────────────────────────
+// koffi 3.3.3 的预编译 .node 不在主包内，而在 @koromix/koffi-<平台>-<架构> 平台包
+// （os/cpu 门控，Windows 机器上解析为 win32_x64）；koffi 运行时经 __dirname 相对路径
+// 寻找平台包，故主包与平台包都必须物理存在于 app.asar.unpacked。
+
+test('verifyKoffiRuntime: win32_x64 主包与预编译二进制齐备时通过', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'koffi-ok-'));
+  const resourcesDir = path.join(rootDir, 'Contents', 'Resources');
+  createKoffiRuntime(resourcesDir, { platform: 'win32', arch: 'x64' });
+
+  const result = __test_only__.verifyKoffiRuntime({ resourcesDir, expectedPlatform: 'win32', expectedArch: 'x64' });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.issues, []);
+});
+
+test('verifyKoffiRuntime: win32_x64 预编译二进制缺失时失败', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'koffi-missing-binary-'));
+  const resourcesDir = path.join(rootDir, 'Contents', 'Resources');
+  const mainDir = __test_only__.koffiMainPackageDir(resourcesDir);
+  fs.mkdirSync(mainDir, { recursive: true });
+  fs.writeFileSync(path.join(mainDir, 'package.json'), JSON.stringify({ name: 'koffi' }));
+
+  const result = __test_only__.verifyKoffiRuntime({ resourcesDir, expectedPlatform: 'win32', expectedArch: 'x64' });
+
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.some((issue) => /缺少 koffi win32_x64 预编译二进制/.test(issue)));
+});
+
+test('verifyKoffiRuntime: koffi 主包缺失时失败', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'koffi-missing-main-'));
+  const resourcesDir = path.join(rootDir, 'Contents', 'Resources');
+
+  const result = __test_only__.verifyKoffiRuntime({ resourcesDir, expectedPlatform: 'win32', expectedArch: 'x64' });
+
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.some((issue) => /缺少 koffi packaged runtime/.test(issue)));
+});
+
+test('verifyPackagedResourceDir: 缺 koffi 布局时失败（随既有校验一并汇总）', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'packaged-runtime-koffi-missing-'));
+  createRuntime(rootDir, 'mac/IARTStudio.app', {
+    dependencies: ['bindings'],
+    installedDependencies: ['bindings'],
+    koffi: false,
+  });
+
+  const result = __test_only__.verifyPackagedResourceDir({
+    resourcesDir: getResourcesDir(rootDir, 'mac/IARTStudio.app'),
+    electronLaunch: { command: 'electron', useShell: false },
+    runner: () => ({ status: 0, stdout: 'ok' }),
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.issues.some((issue) => /缺少 koffi packaged runtime|缺少 koffi .* 预编译二进制/.test(issue)),
+    `期望检出 koffi 缺失，实际 issues: ${JSON.stringify(result.issues)}`,
+  );
 });

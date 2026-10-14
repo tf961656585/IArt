@@ -8,9 +8,9 @@ import { SettingsSection } from './components/SettingsSection';
  * 设置页「网络代理」子单元（通用设置分区）：
  * 三档单选（跟随系统代理 / 不使用代理 / 手动代理）+ 手动模式下的代理地址输入框。
  * 变更 debounce 300ms 自动保存，无手动保存/重载按钮；状态行仅错误留痕。
- * 保存即时生效（backend 出站 fetch dispatcher 重建，对新的生成请求启用）。
- * 配置经 PUT /api/config 落 backend.json（owner：config-store），生效语义见
- * apps/backend/src/local-server/fetch-dispatcher.cts。
+ * 保存即时生效于全应用对外网络请求：backend 重建出站 dispatcher 并推送生效代理决策，
+ * 主进程应用到全部窗口页面与更新器 session。语义唯一锚点见
+ * docs/runtime/远端请求执行治理原则.md「代理治理」。
  */
 
 const MODE_OPTIONS: ReadonlyArray<{ value: ProxyMode; label: string }> = [

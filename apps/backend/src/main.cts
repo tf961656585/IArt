@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { HOST } from './local-server/constants.cjs';
 import { resolveListenPort } from './local-server/config-store.cjs';
 import { ensureStorageDirs } from './local-server/storage.cjs';
-import { initFetchDispatcher } from './local-server/fetch-dispatcher.cjs';
+import { initFetchDispatcher, rebuildFetchDispatcher } from './local-server/fetch-dispatcher.cjs';
 import { getProjectIndex } from './local-server/project-store.cjs';
 import { logInfo, logError } from './local-server/logging.cjs';
 import * as routerModule from './local-server/router.cjs';
@@ -34,6 +34,7 @@ import {
   ProjectScopeRegisterMessageSchema,
   ProjectScopeUnregisterMessageSchema,
   ProjectScopeSyncMessageSchema,
+  ProxyRefreshRequestSchema,
 } from '@iart/contracts';
 import { buildTaskStateSnapshotPayload } from './runtime-snapshot-builder.cjs';
 
@@ -355,6 +356,13 @@ process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 process.on('message', (message) => {
   if (handleProjectScopeMessage(message)) {
+    return;
+  }
+  // 窗口聚焦保鲜触发（spec docs/runtime/远端请求执行治理原则.md「代理治理」）：
+  // 主进程请求重新解析系统代理；非跟随系统档位下解析结果不变、不推送（dedupe）。
+  const parsedProxyRefresh = ProxyRefreshRequestSchema.safeParse(message);
+  if (parsedProxyRefresh.success) {
+    void rebuildFetchDispatcher('focus-refresh').catch(() => undefined);
     return;
   }
   const shutdownMessage = message as { type: string | undefined } | null;

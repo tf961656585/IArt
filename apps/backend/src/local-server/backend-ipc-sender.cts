@@ -6,6 +6,7 @@ import type {
   MediaAssetsChangedNotification,
   TaskStateNotification,
   TaskStateSnapshot,
+  ProxyDecisionNotification,
   ReadTasksPayload,
   ReadTaskByIdPayload,
   ReadBatchByIdPayload,
@@ -180,6 +181,19 @@ export const sendTaskStateSnapshot = (snapshot: TaskStateSnapshot): void => {
 };
 
 export const sendMediaAssetsChangedNotification = (notification: MediaAssetsChangedNotification): void => {
+  if (!process.send) return;
+  try {
+    process.send(notification);
+  } catch {
+    // fire-and-forget
+  }
+};
+
+/**
+ * 生效代理决策推送（spec docs/runtime/远端请求执行治理原则.md「代理治理」）。
+ * fire-and-forget：主进程消费决策应用 session 代理；发送失败静默丢弃（下个触发点重推）。
+ */
+export const sendProxyDecisionNotification = (notification: ProxyDecisionNotification): void => {
   if (!process.send) return;
   try {
     process.send(notification);

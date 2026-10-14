@@ -1,5 +1,6 @@
 import { app } from "electron";
 import { resolveLaunchMode } from "./cli/launch-mode.cjs";
+import { prepareCliStdio, writeCliOutput } from "./cli/cli-console-attach.cjs";
 
 /**
  * 启动分流（spec docs/integrations/CLI与本地Agent集成.md §4.1 / CLI-003）：
@@ -8,21 +9,37 @@ import { resolveLaunchMode } from "./cli/launch-mode.cjs";
  * 不建 tray、不注册 IPC）。「不获取单实例锁、无窗口、执行完退出」的完整行为留真机验收，
  * 分流判定见 cli/launch-mode 纯函数测试。
  *
+ * Windows 中文乱码根治（2026-10-14 批次）：CLI 分支任何 stdout/stderr 接触与动态 import
+ * 之前，先挂接父控制台并产出接管后的输出流（prepareCliStdio，见 cli-console-attach），
+ * 非 win32 不调用。app.exit 不等待 libuv 刷新——正常路径的输出由 runCliClientMain 在
+ * 返回前按回调序列化落定；catch 路径的错误文本也必须经同一 flush 序列写完成后再退出。
+ *
  * GUI 模式经条件 require 加载 desktop-shell-bootstrap，保持既有「加载即执行」的
  * 模块加载语义（集成测试依赖 main.cjs → bootstrap.cjs 的同步副作用链）。
  */
 if (resolveLaunchMode(process.argv) === "cli") {
   // dev 与打包 argv 形态不同：--cli 之后的参数全归 CLI 客户端
   const cliArgv = process.argv.slice(process.argv.indexOf("--cli") + 1);
-  void import("./cli/cli-client-main.cjs")
-    .then((cliClientMain) => cliClientMain.runCliClientMain(cliArgv))
-    .then((exitCode) => {
+  const cliStdio =
+    process.platform === "win32"
+      ? prepareCliStdio()
+      : { stdout: process.stdout, stderr: process.stderr };
+  void (async (): Promise<void> => {
+    try {
+      const cliClientMain = await import("./cli/cli-client-main.cjs");
+      const exitCode = await cliClientMain.runCliClientMain(cliArgv, cliStdio);
       app.exit(exitCode);
-    })
-    .catch((error: unknown) => {
-      console.error("[cli] CLI 客户端执行失败", error instanceof Error ? error.message : error);
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : String(error);
+      try {
+        await writeCliOutput(cliStdio.stderr, `[cli] CLI 客户端执行失败 ${detail}\n`);
+      } catch {
+        // stderr 也不可用：留痕后按执行失败退出
+        process.emitWarning(`[cli] CLI 客户端执行失败且 stderr 不可用：${detail}`);
+      }
       app.exit(2);
-    });
+    }
+  })();
 } else {
   require("./desktop-shell-bootstrap.cjs");
 }

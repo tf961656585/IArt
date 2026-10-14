@@ -13,8 +13,7 @@ import { useHubRuntime } from '../../components/providers/HubAppProvider';
 import { buildBundleUrl, compareSkillVersions, fetchSkillCatalog, mapSkillCatalogError } from '../../client/skills';
 
 /**
- * skills 域 React 版操作 hook。逻辑与 vanilla 侧 createSkillsController
- * （controllers/skills-controller.ts）等价：
+ * skills 域 React 版操作 hook：
  * - 目录拉取（fetchSkillCatalog）与已安装状态（platform.getSkillInstalledState）
  *   均为组件内 state（只在本 tab 消费，不入全局 hub-store）；
  * - 自定义安装目标注册表（platform.listCustomSkillInstallTargets）同为组件内 state，
@@ -22,7 +21,7 @@ import { buildBundleUrl, compareSkillVersions, fetchSkillCatalog, mapSkillCatalo
  * - 版本比较用 client/skills 的 compareSkillVersions 数值段比较，
  *   远端低于本地（回退）不视为可更新；
  * - 单目标安装 / 全部更新走 platform.installSkill（IPC），
- *   过程提示写入本地 statusMessage（对应 vanilla 的 skillsStatus）。
+ *   过程与失败原因写入本地 statusMessage（失败原因透传是诊断口径，见安装行为）。
  */
 
 /**
@@ -147,7 +146,7 @@ export function useSkills() {
     try {
       setInstalledState(await platform.getSkillInstalledState());
     } catch (err) {
-      console.debug('[skills] getSkillInstalledState 失败，回退空状态:', err);
+      console.warn('[skills] getSkillInstalledState 失败，回退空状态:', err);
       setInstalledState({ skills: [] });
     }
   }, [platform]);
@@ -228,8 +227,10 @@ export function useSkills() {
       let result: SkillInstallResult;
       try {
         result = await platform.installSkill(request);
-      } catch {
-        setStatusMessage('没能安装，请重试');
+      } catch (err) {
+        // IPC 传输/意外异常：失败原因必须可见（诊断口径），console.error 留痕 + 状态栏透传
+        console.error('[skills] installSkill IPC 调用失败:', err);
+        setStatusMessage(`没能安装 ${skill.name}：${err instanceof Error ? err.message : String(err)}`);
         return false;
       } finally {
         setInstalling((prev) => {
@@ -240,7 +241,12 @@ export function useSkills() {
       }
 
       if (!result.ok) {
-        setStatusMessage('没能安装，请重试');
+        console.error('[skills] 安装失败:', { skillId: skill.id, target, error: result.error });
+        setStatusMessage(
+          result.error === 'unknown-target'
+            ? `没能安装 ${skill.name}：安装目标已不存在，请刷新目标列表后重试`
+            : `没能安装 ${skill.name}：${result.error}`,
+        );
         return false;
       }
 

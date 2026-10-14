@@ -8,8 +8,7 @@ import { useSkills } from './SkillsTab.hooks';
 
 /**
  * Skill 商店 tab：刷新 + 管理安装目标 + 全部更新 + 状态栏 + Skill 列表 + 空态。
- * 逻辑与 vanilla createSkillsController 等价；tab 挂载即激活
- * （等价 vanilla onTabActivated → loadCatalog：拉远端目录 + 刷新已安装状态），
+ * tab 挂载即激活（进入即拉取远端目录 + 刷新已安装状态），
  * 卸载时由 useSkills 中止进行中的拉取。
  */
 export function SkillsTab() {

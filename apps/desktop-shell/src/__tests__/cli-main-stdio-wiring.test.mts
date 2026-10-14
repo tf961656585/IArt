@@ -1,0 +1,43 @@
+// @vitest-environment node
+//
+// main.cts CLI 分支 stdio 接线顺序 pin（Windows 中文乱码批次，2026-10-14）。
+//
+// Windows 下 AttachConsole 必须发生在任何 process.stdout/stderr 接触与 CLI 客户端
+// 动态加载之前——预挂接的具名化会把非 TTY 分类固化进 Node 的惰性缓存。这是顺序
+// 敏感接线，编译器与运行时测试都观测不到，只能源码级断言（风格照抄
+// main-window-open-coordinator.test.mts 的源码断言用例）。
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+
+const workspaceRoot = process.cwd();
+const mainSourcePath = `${workspaceRoot}/apps/desktop-shell/src/main.cts`;
+
+describe("main.cts CLI 分支 stdio 接线顺序", () => {
+  const source = readFileSync(mainSourcePath, "utf8");
+
+  it("prepareCliStdio 调用位于 CLI 客户端动态 import 之前", () => {
+    const prepareIndex = source.indexOf("prepareCliStdio()");
+    const dynamicImportIndex = source.indexOf('import("./cli/cli-client-main.cjs")');
+    expect(prepareIndex).toBeGreaterThan(-1);
+    expect(dynamicImportIndex).toBeGreaterThan(-1);
+    expect(prepareIndex).toBeLessThan(dynamicImportIndex);
+  });
+
+  it("prepareCliStdio 调用有 win32 门控，且门控先于首次 process.stdout 接触", () => {
+    const gateIndex = source.indexOf('process.platform === "win32"');
+    const prepareIndex = source.indexOf("prepareCliStdio()");
+    const firstStdoutContact = source.indexOf("process.stdout");
+    expect(gateIndex).toBeGreaterThan(-1);
+    expect(gateIndex).toBeLessThan(prepareIndex);
+    expect(firstStdoutContact).toBeGreaterThan(prepareIndex);
+  });
+
+  it("退出等待 CLI 执行完成（await 后才 app.exit），catch 路径经同一 flush 序列写完成再退出", () => {
+    const awaitedRunIndex = source.indexOf("await cliClientMain.runCliClientMain");
+    const firstAppExitAfterRun = source.indexOf("app.exit", awaitedRunIndex);
+    const catchWriteIndex = source.indexOf("writeCliOutput(cliStdio.stderr");
+    expect(awaitedRunIndex).toBeGreaterThan(-1);
+    expect(firstAppExitAfterRun).toBeGreaterThan(awaitedRunIndex);
+    expect(catchWriteIndex).toBeGreaterThan(-1);
+  });
+});

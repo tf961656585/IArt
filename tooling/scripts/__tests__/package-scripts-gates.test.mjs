@@ -203,6 +203,12 @@ test('asarUnpack 显式覆盖 packaged native media runtime', () => {
     true,
     '缺少 sharp libvips 包解包规则',
   );
+  assert.equal(asarUnpack.includes('**/node_modules/koffi/**'), true, '缺少 koffi 主包解包规则');
+  assert.equal(
+    asarUnpack.includes('**/node_modules/@koromix/koffi-*/**'),
+    true,
+    '缺少 koffi 平台预编译包解包规则',
+  );
 });
 
 test('packaged native runtime 显式携带 nested node_modules 闭包', () => {

@@ -26,6 +26,7 @@ export * from './media/imageValidationTypes';
 export * from './media/parseDataUrlSource';
 export * from './model-asset-contract';
 export * from './project-dto';
+export * from './proxy-decision';
 export * from './public-relay-contract';
 export * from './runtime-hydrated-projector';
 export * from './runtime-transaction';
