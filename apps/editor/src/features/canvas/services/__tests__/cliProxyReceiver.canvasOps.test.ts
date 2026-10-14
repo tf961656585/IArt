@@ -1,11 +1,12 @@
-// @spec: CLI-027, CLI-028, CLI-029, CLI-030
+// @spec: CLI-027, CLI-028, CLI-029, CLI-030, CLI-032
 //
 // CLI 代理执行通道 · 画布操作四命令映射测试（2026-10-14 批次新增，从 cliProxyReceiver.test.ts
 // 拆分——该文件受 max-lines 门禁约束）。
 //
 // 覆盖：canvas.group.dissolve（解散按容器类型分述，docs/runtime/画布节点组.md「解散」）、
 // canvas.node.move（与界面拖拽同一位置写入 action）、canvas.node.delete（与界面删除同一
-// 删除咽喉）、canvas.layout --order（显式顺序优先、默认排序行为不变）。
+// 删除咽喉）、canvas.layout --order（显式顺序优先、默认排序行为不变）、canvas.layout
+// --columns（CLI-032：scope=all 与 group 均透传列数语义，缺省单列默认行为不变）。
 // 种床沿 cliProxyReceiver.test.ts 既有惯例：真实 store + setState 种节点。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -588,6 +589,94 @@ describe('CLI 代理执行通道 · 画布操作四命令', () => {
       expect(Object.keys(response.positions).sort()).toEqual(['n1', 'n2']);
       const yOf = (id: string): number => response.positions[id]?.y ?? Number.NaN;
       expect(yOf('n2')).toBeLessThan(yOf('n1'));
+    });
+  });
+
+  // @spec: CLI-032
+  describe('canvas.layout --columns（CLI-032，spec §5.3「均映射列数语义」实现侧收口）', () => {
+    it('scope=all 携带 columns=2：行优先网格摆放（行内跨列、行间换行），不再固定单列', async () => {
+      addTextInputNode('n1', 0, 0);
+      addTextInputNode('n2', 10, 10);
+      addTextInputNode('n3', 20, 20);
+      addTextInputNode('n4', 30, 30);
+      const command: CliProxyCommand = {
+        command: 'canvas.layout',
+        request_id: 'req-c1',
+        scope: 'all',
+        columns: 2,
+      };
+
+      const response = parseResponse(await executeCliProxyCommand(command));
+
+      if (!('positions' in response)) throw new Error('expected layout success response');
+      expect(Object.keys(response.positions).sort()).toEqual(['n1', 'n2', 'n3', 'n4']);
+      // 行优先：[n1 n2] / [n3 n4]——同行等 y、跨列 x 递增、换行 y 递增（同尺寸节点几何确定）
+      const posOf = (id: string): { x: number; y: number } => {
+        const position = response.positions[id];
+        if (!position) throw new Error(`missing position for ${id}`);
+        return position;
+      };
+      expect(posOf('n2').x).toBeGreaterThan(posOf('n1').x);
+      expect(posOf('n2').y).toBe(posOf('n1').y);
+      expect(posOf('n3').y).toBeGreaterThan(posOf('n1').y);
+      expect(posOf('n3').x).toBe(posOf('n1').x);
+      expect(posOf('n4').x).toBeGreaterThan(posOf('n3').x);
+      // 画布实际位置与响应一致
+      const graph = useCanvasStore.getState().nodeGraph;
+      for (const [nodeId, position] of Object.entries(response.positions)) {
+        const node = graph?.nodes.find((candidate) => candidate.id === nodeId);
+        expect(node?.position).toEqual(position);
+      }
+    });
+
+    it('scope=all 不带 columns：默认单列垂直摆放行为完全不变（x 相同、y 严格递增）', async () => {
+      addTextInputNode('n1', 0, 0);
+      addTextInputNode('n2', 10, 10);
+      addTextInputNode('n3', 20, 20);
+      const command: CliProxyCommand = {
+        command: 'canvas.layout',
+        request_id: 'req-c2',
+        scope: 'all',
+      };
+
+      const response = parseResponse(await executeCliProxyCommand(command));
+
+      if (!('positions' in response)) throw new Error('expected layout success response');
+      const posOf = (id: string): { x: number; y: number } => {
+        const position = response.positions[id];
+        if (!position) throw new Error(`missing position for ${id}`);
+        return position;
+      };
+      expect(posOf('n1').x).toBe(posOf('n2').x);
+      expect(posOf('n2').x).toBe(posOf('n3').x);
+      expect(posOf('n1').y).toBeLessThan(posOf('n2').y);
+      expect(posOf('n2').y).toBeLessThan(posOf('n3').y);
+    });
+
+    it('scope=group 携带 columns：既有容器内网格语义不变（回归守卫）', async () => {
+      addGroupNode('g0');
+      addTextInputNode('m1', 0, 0, 'g0');
+      addTextInputNode('m2', 10, 10, 'g0');
+      addTextInputNode('m3', 20, 20, 'g0');
+      addTextInputNode('m4', 30, 30, 'g0');
+      const command: CliProxyCommand = {
+        command: 'canvas.layout',
+        request_id: 'req-c3',
+        scope: { group: 'g0' },
+        columns: 2,
+      };
+
+      const response = parseResponse(await executeCliProxyCommand(command));
+
+      if (!('positions' in response)) throw new Error('expected layout success response');
+      const posOf = (id: string): { x: number; y: number } => {
+        const position = response.positions[id];
+        if (!position) throw new Error(`missing position for ${id}`);
+        return position;
+      };
+      expect(posOf('m2').x).toBeGreaterThan(posOf('m1').x);
+      expect(posOf('m2').y).toBe(posOf('m1').y);
+      expect(posOf('m3').y).toBeGreaterThan(posOf('m1').y);
     });
   });
 });

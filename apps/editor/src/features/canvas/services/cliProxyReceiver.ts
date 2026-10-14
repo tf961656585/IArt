@@ -37,8 +37,8 @@
  *   界面显式危险动作）。请求集直接命中 Agent 节点时必须携带 `yes: true`（界面删除确认框的
  *   CLI 对应物，AG-CT-011 禁旁路）。目标不存在 → `node_not_found`。响应回传实际删除集合
  *   （请求集 + 伴随节点级联）。
- * - `canvas.layout` → `scope=all` 映射 `autoLayout`（columns 参数对全局整理无既有语义，
- *   契约允许携带、执行侧忽略——全局整理固定单列，docs/runtime/画布自动布局算法.md）；
+ * - `canvas.layout` → `scope=all` 映射 `autoLayout`（columns 语义对齐 spec §5.3「均映射
+ *   列数语义」/ CLI-032：--columns 透传布局引擎，缺省单列默认行为不变）；
  *   `scope={group}` 映射 `autoLayoutContainer`（组与 Agent 容器同一动作同一语义）；
  *   `order` 显式顺序（spec CLI-030）在映射层前置校验（order 节点必须存在且属于本次整理
  *   作用域，缺失 → `node_not_found`、越界 → `command_rejected`）后经 store options 透传为
@@ -561,7 +561,8 @@ const executeCanvasLayout = async (
   const orderIds = [...new Set(command.order ?? [])];
 
   if (command.scope === 'all') {
-    // columns 参数对全局整理无既有语义（全局整理固定单列），契约允许携带、执行侧忽略。
+    // columns 语义对齐（spec §5.3「均映射列数语义」/ CLI-032）：scope=all 与 group 同语义，
+    // --columns 透传给布局引擎（缺省单列，默认行为不变）。
     const affectedNodeIds = nodeGraph.nodes
       .filter((node) => !isContainerNode(node) && !isGroupMember(node))
       .map((node) => node.id);
@@ -572,12 +573,17 @@ const executeCanvasLayout = async (
       new Set(affectedNodeIds),
     );
     if (orderRejection !== null) return orderRejection;
-    // order 缺省时不传 options：默认排序行为完全不变（数组序，spec CLI-030）
-    await store.autoLayout(
-      orderIds.length > 0
-        ? { measuredSizeByNodeId: undefined, derivedSizeByNodeId: undefined, order: orderIds }
-        : undefined,
-    );
+    // columns/order 都缺省时不传 options：默认排序与列数行为完全不变（数组序、单列，spec CLI-030）
+    const layoutOptions =
+      command.columns === undefined && orderIds.length === 0
+        ? undefined
+        : {
+            measuredSizeByNodeId: undefined,
+            derivedSizeByNodeId: undefined,
+            columns: command.columns,
+            ...(orderIds.length > 0 ? { order: orderIds } : {}),
+          };
+    await store.autoLayout(layoutOptions);
     return readFinalPositions(requestId, affectedNodeIds);
   }
 

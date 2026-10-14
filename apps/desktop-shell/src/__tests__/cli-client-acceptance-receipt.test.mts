@@ -180,7 +180,8 @@ describe("runCliClientMain 回执接线 pin（CLI-026）", () => {
   const source = readFileSync(`${workspaceRoot}/apps/desktop-shell/src/cli/cli-client-main.cts`, "utf8");
 
   it("emitWaitProgress 经 writeCliOutputCatching 写到 stderr（回执通道为 stderr，flush 序列复用）", () => {
-    const wiringIndex = source.indexOf("emitWaitProgress");
+    // 定位 deps 注入的代码位（emitWaitProgress: async 键形态），排除文件头注释里的同名词
+    const wiringIndex = source.indexOf("emitWaitProgress: async");
     expect(wiringIndex).toBeGreaterThan(-1);
     // 接线窗口内（deps 注入对象附近）写到 stderr——排除文件尾部既有 result.stderr 落盘调用的假命中
     const wiringWindow = source.slice(wiringIndex, wiringIndex + 500);

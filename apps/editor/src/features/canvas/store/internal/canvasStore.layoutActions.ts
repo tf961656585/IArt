@@ -181,6 +181,9 @@ export const createCanvasLayoutActions = (
       defaultNodeSize: undefined,
       snapGrid: normalizedSettings.snapGrid,
       sizeSources,
+      // --columns 透传（spec §5.3「均映射列数语义」/ CLI-032）：缺省 undefined 时布局引擎
+      // 单列垂直摆放（既有口径不变），给出时按网格分行摆放。
+      columns: options?.columns,
     };
 
     const layoutResult = await computeAutoLayout(

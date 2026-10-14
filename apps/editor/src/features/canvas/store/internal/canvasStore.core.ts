@@ -52,13 +52,20 @@ export type CanvasAutoLayoutStoreOptions = {
    * 占格、内部零排序，spec：画布自动布局算法.md「分区内流式摆放」插入序口径）。
    */
   order?: readonly string[] | undefined;
+  /**
+   * 本次排布列数（可选；CLI canvas.layout --columns 承载，spec §5.3「均映射列数语义」 /
+   * CLI-032）。缺省时单列垂直摆放（既有口径不变）；给出时按网格分行摆放（行优先）。
+   * 容器内整理经 CanvasGroupAutoLayoutStoreOptions 携带同名列（其必填语义不变）；
+   * 全局整理自 2026-10-14 起按 spec 对齐透传（此前执行侧忽略、固定单列）。
+   */
+  columns?: number | undefined;
 };
 
 /**
  * 容器内整理 store action 的 options。
  *
- * 在通用自动布局选项之上追加本次排布列数：容器内整理支持按本次选取的网格列数摆放成员
- *（`m×n` 快速选择），全局整理不使用该入参、固定单列垂直摆放。
+ * 在通用自动布局选项之上承载本次排布列数：容器内整理支持按本次选取的网格列数摆放成员
+ *（`m×n` 快速选择）；列数列在本类型保持必填显式语义（容器内整理调用方必须显式给值）。
  * spec：docs/editor/画布对象右键菜单.md §7.3、docs/runtime/画布自动布局算法.md「网格摆放」。
  */
 export type CanvasGroupAutoLayoutStoreOptions = CanvasAutoLayoutStoreOptions & {

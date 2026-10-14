@@ -48,6 +48,7 @@ import {
   createCliEntryRegistration,
   resolveDefaultCliEntryTargetDir,
 } from "./cli/cli-entry-registration.cjs";
+import { appendMainLog } from "./main-log.cjs";
 import { buildCliStatusDto } from "./cli/cli-status-snapshot.cjs";
 import { resolveDefaultDiscoveryFilePath } from "./cli/cli-discovery.cjs";
 import { CLI_PROXY_REQUEST_CHANNEL } from "@iart/contracts";
@@ -143,19 +144,60 @@ const cliProxyDispatcher = createCliProxyDispatcher({
 });
 
 /**
- * CLI 命令入口注册（spec §3/§8，CLI-016）：shim 注入 --cli（保证经入口启动一律进 CLI 客户端
- * 模式）；dev 态 app-exec 为 Electron 可执行文件 + 当前启动入口（process.argv[1] 经
- * path.resolve 归一化为绝对路径——npm script 以相对路径启动 dev（./apps/desktop-shell/dist/
- * main.cjs），shim 里的相对路径会按用户执行 iart 时的 cwd 解析而失灵（2026-10-07 第二次
- * 真机点验实锤），shim 内两个路径都必须绝对；dist 无 package.json，Electron 也不能以目录
- * 自启动）；打包态为 process.execPath。目标目录按平台默认解析（macOS /usr/local/bin；
- * Windows %LOCALAPPDATA%\Microsoft\WindowsApps），一键注册无写权限时结构化失败并引导手动注册。
+ * CLI 轻量入口脚本绝对路径（spec §3 / CLI-025：shim 以 ELECTRON_RUN_AS_NODE=1 以纯 Node
+ * 运行该脚本，不注入 --cli、不进入 browser 进程）。打包态经 electron-builder extraResources
+ * 落在 app.asar 外（`<resources>/cli/cli-node-entry.cjs`，纯 Node 启动 asar 内文件未经实测、
+ * asar 外保真）；dev 态为与 main.cjs 同级的构建产物（dist/cli/cli-node-entry.cjs——npm
+ * script 以相对路径启动 dev，shim 里的相对路径会按用户执行 iart 时的 cwd 解析而失灵
+ * （2026-10-07 实锤），shim 内路径必须绝对）。
+ */
+const resolveCliNodeEntryScriptPath = (): string => {
+  // resourcesPath 仅在 Electron 运行时存在；打包判据同时要求它为字符串——纯 Node 环境
+  // （集成测试 cjs-mock 等价物）isPackaged 可能为 true 而 resourcesPath 缺失，落到 dev 解析。
+  const resourcesPath = process.resourcesPath;
+  if (app.isPackaged === true && typeof resourcesPath === "string" && resourcesPath.length > 0) {
+    return path.join(resourcesPath, "cli", "cli-node-entry.cjs");
+  }
+  const mainEntry = typeof process.argv[1] === "string" && process.argv[1].length > 0 ? path.resolve(process.argv[1]) : "";
+  const devEntryDir = mainEntry.length > 0 ? path.dirname(mainEntry) : app.getAppPath();
+  return path.join(devEntryDir, "cli", "cli-node-entry.cjs");
+};
+
+/**
+ * CLI 命令入口注册（spec §3/§8，CLI-016/CLI-024）：shim 以 ELECTRON_RUN_AS_NODE=1 把应用
+ * 可执行文件作为纯 Node 运行时启动轻量入口脚本（保证经入口启动一律走轻量 CLI 客户端形态，
+ * 不进入 browser 进程）；dev 态 app-exec 为 Electron 可执行文件（run-as-node 下等价纯 Node
+ * 二进制）+ 上述入口脚本路径。目标目录按平台默认解析（macOS /usr/local/bin；Windows
+ * %LOCALAPPDATA%\Microsoft\WindowsApps），一键注册无写权限时结构化失败并引导手动注册。
  */
 const cliEntryRegistration = createCliEntryRegistration({
   targetDir: resolveDefaultCliEntryTargetDir() ?? "",
   appExecPath: process.execPath,
-  appExecArgs: app.isPackaged ? [] : [process.argv[1] ? path.resolve(process.argv[1]) : app.getAppPath()],
+  cliEntryScriptPath: resolveCliNodeEntryScriptPath(),
 });
+
+/**
+ * shim 自动自愈（spec §3 / CLI-031）：应用启动时检测 Windows 双形态注册目录下的入口 shim
+ * 是否为指向本应用可执行文件的过期模板（如 0.6.5/0.6.6 的 --cli 注入 + unset 形态），是则
+ * 按当前模板重写（幂等，轻量入口形态翻转的存量自愈窗口）。写失败仅留痕不阻断 GUI 启动；
+ * 非结果性分支（缺失/他物/已一致）静默跳过，模块内已留 debug 痕。
+ */
+const healCliEntryShims = (): void => {
+  void cliEntryRegistration.healEntryShims().then((result) => {
+    if (!result.ok) {
+      appendMainLog("warn", "[cli-entry] shim 自愈失败（不阻断启动）", { detail: result.message });
+      return;
+    }
+    if (result.rewrittenForms.length > 0 || result.foreignForms.length > 0) {
+      appendMainLog("info", "[cli-entry] shim 自愈扫描完成", {
+        rewrittenForms: result.rewrittenForms,
+        foreignForms: result.foreignForms,
+        missingForms: result.missingForms,
+        currentForms: result.currentForms,
+      });
+    }
+  });
+};
 
 /** 注册/卸除结果 → 设置页操作结果（用户视角消息；模块内已留 debug 痕）。 */
 const toCliEntryOperationResult = (
@@ -304,6 +346,8 @@ protocol.registerSchemesAsPrivileged([
 
 void app.whenReady().then(async () => {
   reportDesktopE2EEvent({ type: "app-ready" });
+  // shim 自动自愈（spec §3 / CLI-031）：不阻塞启动主链，结果与失败均落 main.log。
+  healCliEntryShims();
   if (process.platform !== "darwin") {
     try {
       Menu.setApplicationMenu(null);
