@@ -26,8 +26,9 @@ import { CLI_USAGE_TEXT, parseCliArgs } from "./cli-arg-parser.cjs";
  *   task.get 响应形状不含产物，故终态结果经 task.wait 命令承载）。
  * - --timeout 缺省不设时限（内部通信治理：不设超时误杀长任务）；到期输出超时错误、
  *   退出码 1，运行域任务不受影响继续执行；轮询途中连接失败一律 not_running。
- * - generate --wait：受理成功拿到任务 id 列表后轮询至全部终态，逐任务取终态与产物，
- *   部分失败逐任务如实输出（CLI-009），不整体掩盖。
+ * - generate --wait：受理成功即时输出受理回执（stderr，等待 flush 落定，CLI-026），拿到
+ *   任务 id 列表后轮询至全部终态，逐任务取终态与产物，部分失败逐任务如实输出（CLI-009），
+ *   不整体掩盖。
  *
  * 禁止项（spec §13）：生成提交不自动重试（提交受理非幂等，传输层失败原样报错）；
  * CLI 不自动启动应用；连接失败一律按 not_running 处理，发现文件仅是线索非在役判据（CLI-004）。
@@ -40,6 +41,14 @@ export interface CliClientDeps {
   fetchImpl?: typeof fetch;
   /** 任务等待轮询间隔毫秒；生产 2000（spec §5.4），测试注入小值。 */
   pollIntervalMs?: number;
+  /**
+   * 受理回执即时写出通道（spec §5.4 / CLI-026）：generate --wait 受理成功后、轮询开始前
+   * 以完整回执文本调用一次，调用方必须等待落定（flush 回调到达）再继续轮询——等待中途
+   * 进程死亡时调用方至少拿到已受理的批次与任务标识，避免盲目重提造成重复任务。回执属
+   * 进度信息走 stderr（stdout 是 --json 数据契约通道，只承载最终结果）；生产由
+   * runCliClientMain 注入 writeCliOutput 序列，缺省不输出（保持纯函数返回值语义）。
+   */
+  emitWaitProgress?: (text: string) => Promise<void>;
 }
 
 export interface CliClientRunResult {
@@ -333,9 +342,11 @@ const runTaskWait = async (
 };
 
 /**
- * generate --wait：受理成功后轮询全部任务至终态，逐任务取终态与产物资产，
- * 组装完整 generate 响应（部分失败逐任务如实输出，CLI-009）。
- * generate 无 --timeout 参数：默认不设时限（内部通信治理）。
+ * generate --wait：受理成功后先即时写出受理回执并等待落定（spec §5.4 / CLI-026），再轮询
+ * 全部任务至终态，逐任务取终态与产物资产，组装完整 generate 响应（部分失败逐任务如实输出，
+ * CLI-009）。generate 无 --timeout 参数：默认不设时限（内部通信治理）。
+ * 回执通道为 stderr：stdout 是 --json 数据契约通道只承载最终结果；--json 模式回执为与受理
+ * 响应同形的 JSON 对象（消费方可按同一契约解析），人读模式为简要文本。
  */
 const runGenerateWait = async (
   fetchImpl: typeof fetch,
@@ -344,7 +355,13 @@ const runGenerateWait = async (
   request: Extract<CliCommandRequest, { command: "generate" }>,
   acceptance: Extract<CliCommandSuccessResponse, { command: "generate" }>,
   pollIntervalMs: number,
+  emitWaitProgress?: (text: string) => Promise<void>,
 ): Promise<CliClientRunResult> => {
+  if (emitWaitProgress !== undefined) {
+    // 受理回执即时写出并等待 flush 完成（CLI-026）；await 到达即 writeCliOutput 回调已触发。
+    const receipt = json ? `${JSON.stringify(acceptance, null, 2)}\n` : `${renderHumanSuccess(acceptance)}\n`;
+    await emitWaitProgress(receipt);
+  }
   const taskIds = acceptance.tasks.map((task) => task.task_id);
   const taskResults: Extract<CliCommandSuccessResponse, { command: "generate" }>["task_results"] = [];
   for (const taskId of taskIds) {
@@ -415,7 +432,15 @@ export const runCliClient = async (argv: readonly string[], deps: CliClientDeps 
     outcome.response.task_results.length === 0
   ) {
     // generate --wait：受理成功（task_results 为空 = 未带终态），客户端继续轮询至全部终态。
-    return runGenerateWait(fetchImpl, discovery, parsed.json, parsed.request, outcome.response, pollIntervalMs);
+    return runGenerateWait(
+      fetchImpl,
+      discovery,
+      parsed.json,
+      parsed.request,
+      outcome.response,
+      pollIntervalMs,
+      deps.emitWaitProgress,
+    );
   }
   return describeSendOutcome(outcome, parsed.json);
 };

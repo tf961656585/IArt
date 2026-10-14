@@ -2,9 +2,9 @@
 // @spec: CLI-016
 //
 // 命令入口注册模块测试（spec docs/integrations/CLI与本地Agent集成.md §3/§8）：
-// shim 注入 --cli（macOS 单 sh 形态；Windows 双形态——无扩展名 iart 服务 POSIX 风格 shell、
-// iart.cmd 服务 cmd/PowerShell）、写入目标目录可注入（临时目录）、
-// 幂等三态（created/overwritten/noop）、多形态聚合（注册/状态/卸除）、
+// shim 注入 --cli 与启动前清除 ELECTRON_RUN_AS_NODE（macOS 单 sh 形态；Windows 双形态——
+// 无扩展名 iart 服务 POSIX 风格 shell、iart.cmd 服务 cmd/PowerShell）、写入目标目录可注入
+// （临时目录）、幂等三态（created/overwritten/noop）、多形态聚合（注册/状态/卸除）、
 // 卸除仅删本应用 shim（不删同名他物）、状态三态查询。
 import { createRequire } from "node:module";
 import { mkdtempSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -74,7 +74,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
     expect(result.entryPath).toBe(entryPath);
     expect(existsSync(entryPath)).toBe(true);
     const content = readFileSync(entryPath, "utf8");
-    expect(content).toBe(`#!/bin/sh\nexec "${APP_EXEC}" --cli "$@"\n`);
+    expect(content).toBe(`#!/bin/sh\nunset ELECTRON_RUN_AS_NODE\nexec "${APP_EXEC}" --cli "$@"\n`);
     expect(content).toContain("--cli");
     expect((statSync(entryPath).mode & 0o777)).toBe(0o755);
   });
@@ -92,7 +92,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
     const result = await registration.registerEntry();
     expect(result.ok).toBe(true);
     const content = readFileSync(join(targetDir, "iart"), "utf8");
-    expect(content).toBe(`#!/bin/sh\nexec "${electronBin}" "${appPath}" --cli "$@"\n`);
+    expect(content).toBe(`#!/bin/sh\nunset ELECTRON_RUN_AS_NODE\nexec "${electronBin}" "${appPath}" --cli "$@"\n`);
   });
 
   it("幂等：重复注册 no-op；内容被改动后重注册覆盖（接管 iart 名字）", async () => {
@@ -156,7 +156,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
 
     const cmdPath = join(targetDir, "iart.cmd");
     expect(existsSync(cmdPath)).toBe(true);
-    expect(readFileSync(cmdPath, "utf8")).toBe(`@"${appExec}" --cli %*\r\n`);
+    expect(readFileSync(cmdPath, "utf8")).toBe(`@set "ELECTRON_RUN_AS_NODE="\r\n@"${appExec}" --cli %*\r\n`);
 
     const shPath = join(targetDir, "iart");
     expect(existsSync(shPath)).toBe(true);
@@ -166,7 +166,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
     expect(shContent).not.toContain("\\");
     expect(shContent).not.toContain("\r");
     expect(shContent.endsWith("\n")).toBe(true);
-    expect(shContent).toBe(`#!/bin/sh\nexec "C:/Program Files/IARTStudio/IARTStudio.exe" --cli "$@"\n`);
+    expect(shContent).toBe(`#!/bin/sh\nunset ELECTRON_RUN_AS_NODE\nexec "C:/Program Files/IARTStudio/IARTStudio.exe" --cli "$@"\n`);
 
     const status = await registration.getEntryStatus();
     expect(status).toMatchObject({ supported: true, registered: true, state: "registered" });
@@ -181,22 +181,23 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
     const spaceExec = "C:\\Program Files\\IART Studio\\IARTStudio.exe";
     await makeRegistration({ targetDir: spaceDir, platform: "win32", appExecPath: spaceExec }).registerEntry();
     expect(readFileSync(join(spaceDir, "iart"), "utf8")).toBe(
-      `#!/bin/sh\nexec "C:/Program Files/IART Studio/IARTStudio.exe" --cli "$@"\n`,
+      `#!/bin/sh\nunset ELECTRON_RUN_AS_NODE\nexec "C:/Program Files/IART Studio/IARTStudio.exe" --cli "$@"\n`,
     );
 
     const dollarDir = join(tempRoot, "win-escape-dollar");
     const dollarExec = "C:\\Users\\dev$1\\IARTStudio\\IARTStudio.exe";
     await makeRegistration({ targetDir: dollarDir, platform: "win32", appExecPath: dollarExec }).registerEntry();
     expect(readFileSync(join(dollarDir, "iart"), "utf8")).toBe(
-      `#!/bin/sh\nexec "C:/Users/dev\\$1/IARTStudio/IARTStudio.exe" --cli "$@"\n`,
+      `#!/bin/sh\nunset ELECTRON_RUN_AS_NODE\nexec "C:/Users/dev\\$1/IARTStudio/IARTStudio.exe" --cli "$@"\n`,
     );
-    expect(readFileSync(join(dollarDir, "iart.cmd"), "utf8")).toBe(`@"${dollarExec}" --cli %*\r\n`);
+    expect(readFileSync(join(dollarDir, "iart.cmd"), "utf8")).toBe(`@set "ELECTRON_RUN_AS_NODE="\r\n@"${dollarExec}" --cli %*\r\n`);
   });
 
-  it("Windows 迁移：存量仅内容匹配的 iart.cmd → 状态 modified；注册补建 sh 形态、cmd 内容跳过", async () => {
+  it("Windows 迁移：存量旧内容 iart.cmd → 状态 modified；注册补建 sh 形态、cmd 内容被覆盖升级", async () => {
     const targetDir = join(tempRoot, "win-migrate");
     mkdirSync(targetDir, { recursive: true });
     const appExec = "C:\\Apps\\IARTStudio\\IARTStudio.exe";
+    // 存量 shim 为旧版内容（无 ELECTRON_RUN_AS_NODE 清除语句）：重注册按内容不一致覆盖自愈（CLI-024）
     const legacyCmdContent = `@"${appExec}" --cli %*\r\n`;
     writeFileSync(join(targetDir, "iart.cmd"), legacyCmdContent, { encoding: "utf8" });
 
@@ -209,9 +210,11 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
 
     const result = await registration.registerEntry();
     expect(result).toMatchObject({ ok: true, action: "created" });
-    expect(readFileSync(join(targetDir, "iart.cmd"), "utf8")).toBe(legacyCmdContent);
+    expect(readFileSync(join(targetDir, "iart.cmd"), "utf8")).toBe(
+      `@set "ELECTRON_RUN_AS_NODE="\r\n@"${appExec}" --cli %*\r\n`,
+    );
     expect(readFileSync(join(targetDir, "iart"), "utf8")).toBe(
-      `#!/bin/sh\nexec "C:/Apps/IARTStudio/IARTStudio.exe" --cli "$@"\n`,
+      `#!/bin/sh\nunset ELECTRON_RUN_AS_NODE\nexec "C:/Apps/IARTStudio/IARTStudio.exe" --cli "$@"\n`,
     );
     expect(await registration.getEntryStatus()).toMatchObject({
       supported: true,
@@ -222,8 +225,8 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
 
   it("Windows 状态聚合：双全等 registered、双缺失 missing、缺件或单侧内容不符 modified", async () => {
     const appExec = "C:\\Apps\\IARTStudio\\IARTStudio.exe";
-    const cmdContent = `@"${appExec}" --cli %*\r\n`;
-    const shContent = `#!/bin/sh\nexec "C:/Apps/IARTStudio/IARTStudio.exe" --cli "$@"\n`;
+    const cmdContent = `@set "ELECTRON_RUN_AS_NODE="\r\n@"${appExec}" --cli %*\r\n`;
+    const shContent = `#!/bin/sh\nunset ELECTRON_RUN_AS_NODE\nexec "C:/Apps/IARTStudio/IARTStudio.exe" --cli "$@"\n`;
 
     const bothMissing = makeRegistration({
       targetDir: join(tempRoot, "win-status-missing"),

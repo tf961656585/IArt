@@ -94,7 +94,8 @@ description: |
 - `--count` 缺省 1，范围 1–10。
 - `--ref` 引用**已存在**的资产（id 来源：`asset list`（可 `--query` 按文件名/提示词搜）、`canvas nodes list` 的 `asset_id`，或用户从画布右键菜单「复制素材 ID」贴给你的 id；同一内容出现多个 id 时任一等效，`asset get` 的 `equivalent_asset_ids` 可核对）。
 - `--arg` 的参数名与取值域以 `model get` 的 `parameter_schema` 为准，**不要猜**。
-- `--wait` 轮询到全部任务终态，逐任务输出终态与产物。
+- `--wait` 先在 stderr 即时输出受理回执（批次与任务标识，见下），再轮询到全部任务终态，
+  逐任务输出终态与产物；等待中途进程死亡时凭回执改用 `task wait` 恢复观测，**不要盲目重提**（会创建重复任务）。
 
 ### 通用规则
 
@@ -117,7 +118,8 @@ description: |
 读结果一律加 `--json`（输出为机器可读 JSON，错误形如
 `{"ok":false,"error":{"code":"...","message":"..."}}`）：
 
-- **受理回执**（generate 不带 `--wait`）：`{ ok, batch_id, tasks: [{task_id, task_index}] }`。
+- **受理回执**（generate 不带 `--wait`；`--wait` 时也先经 **stderr** 即时输出一次再开始等待）：
+  `{ ok, batch_id, tasks: [{task_id, task_index}] }`。stdout 是最终结果的数据通道，进度信息走 stderr——解析最终结果只读 stdout。
 - **终态产物**（`generate --wait` 的 `task_results[]` / `task wait` 的 `task_result`）：
   每项 `{ task: {taskId, status, errorMessage, ...}, assets: [{ local_file_path, asset: {assetId, mediaType, ...} }] }`。
   `local_file_path` 是产物媒体文件的**绝对路径**，可直接读取展示给用户。

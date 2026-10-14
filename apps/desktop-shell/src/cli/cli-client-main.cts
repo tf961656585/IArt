@@ -23,7 +23,14 @@ export const runCliClientMain = async (
   argv: readonly string[],
   streams: CliClientMainStreams = { stdout: process.stdout, stderr: process.stderr },
 ): Promise<number> => {
-  const result = await runCliClient(argv);
+  // 受理回执即时写出接线（spec §5.4 / CLI-026）：runGenerateWait 在受理响应返回后、轮询
+  // 开始前调用 emitWaitProgress 并 await——经 writeCliOutputCatching 落到 stderr（回执属
+  // 进度信息，stdout 是 --json 数据契约通道只承载最终结果），flush 完成才继续轮询。
+  const result = await runCliClient(argv, {
+    emitWaitProgress: async (text: string) => {
+      await writeCliOutputCatching(streams.stderr, text);
+    },
+  });
   // 输出投递失败不改变退出码（命令已执行；管道关闭等传输层失败留痕后降级继续）。
   if (result.stdout.length > 0) {
     await writeCliOutputCatching(streams.stdout, `${result.stdout}\n`);

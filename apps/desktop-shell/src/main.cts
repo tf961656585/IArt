@@ -17,8 +17,21 @@ import { prepareCliStdio, writeCliOutput } from "./cli/cli-console-attach.cjs";
  *
  * GUI 模式经条件 require 加载 desktop-shell-bootstrap，保持既有「加载即执行」的
  * 模块加载语义（集成测试依赖 main.cjs → bootstrap.cjs 的同步副作用链）。
+ *
+ * GPU 防御（spec §4.1 / CLI-025）：CLI 分支不渲染任何界面，三层禁用 GPU（disable-gpu +
+ * disable-software-rasterizer + disableHardwareAcceleration），防止无 GPU 环境下 Chromium
+ * GPU 进程初始化失败的 FATAL 杀死等待类命令；开关只在本分支注入，GUI 主链不沾染。
  */
 if (resolveLaunchMode(process.argv) === "cli") {
+  // CLI 模式禁用 GPU 与软件光栅化（spec §4.1 / CLI-025）：CLI 不渲染任何界面，但 Chromium
+  // browser 进程照常初始化并拉起 GPU 进程；无 GPU/容器/远程会话环境下 GPU 进程初始化失败
+  // 触发 Chromium LOG(FATAL)「GPU process isn't usable. Goodbye.」杀死整个进程——短命令
+  // 幸免，等待类轮询（task wait、generate --wait）全灭。三层防御（外部用户实测前两个
+  // switch 注入后一切正常，第三层兜底防回归）。开关必须在 app ready 前生效——本分支在模块
+  // 顶层执行，早于 ready。严禁把这些开关加到 GUI 主链（GUI 需要渲染）。
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("disable-software-rasterizer");
+  app.disableHardwareAcceleration();
   // dev 与打包 argv 形态不同：--cli 之后的参数全归 CLI 客户端
   const cliArgv = process.argv.slice(process.argv.indexOf("--cli") + 1);
   const cliStdio =

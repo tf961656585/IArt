@@ -7,13 +7,16 @@ import * as path from "node:path";
  * §8 设置页一键注册 / CLI-016 幂等）。
  *
  * 形态：在用户可达的 PATH 目录放置指向应用可执行文件的**等价 shim**（非裸 symlink）——
- * shim 注入 `--cli` 启动参数，保证经入口启动的一律是 CLI 客户端模式（launch-mode 分流判据）。
+ * shim 注入 `--cli` 启动参数，保证经入口启动的一律是 CLI 客户端模式（launch-mode 分流判据），
+ * 并在启动应用前清除 ELECTRON_RUN_AS_NODE（父环境含该变量时 Electron 退化为纯 Node 运行时，
+ * `--cli` 被 argv 解析拒绝；spec §3 / CLI-024）。
  * 平台 → 形态列表（列表首位恒为 sh）：
- * - macOS/Linux 等 sh 形态平台：`#!/bin/sh` + `exec "<app-exec>" [app 入口参数] --cli "$@"`，
- *   chmod 0755（一键注册支持面仅 macOS，Linux 不支持）；
+ * - macOS/Linux 等 sh 形态平台：`#!/bin/sh` + `unset ELECTRON_RUN_AS_NODE` + `exec "<app-exec>"
+ *   [app 入口参数] --cli "$@"`，chmod 0755（一键注册支持面仅 macOS，Linux 不支持）；
  * - Windows：sh + cmd 双形态。sh 形态 `iart`（无扩展名）服务 POSIX 风格 shell（Git Bash/MSYS
  *   等，经 PATH 发现；PowerShell/cmd 不消费该文件）；cmd 形态 `iart.cmd` 服务 cmd/PowerShell
- *   （解释器按扩展名经 PATHEXT 分派），内容 `@"<app-exec>" [app 入口参数] --cli %*`（CRLF）。
+ *   （解释器按扩展名经 PATHEXT 分派），内容 `set "ELECTRON_RUN_AS_NODE="` + `@"<app-exec>"
+ *   [app 入口参数] --cli %*`（CRLF）。
  * - sh 构造器两平台共用：路径先把 `\` 统一转为 `/`（sh 双引号内反斜杠是转义前缀，Windows
  *   路径保留反斜杠会改变路径语义且 POSIX 风格 shell 无法执行），再按 sh 双引号语义转义
  *   `$`、反引号与 `"`（阻止变量展开与命令替换）；posix 路径无反斜杠，转换恒等。
@@ -112,7 +115,15 @@ const quoteForSh = (value: string): string => {
 /** cmd 双引号包裹：cmd 无嵌套双引号转义，病态路径不支撑（原样包裹，反斜杠路径原样保留）。 */
 const quoteForCmd = (value: string): string => `"${value}"`;
 
-/** 构造单形态 shim 内容（注册与状态比对共用同一事实，内容漂移即 modified）。 */
+/**
+ * shim 启动前清除 ELECTRON_RUN_AS_NODE（spec §3 / CLI-024）：父环境含该变量（agent harness
+ * 常见形态）时，Electron 二进制退化为纯 Node 运行时（Electron 文档化行为），`--cli` 被 Node
+ * argv 解析拒绝（bad option，exit 9）。双形态必须同步清除：
+ * - sh 形态：exec 前 `unset ELECTRON_RUN_AS_NODE`；
+ * - cmd 形态：调用前 `set "ELECTRON_RUN_AS_NODE="`（引号形态防尾随空格；等号后不带空格，
+ *   cmd 的 `set VAR=` 即取消定义）。
+ * 既有幂等机制（内容一致跳过、不一致覆盖）使升级后重注册即自愈改写存量 shim。
+ */
 export const buildCliEntryShimContent = (deps: {
   appExecPath: string;
   appExecArgs: readonly string[];
@@ -120,10 +131,10 @@ export const buildCliEntryShimContent = (deps: {
 }): string => {
   if (deps.form === "cmd") {
     const quoted = [deps.appExecPath, ...deps.appExecArgs].map(quoteForCmd).join(" ");
-    return `@${quoted} --cli %*\r\n`;
+    return `@set "ELECTRON_RUN_AS_NODE="\r\n@${quoted} --cli %*\r\n`;
   }
   const quoted = [deps.appExecPath, ...deps.appExecArgs].map(quoteForSh).join(" ");
-  return `#!/bin/sh\nexec ${quoted} --cli "$@"\n`;
+  return `#!/bin/sh\nunset ELECTRON_RUN_AS_NODE\nexec ${quoted} --cli "$@"\n`;
 };
 
 export const createCliEntryRegistration = (
@@ -148,11 +159,11 @@ export const createCliEntryRegistration = (
 
   /**
    * 手动注册指引命令（一键注册权限失败时的可复制等价动作）：与写入的 sh shim 同一形态
-   * （shebang + exec + --cli），printf 单引号格式串保护内嵌双引号路径。
+   * （shebang + unset + exec + --cli，CLI-024），printf 单引号格式串保护内嵌双引号路径。
    */
   const manualInstallCommand = (): string => {
     const quoted = [options.appExecPath, ...options.appExecArgs].map(quoteForSh).join(" ");
-    return `printf '#!/bin/sh\\nexec ${quoted} --cli "$@"\\n' | sudo tee ${entryPath} && sudo chmod +x ${entryPath}`;
+    return `printf '#!/bin/sh\\nunset ELECTRON_RUN_AS_NODE\\nexec ${quoted} --cli "$@"\\n' | sudo tee ${entryPath} && sudo chmod +x ${entryPath}`;
   };
 
   const readEntryFileContent = async (filePath: string): Promise<string | null> => {
