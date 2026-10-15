@@ -48,6 +48,7 @@ import {
   createCliEntryRegistration,
   resolveDefaultCliEntryTargetDir,
 } from "./cli/cli-entry-registration.cjs";
+import { healCliEntryResource } from "./cli/cli-entry-resource-heal.cjs";
 import { appendMainLog } from "./main-log.cjs";
 import { buildCliStatusDto } from "./cli/cli-status-snapshot.cjs";
 import { resolveDefaultDiscoveryFilePath } from "./cli/cli-discovery.cjs";
@@ -146,6 +147,20 @@ const cliProxyDispatcher = createCliProxyDispatcher({
 });
 
 /**
+ * 打包态且 resources 目录可用判据（CLI 入口脚本解析与入口资源自愈共用；resourcesPath 需为
+ * 字符串——纯 Node 环境（集成测试 cjs-mock 等价物）isPackaged 可能为 true 而该全局缺失，
+ * 此时按 dev 形态处理）。
+ */
+const isPackagedResourcesAvailable = (): boolean => {
+  const resourcesPath = process.resourcesPath;
+  return (
+    app.isPackaged === true &&
+    typeof resourcesPath === "string" &&
+    resourcesPath.length > 0
+  );
+};
+
+/**
  * CLI 轻量入口脚本绝对路径（spec §3 / CLI-025：shim 以 ELECTRON_RUN_AS_NODE=1 以纯 Node
  * 运行该脚本，不注入 --cli、不进入 browser 进程）。打包态经 electron-builder extraResources
  * 落在 app.asar 外（`<resources>/cli/cli-node-entry.cjs`，纯 Node 启动 asar 内文件未经实测、
@@ -154,10 +169,8 @@ const cliProxyDispatcher = createCliProxyDispatcher({
  * （2026-10-07 实锤），shim 内路径必须绝对）。
  */
 const resolveCliNodeEntryScriptPath = (): string => {
-  // resourcesPath 仅在 Electron 运行时存在；打包判据同时要求它为字符串——纯 Node 环境
-  // （集成测试 cjs-mock 等价物）isPackaged 可能为 true 而 resourcesPath 缺失，落到 dev 解析。
-  const resourcesPath = process.resourcesPath;
-  if (app.isPackaged === true && typeof resourcesPath === "string" && resourcesPath.length > 0) {
+  if (isPackagedResourcesAvailable()) {
+    const resourcesPath = process.resourcesPath;
     return path.join(resourcesPath, "cli", "cli-node-entry.cjs");
   }
   const mainEntry = typeof process.argv[1] === "string" && process.argv[1].length > 0 ? path.resolve(process.argv[1]) : "";
@@ -199,6 +212,48 @@ const healCliEntryShims = (): void => {
       });
     }
   });
+};
+
+/**
+ * CLI 入口资源自愈（spec §3/§8 / CLI-036，2026-10-15 批次）：打包态应用启动时检测
+ * `<resources>/cli/cli-node-entry.cjs` 是否缺位/错位（0.6.8 实锤：extraResources 语义坑把
+ * 入口拷成名为 cli 的无扩展名文件，CLI 全功能 MODULE_NOT_FOUND，重新注册与重启均无法自助
+ * 修复），错位先改名腾位（保留现场）再从 app.asar 内编译产物恢复。dev 形态不适用（门控与
+ * resolveCliNodeEntryScriptPath 同一打包判据）。fire-and-forget，结果与失败均落 main.log，
+ * 失败不阻断 GUI 启动（设置页重新注册链有入口资源探测兜底，见 cli-entry-registration）。
+ */
+const healPackagedCliEntryResource = (): void => {
+  if (!isPackagedResourcesAvailable()) return;
+  const resourcesPath = process.resourcesPath;
+  void healCliEntryResource({
+    resourcesDir: resourcesPath,
+    asarEntrySourcePath: path.join(
+      app.getAppPath(),
+      "apps",
+      "desktop-shell",
+      "dist",
+      "cli",
+      "cli-node-entry.cjs",
+    ),
+  }).then(
+    (result) => {
+      if (!result.ok) {
+        appendMainLog("warn", "[cli-entry] 入口资源自愈失败（不阻断启动）", { detail: result.message });
+        return;
+      }
+      if (result.outcome !== "healthy") {
+        appendMainLog("info", "[cli-entry] 入口资源自愈完成", {
+          outcome: result.outcome,
+          corruptBackupPath: result.corruptBackupPath,
+        });
+      }
+    },
+    (error: unknown) => {
+      appendMainLog("warn", "[cli-entry] 入口资源自愈异常（不阻断启动）", {
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
 };
 
 /** 注册/卸除结果 → 设置页操作结果（用户视角消息；模块内已留 debug 痕）。 */
@@ -350,6 +405,9 @@ protocol.registerSchemesAsPrivileged([
 
 void app.whenReady().then(async () => {
   reportDesktopE2EEvent({ type: "app-ready" });
+  // CLI 入口资源自愈（spec §3/§8 / CLI-036）：先于 shim 自愈（资源是 shim 指向的更深依赖），
+  // 不阻塞启动主链，结果与失败均落 main.log。
+  healPackagedCliEntryResource();
   // shim 自动自愈（spec §3 / CLI-031）：不阻塞启动主链，结果与失败均落 main.log。
   healCliEntryShims();
   if (process.platform !== "darwin") {

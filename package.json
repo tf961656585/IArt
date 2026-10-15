@@ -1,7 +1,7 @@
 {
   "name": "iartstudio-frontend",
   "private": true,
-  "version": "0.6.8",
+  "version": "0.6.9",
   "engines": {
     "node": ">=22.0.0"
   },
@@ -269,7 +269,7 @@
       },
       {
         "from": "apps/desktop-shell/dist/cli/cli-node-entry.cjs",
-        "to": "cli"
+        "to": "cli/cli-node-entry.cjs"
       }
     ],
     "directories": {

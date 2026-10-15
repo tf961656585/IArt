@@ -222,6 +222,20 @@ test('packaged native runtime 显式携带 nested node_modules 闭包', () => {
   assert.equal(Boolean(nativeRuntimeNodeModules), true, '缺少 better-sqlite3 electron runtime node_modules 复制规则');
 });
 
+// CLI-036：from 为单文件、to 为不带尾斜杠的名字时，electron-builder 把 to 当目标文件名
+// （0.6.8 实锤：入口被拷成名为 cli 的无扩展名文件，CLI 全功能 MODULE_NOT_FOUND）。
+// to 必须写目标完整路径 cli/cli-node-entry.cjs；产物面校验由 verify:packaged-native-runtimes 承载。
+test('extraResources 的 CLI 入口条目必须以完整目标路径落盘（CLI-036）', () => {
+  const extraResources = packageJson.build?.extraResources ?? [];
+  const cliEntry = extraResources.find((entry) => entry?.from === 'apps/desktop-shell/dist/cli/cli-node-entry.cjs');
+  assert.equal(Boolean(cliEntry), true, '缺少 CLI 入口脚本 extraResources 复制规则');
+  assert.equal(
+    cliEntry?.to,
+    'cli/cli-node-entry.cjs',
+    'CLI 入口 extraResources 的 to 必须是完整目标路径 cli/cli-node-entry.cjs（裸目录名会被当作目标文件名造成资源错位）',
+  );
+});
+
 test('诊断入口不替代硬门禁主链', () => {
   assert.equal(scripts['diagnose:gates'], 'node ./tooling/scripts/diagnose-gates.mjs');
   assert.equal(

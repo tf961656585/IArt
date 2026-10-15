@@ -36,7 +36,24 @@ const createRuntime = (rootDir, productDir, options = {}) => {
   if (options.koffi !== false) {
     createKoffiRuntime(resourcesDir, { platform: process.platform, arch: process.arch });
   }
+  createCliEntryResource(resourcesDir, options.cliEntry ?? 'ok');
   return runtimeDir;
+};
+
+// CLI 轻量入口资源（CLI-036）：默认按正确布局落 resources/cli/cli-node-entry.cjs 常规文件；
+// mode: 'ok' | 'missing' | 'misplaced'（名为 cli 的无扩展名文件——0.6.8 错位形态）| 'empty'。
+const createCliEntryResource = (resourcesDir, mode) => {
+  const entryPath = __test_only__.cliEntryResourcePath(resourcesDir);
+  if (mode === 'missing') {
+    return entryPath;
+  }
+  if (mode === 'misplaced') {
+    fs.writeFileSync(path.join(resourcesDir, 'cli'), 'misplaced-entry-content');
+    return entryPath;
+  }
+  fs.mkdirSync(path.dirname(entryPath), { recursive: true });
+  fs.writeFileSync(entryPath, mode === 'empty' ? '' : '#!/usr/bin/env node\n/* cli entry */\n');
+  return entryPath;
 };
 
 // koffi（Windows CLI 控制台挂接 FFI）打包布局：主包 + 平台预编译包（<平台>_<架构>/koffi.node）。
@@ -172,6 +189,83 @@ test('verifyPackagedNativeRuntimes 要求 packaged resources 携带 sharp runtim
   assert.equal(result.ok, false);
   assert.match(result.issues[0], /缺少 sharp packaged runtime/);
   assert.match(result.issues[0], /app\.asar\.unpacked/);
+});
+
+test('verifyPackagedNativeRuntimes CLI 入口资源布局正确时不产生该面 issue（CLI-036 正向）', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'packaged-runtime-cli-ok-'));
+  // sharp 缺失制造一个已知失败面（ffmpeg 加载测试需真实二进制，测试环境不可得），
+  // 断言 CLI 入口资源不在 issue 清单中即布局正确。
+  createRuntimeWithoutSharp(rootDir, 'mac/IARTStudio.app', {
+    dependencies: ['bindings'],
+    installedDependencies: ['bindings'],
+  });
+
+  const result = __test_only__.verifyPackagedNativeRuntimes({
+    rootDir,
+    electronLaunch: { command: 'electron', useShell: false },
+    runner: () => ({ status: 0, stdout: 'ok' }),
+  });
+
+  assert.equal(result.ok, false);
+  const allIssues = result.issues.join('\n');
+  assert.doesNotMatch(allIssues, /CLI 入口资源/);
+  assert.match(allIssues, /缺少 sharp packaged runtime/);
+});
+
+test('verifyPackagedNativeRuntimes CLI 入口资源缺失时报红（CLI-036）', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'packaged-runtime-cli-missing-'));
+  createRuntime(rootDir, 'mac/IARTStudio.app', {
+    dependencies: ['bindings'],
+    installedDependencies: ['bindings'],
+    cliEntry: 'missing',
+  });
+
+  const result = __test_only__.verifyPackagedNativeRuntimes({
+    rootDir,
+    electronLaunch: { command: 'electron', useShell: false },
+    runner: () => ({ status: 0, stdout: 'ok' }),
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.issues[0], /缺少 CLI 入口资源/);
+  assert.match(result.issues[0], /cli-node-entry\.cjs/);
+});
+
+test('verifyPackagedNativeRuntimes 名为 cli 的无扩展名文件（0.6.8 错位形态）报红（CLI-036）', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'packaged-runtime-cli-misplaced-'));
+  createRuntime(rootDir, 'mac/IARTStudio.app', {
+    dependencies: ['bindings'],
+    installedDependencies: ['bindings'],
+    cliEntry: 'misplaced',
+  });
+
+  const result = __test_only__.verifyPackagedNativeRuntimes({
+    rootDir,
+    electronLaunch: { command: 'electron', useShell: false },
+    runner: () => ({ status: 0, stdout: 'ok' }),
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.issues[0], /CLI 入口资源错位/);
+  assert.match(result.issues[0], /是文件而非目录/);
+});
+
+test('verifyPackagedNativeRuntimes CLI 入口资源空文件报红（CLI-036）', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'packaged-runtime-cli-empty-'));
+  createRuntime(rootDir, 'mac/IARTStudio.app', {
+    dependencies: ['bindings'],
+    installedDependencies: ['bindings'],
+    cliEntry: 'empty',
+  });
+
+  const result = __test_only__.verifyPackagedNativeRuntimes({
+    rootDir,
+    electronLaunch: { command: 'electron', useShell: false },
+    runner: () => ({ status: 0, stdout: 'ok' }),
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.issues[0], /空文件/);
 });
 
 test('verifyPackagedNativeRuntimes 保留 sharp Electron isolated runner 的 stderr', () => {

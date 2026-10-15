@@ -1,11 +1,13 @@
 // @vitest-environment node
-// @spec: CLI-016, CLI-024, CLI-031
+// @spec: CLI-016, CLI-024, CLI-031, CLI-037
 //
 // 命令入口注册模块测试（spec docs/integrations/CLI与本地Agent集成.md §3/§8）：
 // shim 以 ELECTRON_RUN_AS_NODE=1 启动轻量入口脚本（不注入 --cli；macOS 单 sh 形态；Windows
 // 双形态——无扩展名 iart 服务 POSIX 风格 shell、iart.cmd 服务 cmd/PowerShell）、写入目标
 // 目录可注入（临时目录）、幂等三态（created/overwritten/noop）、多形态聚合（注册/状态/卸除）、
-// 卸除与自愈仅动本应用 shim（不碰同名他物）、状态三态查询、启动自愈分桶语义（CLI-031）。
+// 卸除与自愈仅动本应用 shim（不碰同名他物）、状态三态查询、启动自愈分桶语义（CLI-031）、
+// 注册前入口资源探测（CLI-037——shim 指向的入口脚本必须真实存在且是常规文件，缺位拦截
+// 注册并指引重启自愈/重装）。入口脚本路径以真实临时文件承载（探测按真实 fs stat）。
 import { createRequire } from "node:module";
 import { mkdtempSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,6 +43,7 @@ type RegistrationModule = {
     appExecPath: string;
     cliEntryScriptPath?: string;
     platform?: string;
+    probeEntryResource?: () => Promise<boolean>;
   }) => {
     registerEntry: () => Promise<RegisterResult>;
     unregisterEntry: () => Promise<UnregisterResult>;
@@ -53,25 +56,38 @@ const loadRegistrationModule = (): RegistrationModule =>
   requireDesktop(registrationEntry) as RegistrationModule;
 
 const APP_EXEC = "/Applications/IARTStudio.app/Contents/MacOS/IARTStudio";
-const CLI_ENTRY = "/Applications/IARTStudio.app/Contents/Resources/cli/cli-node-entry.cjs";
+
+/**
+ * 探测替身（仅内容形态类用例使用——Windows 风格路径在本机不可能真实存在，转义断言依赖
+ * 该路径原文；探测语义本体由「注册前入口资源探测（CLI-037）」组用缺省真实 stat 覆盖）。
+ */
+const probeAlwaysOk = async (): Promise<boolean> => true;
 
 const makeRegistration = (options: {
   targetDir: string;
   platform: string;
   cliEntryScriptPath?: string;
   appExecPath?: string;
+  probeEntryResource?: () => Promise<boolean>;
 }) =>
   loadRegistrationModule().createCliEntryRegistration({
     targetDir: options.targetDir,
     appExecPath: options.appExecPath ?? APP_EXEC,
-    cliEntryScriptPath: options.cliEntryScriptPath ?? CLI_ENTRY,
+    cliEntryScriptPath: options.cliEntryScriptPath ?? cliEntryScriptFile,
     platform: options.platform,
+    probeEntryResource: options.probeEntryResource,
   });
 
 let tempRoot = "";
+/** 默认入口脚本替身：真实存在的临时文件（CLI-037 探测按真实 fs stat，路径必须可达）。 */
+let cliEntryScriptFile = "";
 
 beforeAll(() => {
   tempRoot = mkdtempSync(join(tmpdir(), "cli-entry-registration-"));
+  const entryResourceDir = join(tempRoot, "entry-resource");
+  mkdirSync(entryResourceDir, { recursive: true });
+  cliEntryScriptFile = join(entryResourceDir, "cli-node-entry.cjs");
+  writeFileSync(cliEntryScriptFile, "/* cli entry stub */", "utf8");
 });
 
 describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
@@ -85,7 +101,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
     expect(result.entryPath).toBe(entryPath);
     expect(existsSync(entryPath)).toBe(true);
     const content = readFileSync(entryPath, "utf8");
-    expect(content).toBe(`#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${APP_EXEC}" "${CLI_ENTRY}" "$@"\n`);
+    expect(content).toBe(`#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${APP_EXEC}" "${cliEntryScriptFile}" "$@"\n`);
     expect(content).not.toContain("--cli");
     expect((statSync(entryPath).mode & 0o777)).toBe(0o755);
   });
@@ -93,7 +109,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
   it("dev 形态：shim 指向 Electron 可执行文件 + 轻量入口脚本（run-as-node 纯 Node 形态）", async () => {
     const targetDir = join(tempRoot, "dev-bin");
     const electronBin = "/repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron";
-    const entryScript = "/repo/apps/desktop-shell/dist/cli/cli-node-entry.cjs";
+    const entryScript = cliEntryScriptFile;
     const registration = makeRegistration({
       targetDir,
       platform: "darwin",
@@ -167,6 +183,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
       platform: "win32",
       appExecPath: appExec,
       cliEntryScriptPath: entryScript,
+      probeEntryResource: probeAlwaysOk,
     });
     const result = await registration.registerEntry();
     expect(result).toMatchObject({ ok: true, action: "created" });
@@ -205,6 +222,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
       platform: "win32",
       appExecPath: spaceExec,
       cliEntryScriptPath: spaceEntry,
+      probeEntryResource: probeAlwaysOk,
     }).registerEntry();
     expect(readFileSync(join(spaceDir, "iart"), "utf8")).toBe(
       `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "C:/Program Files/IART Studio/IARTStudio.exe" "C:/Program Files/IART Studio/resources/cli/cli-node-entry.cjs" "$@"\n`,
@@ -218,6 +236,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
       platform: "win32",
       appExecPath: dollarExec,
       cliEntryScriptPath: dollarEntry,
+      probeEntryResource: probeAlwaysOk,
     }).registerEntry();
     expect(readFileSync(join(dollarDir, "iart"), "utf8")).toBe(
       `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "C:/Users/dev\\$1/IARTStudio/IARTStudio.exe" "C:/Users/dev\\$1/IARTStudio/resources/cli/cli-node-entry.cjs" "$@"\n`,
@@ -241,6 +260,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
       platform: "win32",
       appExecPath: appExec,
       cliEntryScriptPath: entryScript,
+      probeEntryResource: probeAlwaysOk,
     });
     expect(await registration.getEntryStatus()).toMatchObject({
       supported: true,
@@ -282,6 +302,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
       platform: "win32",
       appExecPath: appExec,
       cliEntryScriptPath: entryScript,
+      probeEntryResource: probeAlwaysOk,
     });
     await bothOurs.registerEntry();
     expect(await bothOurs.getEntryStatus()).toMatchObject({ supported: true, registered: true, state: "registered" });
@@ -329,6 +350,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
       platform: "win32",
       appExecPath: appExec,
       cliEntryScriptPath: entryScript,
+      probeEntryResource: probeAlwaysOk,
     });
     await ours.registerEntry();
     expect(await ours.unregisterEntry()).toMatchObject({ ok: true, removed: true, reason: "removed" });
@@ -341,6 +363,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
       platform: "win32",
       appExecPath: appExec,
       cliEntryScriptPath: entryScript,
+      probeEntryResource: probeAlwaysOk,
     });
     await foreign.registerEntry();
     writeFileSync(join(foreignDir, "iart.cmd"), "# user own tool\r\n", { encoding: "utf8" });
@@ -477,5 +500,59 @@ describe("shim 自动自愈（CLI-031）", () => {
     const registration = makeRegistration({ targetDir: notADir, platform: "win32" });
     const result = await registration.healEntryShims();
     expect(result.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 注册前入口资源探测（CLI-037，spec §8：shim 指向的入口脚本缺位时拦截注册并指引重启自愈/
+// 重装；不静默注册注定失败的 shim）。本组用缺省真实 stat（路径注入即测试缝）。
+// ---------------------------------------------------------------------------
+
+describe("注册前入口资源探测（CLI-037）", () => {
+  it("入口脚本缺失：注册结构化失败，消息指引重启自愈/重装，不落任何 shim", async () => {
+    const targetDir = join(tempRoot, "probe-missing");
+    const missingEntry = join(tempRoot, "no-such-resource", "cli-node-entry.cjs");
+    const registration = makeRegistration({ targetDir, platform: "darwin", cliEntryScriptPath: missingEntry });
+    const result = await registration.registerEntry();
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unexpected");
+    expect(result.message).toContain("程序文件缺失或损坏");
+    expect(result.message).toContain("重启应用");
+    expect(result.message).toContain("重新安装");
+    expect(existsSync(join(targetDir, "iart"))).toBe(false);
+  });
+
+  it("错位形态（父级名位被文件占用 → stat ENOTDIR）：同样拦截注册", async () => {
+    const targetDir = join(tempRoot, "probe-misplaced");
+    // 0.6.8 错位形态：resources/cli 是文件（非目录），其子路径 stat 报 ENOTDIR
+    const misplacedRoot = join(tempRoot, "probe-misplaced-resources");
+    mkdirSync(misplacedRoot, { recursive: true });
+    writeFileSync(join(misplacedRoot, "cli"), "misplaced entry body", "utf8");
+    const registration = makeRegistration({
+      targetDir,
+      platform: "darwin",
+      cliEntryScriptPath: join(misplacedRoot, "cli", "cli-node-entry.cjs"),
+    });
+    const result = await registration.registerEntry();
+    expect(result.ok).toBe(false);
+    expect(existsSync(join(targetDir, "iart"))).toBe(false);
+  });
+
+  it("入口名位是目录（非常规文件）：拦截注册", async () => {
+    const targetDir = join(tempRoot, "probe-not-file");
+    const entryAsDir = join(tempRoot, "probe-entry-as-dir", "cli-node-entry.cjs");
+    mkdirSync(entryAsDir, { recursive: true });
+    const registration = makeRegistration({ targetDir, platform: "darwin", cliEntryScriptPath: entryAsDir });
+    const result = await registration.registerEntry();
+    expect(result.ok).toBe(false);
+    expect(existsSync(join(targetDir, "iart"))).toBe(false);
+  });
+
+  it("入口脚本真实存在（常规文件）：注册正常放行（探测不改变健康路径行为）", async () => {
+    const targetDir = join(tempRoot, "probe-healthy");
+    const registration = makeRegistration({ targetDir, platform: "darwin" });
+    const result = await registration.registerEntry();
+    expect(result).toMatchObject({ ok: true, action: "created" });
+    expect(existsSync(join(targetDir, "iart"))).toBe(true);
   });
 });

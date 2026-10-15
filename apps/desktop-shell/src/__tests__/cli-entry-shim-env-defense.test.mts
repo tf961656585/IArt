@@ -95,11 +95,14 @@ describe("shim 启动形态显式置位 ELECTRON_RUN_AS_NODE=1（CLI-024）", ()
 
   it("一键注册落盘 shim 与手动注册指引均含置位语句（同一内容事实）", async () => {
     const targetDir = join(tempRoot, "win-bin");
+    // 路径替身不可能在本机真实存在；本用例目的在 shim 落盘内容（CLI-024），探测替身放行
+    // （探测语义本体由 cli-entry-registration.test 的 CLI-037 组用真实 stat 覆盖）。
     const registration = loadRegistrationModule().createCliEntryRegistration({
       targetDir,
       appExecPath: WIN_EXEC,
       cliEntryScriptPath: WIN_ENTRY,
       platform: "win32",
+      probeEntryResource: async () => true,
     });
     const result = await registration.registerEntry();
     expect(result.ok).toBe(true);

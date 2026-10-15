@@ -4,7 +4,8 @@ import * as path from "node:path";
 
 /**
  * CLI 命令入口注册模块（spec docs/integrations/CLI与本地Agent集成.md §3 命令入口注册 /
- * §8 设置页一键注册 / CLI-016 幂等 / CLI-024 shim 置位 / CLI-031 shim 自愈）。
+ * §8 设置页一键注册 / CLI-016 幂等 / CLI-024 shim 置位 / CLI-031 shim 自愈 / CLI-037 注册
+ * 前入口资源探测）。
  *
  * 形态（2026-10-14 批次拍板翻转）：在用户可达的 PATH 目录放置指向应用可执行文件的**等价
  * shim**——shim 以 `ELECTRON_RUN_AS_NODE=1` 把应用可执行文件作为纯 Node 运行时启动 CLI
@@ -51,6 +52,15 @@ import * as path from "node:path";
 export const CLI_ENTRY_NAME_SH = "iart";
 export const CLI_ENTRY_NAME_CMD = "iart.cmd";
 
+/**
+ * 入口资源缺失/损坏时的注册失败消息（spec §8 / CLI-037）：shim 指向的轻量入口脚本缺位
+ * （如 0.6.8 打包配置错位把入口拷成名为 cli 的无扩展名文件）时，注册出的 shim 注定
+ * MODULE_NOT_FOUND——不静默注册注定失败的 shim，指引重启（启动自愈 CLI-036）或重装。
+ * 用户视角文案（ui-copy-check）：说处境与出路，不引入资源路径等实现细节。
+ */
+const CLI_ENTRY_RESOURCE_MISSING_MESSAGE =
+  "iart 命令依赖的程序文件缺失或损坏，暂时无法完成注册。请重启应用让它自动修复；若重启后仍出现此提示，请重新安装应用。";
+
 export type CliEntryPlatform = NodeJS.Platform;
 
 /** 入口 shim 形态：sh（shebang + exec，PATH 直接命中）与 cmd（.cmd 批处理，PATHEXT 分派）。 */
@@ -69,6 +79,13 @@ export interface CliEntryRegistrationDeps {
   cliEntryScriptPath: string;
   /** 平台；缺省 process.platform。 */
   platform?: CliEntryPlatform;
+  /**
+   * 入口资源探测（spec §8 / CLI-037）：注册前校验 shim 指向的轻量入口脚本真实可用。
+   * 缺省为按 cliEntryScriptPath 的真实 fs stat（存在且是常规文件；生产语义）；探测语义
+   * 本体由真实 fs 的专测覆盖（cli-entry-registration.test 的资源探测组），仅内容形态类
+   * 用例（Windows 风格路径转义等，路径不可能在本机真实存在）注入替身。
+   */
+  probeEntryResource?: () => Promise<boolean>;
 }
 
 /** 一键注册结果：action 区分 created/overwritten/noop（幂等三态，供诊断与 UI 消息）。 */
@@ -102,6 +119,33 @@ export type CliEntryHealResult =
 
 /** 平台是否支持一键注册（spec §3 目标目录分流；其余平台状态按 null 承载）。 */
 const isPlatformSupported = (platform: CliEntryPlatform): boolean => platform === "darwin" || platform === "win32";
+
+/**
+ * 入口资源探测的缺省实现（spec §8 / CLI-037）：shim 即将指向的轻量入口脚本必须真实存在
+ * 且是常规文件——缺失/错位（ENOTDIR：父级名位被文件占用，0.6.8 错位形态）或非文件形态
+ * 一律拦截注册；其余 stat 异常（权限等）资源状态未知，不拦截（写 shim 本身不依赖资源可
+ * 读），留 debug 痕。拦截时结构化失败并指引重启自愈/重装，不静默注册注定失败的 shim。
+ */
+const probeEntryResourceByStat = async (cliEntryScriptPath: string): Promise<boolean> => {
+  try {
+    const entryStat = await fs.promises.stat(cliEntryScriptPath);
+    if (entryStat.isFile()) return true;
+    console.debug("[cli-entry] 入口资源探测：入口脚本不是常规文件，注册拦截", { cliEntryScriptPath });
+    return false;
+  } catch (error: unknown) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR")
+    ) {
+      console.debug("[cli-entry] 入口资源探测：入口脚本缺失，注册拦截", { cliEntryScriptPath });
+      return false;
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    console.debug("[cli-entry] 入口资源探测异常，不拦截注册", { cliEntryScriptPath, detail });
+    return true;
+  }
+};
 
 /** 形态 → 入口文件名：sh 形态无扩展名（PATH 直接命中），cmd 形态靠扩展名让解释器分派。 */
 const ENTRY_FILE_NAME_BY_FORM: Record<CliEntryForm, string> = {
@@ -175,6 +219,8 @@ export const createCliEntryRegistration = (
   healEntryShims: () => Promise<CliEntryHealResult>;
 } => {
   const platform = options.platform ?? process.platform;
+  const entryResourceAvailable =
+    options.probeEntryResource ?? (async () => probeEntryResourceByStat(options.cliEntryScriptPath));
   const entries = entryForms(platform).map((form) => ({
     form,
     entryPath: path.join(options.targetDir, ENTRY_FILE_NAME_BY_FORM[form]),
@@ -236,6 +282,10 @@ export const createCliEntryRegistration = (
       if (!isPlatformSupported(platform)) {
         console.debug("[cli-entry] 平台不支持一键注册，跳过", { platform });
         return { ok: false, entryPath, message: unsupportedResult("register") };
+      }
+      // 入口资源探测（CLI-037）：资源缺位时注册出的 shim 注定失败，结构化拦截并指引自愈/重装。
+      if (!(await entryResourceAvailable())) {
+        return { ok: false, entryPath, message: CLI_ENTRY_RESOURCE_MISSING_MESSAGE };
       }
       try {
         let created = false;

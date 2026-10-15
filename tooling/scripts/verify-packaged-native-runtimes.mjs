@@ -26,6 +26,12 @@ const koffiPlatformPackageDir = (resourcesDir, platform, arch) =>
   path.join(resourcesDir, 'app.asar.unpacked', 'node_modules', '@koromix', `koffi-${platform}-${arch}`);
 const koffiNativeBinaryPath = (resourcesDir, platform, arch) =>
   path.join(koffiPlatformPackageDir(resourcesDir, platform, arch), `${platform}_${arch}`, 'koffi.node');
+// CLI 轻量入口资源（spec docs/integrations/CLI与本地Agent集成.md §3 / CLI-036）：必须以
+// resources/cli/cli-node-entry.cjs 常规文件形态存在（shim 以绝对路径指向它）。0.6.8 实锤：
+// extraResources 的 from 为单文件、to 为不带尾斜杠的名字时，electron-builder 把 to 当作
+// 目标文件名——文件被拷成名为 cli 的无扩展名文件（目录层级与扩展名丢失），CLI 全功能
+// MODULE_NOT_FOUND。此处按真实布局逐包校验，防同类错位再次流入产物。
+const cliEntryResourcePath = (resourcesDir) => path.join(resourcesDir, 'cli', 'cli-node-entry.cjs');
 const oneByOnePngBase64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
 
@@ -451,12 +457,62 @@ const verifyKoffiRuntime = ({ resourcesDir, expectedPlatform = process.platform,
   return { ok: issues.length === 0, issues };
 };
 
+// CLI 入口资源完整性：存在、是常规文件、可读、尺寸 > 0。
+const verifyCliEntryResource = ({ resourcesDir }) => {
+  const entryPath = cliEntryResourcePath(resourcesDir);
+  const cliDirPath = path.join(resourcesDir, 'cli');
+  let stat = null;
+  try {
+    stat = fs.statSync(entryPath);
+  } catch (cause) {
+    // 名为 cli 的文件吃掉目录位（Windows 同名文件与目录不能共存；POSIX 下对其子路径
+    // stat 报 ENOTDIR）——优先按错位形态指认，给出可行动的根因描述。
+    let misplaced = false;
+    try {
+      misplaced = !fs.statSync(cliDirPath).isDirectory();
+    } catch {
+      misplaced = false;
+    }
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    return {
+      ok: false,
+      issues: [
+        misplaced
+          ? `CLI 入口资源错位：resources/cli 是文件而非目录（extraResources 的 from 为单文件且 to 不带尾斜杠时，electron-builder 把 to 当目标文件名——0.6.8 实锤形态）: ${cliDirPath}`
+          : `缺少 CLI 入口资源（期望 resources/cli/cli-node-entry.cjs 常规文件）: ${entryPath} (${detail})`,
+      ],
+    };
+  }
+  if (!stat.isFile()) {
+    return {
+      ok: false,
+      issues: [`CLI 入口资源不是常规文件: ${entryPath}`],
+    };
+  }
+  try {
+    const content = fs.readFileSync(entryPath);
+    if (content.byteLength === 0) {
+      return { ok: false, issues: [`CLI 入口资源为空文件: ${entryPath}`] };
+    }
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    return { ok: false, issues: [`CLI 入口资源不可读: ${entryPath} (${detail})`] };
+  }
+  return { ok: true, issues: [] };
+};
+
 const verifyPackagedResourceDir = ({ resourcesDir, electronLaunch, runner = spawnSync }) => {
   const betterSqliteRuntimeDir = getBetterSqliteRuntimeDir(resourcesDir);
   const issues = [];
   const verifiedRuntimeDirs = [];
   const crossCompiled = isCrossCompiledProduct(betterSqliteRuntimeDir);
   const moduleArch = detectNativeModuleArch(betterSqliteRuntimeDir);
+
+  // CLI 入口资源布局校验（CLI-036）：与平台无关，逐包强制。
+  const cliEntryResult = verifyCliEntryResource({ resourcesDir });
+  if (!cliEntryResult.ok) {
+    issues.push(...cliEntryResult.issues);
+  }
 
   // koffi 平台预编译与 better-sqlite3 同架构口径（darwin 交叉构建时以模块架构为准）。
   const koffiResult = verifyKoffiRuntime({ resourcesDir, expectedArch: crossCompiled ? moduleArch : process.arch });
@@ -614,6 +670,8 @@ export const __test_only__ = {
   verifyRuntimeDependencyClosure,
   verifySharpRuntimeDir,
   verifyKoffiRuntime,
+  verifyCliEntryResource,
+  cliEntryResourcePath,
   koffiMainPackageDir,
   koffiPlatformPackageDir,
   koffiNativeBinaryPath,
