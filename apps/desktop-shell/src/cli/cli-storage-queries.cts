@@ -6,6 +6,7 @@ import {
   readMediaAssetById,
   readManifestFromDb,
   readNodeGraphFromDb,
+  readTaskById,
   readTaskOutputAssetIndex,
   readTaskOutputs,
   readTasksByBatchId,
@@ -163,6 +164,26 @@ export const readCliTaskViewsByBatchId = (projectPath: string, batchId: string):
     return [];
   }
   return readTasksByBatchId(db, batchId);
+};
+
+/** 按任务 id 读取任务视图（生成档案的批次归属解析底座，spec §5.2/CLI-039/040）。 */
+export const readCliTaskById = (projectPath: string, taskId: string): RuntimeTaskView | null => {
+  const db = getDbForExistingProject(projectPath);
+  if (db === null) {
+    console.debug("[cli-storage] 项目库不可用，按任务不存在处理", { projectPath, taskId });
+    return null;
+  }
+  return readTaskById(db, taskId);
+};
+
+/** 按批次 id 读取批次快照（batch get 与档案内联的数据源，spec §5.2/CLI-038）。 */
+export const readCliBatchById = (projectPath: string, batchId: string): BatchIntentSnapshot | null => {
+  const db = getDbForExistingProject(projectPath);
+  if (db === null) {
+    console.debug("[cli-storage] 项目库不可用，按无批次处理", { projectPath, batchId });
+    return null;
+  }
+  return readBatchById(db, batchId);
 };
 
 /** 画布节点载荷清单（raw payload 数组，投影由 cli-canvas-projection 承担）。 */

@@ -91,4 +91,32 @@ void describe('task-payload-builder failure normalization', () => {
     // 完整请求体不再进入正式 task row；只保留摘要化的 requestJson / metadataJson。
     assert.equal('requestBodyJson' in row, false);
   });
+
+  void it('projects startedAt/finishedAt into the task row and defaults to null (not undefined)', () => {
+    const withTimes = buildRuntimeTaskRow({
+      id: 'task-times',
+      status: 'succeeded',
+      projectPath: '/tmp/demo.iartproj',
+      createdAt: 1000,
+      updatedAt: 4000,
+      startedAt: 1500,
+      finishedAt: 3000,
+    });
+    assert.equal(withTimes.startedAt, 1500);
+    assert.equal(withTimes.finishedAt, 3000);
+
+    // 旧记录/未开始任务无执行时刻：输出 null 而非 undefined（契约不漂移），
+    // createdAt（受理时刻）/updatedAt（最后回写时刻）不互替执行时刻。
+    const withoutTimes = buildRuntimeTaskRow({
+      id: 'task-no-times',
+      status: 'submitting',
+      projectPath: '/tmp/demo.iartproj',
+      createdAt: 1000,
+      updatedAt: 2000,
+    });
+    assert.equal(withoutTimes.startedAt, null);
+    assert.equal(withoutTimes.finishedAt, null);
+    assert.equal('startedAt' in withoutTimes, true);
+    assert.equal('finishedAt' in withoutTimes, true);
+  });
 });

@@ -14,7 +14,9 @@ description: |
 
 > **版本门槛**：本 skill 描述的命令面与行为自 **IARTStudio v0.6.7** 起（CLI 以轻量纯 Node
 > 进程运行）；`generate --request-id` 受理幂等键、`task list` 过滤参数与人读失败原因自
-> **v0.6.8** 起。旧版本软件的 `iart` 可能表现不同（启动慢、偶发无输出崩溃、控制台中文乱码）；
+> **v0.6.8** 起；`batch get` 生成档案读取、`asset get`/`task get` 内联 `generation` 档案、
+> `--version` 与解析失败单行指引自 **v0.6.10** 起。旧版本软件的 `iart` 可能表现不同（启动慢、
+> 偶发无输出崩溃、控制台中文乱码、`batch get` 报「无法识别的命令」）；
 > 遇到这类旧行为时请用户把应用升级到最新版本，并重启一次应用——应用启动时会自动把
 > 命令入口修正到新形态，无需手动重新注册。
 
@@ -76,10 +78,11 @@ description: |
 |---|---|
 | `iart model list` | 可执行模型目录；不可执行条目带失败原因码 |
 | `iart model get <model_id>` | 单模型详情，含 `parameter_schema`——**`--arg` 参数名的唯一合法依据** |
-| `iart asset list --project P [--query K] [--media-type image\|video\|audio] [--model M] [--limit N] [--offset O]` | 项目资产清单。`--query` 关键词搜索（命中素材原始文件名与生成产物的提交提示词）、`--media-type`/`--model` 过滤、`--limit`/`--offset` 分页；全不带参数=全量。条目 `source_file_name` 是导入素材的原始文件名 |
-| `iart asset get <assetId> --project P` | 资产详情，必含本地媒体文件绝对路径；同内容存在其他资产 id 时输出 `equivalent_asset_ids`（同一内容的历史双身份，引用任一等效） |
+| `iart asset list --project P [--query K] [--media-type image\|video\|audio] [--model M] [--limit N] [--offset O]` | 项目资产清单。`--query` 关键词搜索（命中素材原始文件名与生成产物的提交提示词；**只用于定位条目，输出不含提示词片段**——要看提示词全文用 `batch get`/`generation`）、`--media-type`/`--model` 过滤、`--limit`/`--offset` 分页；全不带参数=全量。条目 `source_file_name` 是导入素材的原始文件名；`source_summary` 是生成来源摘要，形如「任务 task_xxx」（该资产的产出来源任务，可直接 `task get`），空串 = 导入素材等非生成产物 |
+| `iart asset get <assetId> --project P` | 资产详情，必含本地媒体文件绝对路径；同内容存在其他资产 id 时输出 `equivalent_asset_ids`（同一内容的历史双身份，引用任一等效）。资产是生成产物时附 `generation` 生成档案（见下「生成档案」） |
+| `iart batch get <batchId> --project P` | 读取生成档案（见下「生成档案」）：一批次提交的完整意图——提示词**全文**、参数、参考资产、任务成员。批次不存在报 `batch_not_found` |
 | `iart canvas nodes list --project P` | 画布节点清单（节点 id、类型、位置、组归属、资产/任务引用；图片/视频/音频素材节点与资产节点同样输出 `asset_id`） |
-| `iart task list --project P [--status S] [--since <ISO 时间>] [--request-id ID]` / `iart task get <taskId> --project P` | 任务状态。`--status` 按状态过滤、`--since` 按创建时间下界过滤（ISO 8601，如 `2026-10-14T08:00:00Z`）、`--request-id` 按受理幂等键反查该次提交的全部任务（未命中=空列表且命令成功，见下「崩溃后对账」）；可组合。任务条目含 `progress_percent`（无进度时缺省）。⚠ `task get` 的 `--project` 必填（帮助文本省略了它） |
+| `iart task list --project P [--status S] [--since <ISO 时间>] [--request-id ID]` / `iart task get <taskId> --project P` | 任务状态。`--status` 按状态过滤，合法值只有七个：`submitting`/`generating`/`polling`/`downloading`/`succeeded`/`failed`/`cancelled`；`--since` 按创建时间下界过滤（ISO 8601，如 `2026-10-14T08:00:00Z`）、`--request-id` 按受理幂等键反查该次提交的全部任务（未命中=空列表且命令成功，见下「崩溃后对账」）；可组合。任务条目含 `progress_percent`（无进度时缺省）。⚠ `task get` 的 `--project` 必填（帮助文本省略了它）。人读模式 `task get` 只输出一行（任务 + 状态 + 失败原因）——读字段结构必须 `--json` |
 
 ### 画布命令（必须项目已打开）
 
@@ -146,6 +149,17 @@ iart task list --request-id <回执里的幂等键> --project P --json
   `local_file_path` 是产物媒体文件的**绝对路径**，可直接读取展示给用户；失败任务读
   `task.failure`（code/message/userMessage）或 `task.errorMessage`——`--json` 里有完整失败结构，
   人读模式会在任务行内联截断后的失败原因。
+- **任务字段结构**（`task get --json` 的 `task`）：`taskId`、`status`、`batchId`（所属批次，
+  可反查档案）、`createdAt`/`updatedAt`（Unix 毫秒）、`progress_percent`/`progress_message`、
+  `errorMessage`/`errorCode`/`failure`、`metadata`。⚠ `metadata` 里的提示词是 **512 字符截断
+  预览摘要，不是全文**——全文一律看 `generation.prompt`。
+- **生成档案**（`batch get` 的 `generation`；`asset get`/`task get` 内联的同名 `generation`
+  字段，三者同一形状）：`{ batch_id, model_id, prompt（提示词全文）, params（提交参数）,
+  references: [{ asset_id, media_kind, file_key, local_file_path? }]（参考资产引用，实体可查
+  才带路径）, task_ids, created_at }`。资产是生成产物时 `asset get` 必带 `generation`；
+  任务属于某批次时 `task get` 带出 `batch_id` 所在的同一档案。
+- `--version`：`iart --version` 输出应用版本（`--json` 为 `{ "version": "..." }`）；
+  应用未在运行时如实输出未知——用它核对用户软件是否达到本 skill 的版本门槛。
 - ⚠ 人读（默认）模式下等待类输出只报条数、**不含产物路径**——要拿路径必须 `--json`。
 - `model get` 的 `model.parameter_schema.fields[]` 中 `fieldKey / required / enumOptions /
   defaultValue` 是构造 `--arg` 的依据；`model.deployment.deployable=false` 时读 `failure_code`。
@@ -163,6 +177,7 @@ iart task list --request-id <回执里的幂等键> --project P --json
 | `project_name_conflict` | 创建位置已有同名项目目录 | 换名或换目录，不覆盖 |
 | `project_not_open` | 画布命令/生成提交时项目未打开 | 先 `iart project open --project P`，再重试原命令 |
 | `asset_not_found` / `node_not_found` / `group_not_found` | 引用的资产/节点/组不存在 | 用对应 list 命令核对 id |
+| `batch_not_found` | 批次标识不存在 | `task get` 从任务的 `generation`/`batchId` 核对批次号 |
 | `invalid_reference` | 引用资产不可用或与模型不兼容 | 核对资产与模型输入要求 |
 | `model_not_available` | 模型不在可执行目录或不可执行 | 读失败原因码：缺部署/凭证等问题引导用户到设置页「服务商」分区配置 |
 | `task_not_found` | 任务标识不存在 | `task list` 核对 id |
@@ -195,7 +210,10 @@ iart project open --project <路径或名称>              # 未打开才需要�
 iart model list --json                                # 选 deployable=true 的生成模型
 iart model get <model_id> --json                      # 读 parameter_schema 决定 --arg
 iart generate --prompt "<提示词>" --model <model_id> --wait --json --project <路径或名称>
-# 终态后从 task_results[].assets[].local_file_path 拿产物绝对路径，用 Read 展示给用户
+# 终态后收尾：先读生成信息再谈看图——从响应的 task_results[].task.batchId（或 task get 的
+# generation）拿批次号，batch get 读回本次提交的完整档案（提示词全文、参数、引用、任务成员），
+# 用 generation 与产物 local_file_path 回答「生成了什么、怎么生成的」；
+# 仅当档案信息不足以回答用户（如要看画面细节）才用 local_file_path 打开成品图核对
 ```
 
 ### R2 组织画布
@@ -220,6 +238,25 @@ iart task wait <taskId> --json --project <路径或名称>  # 长任务默认不
 iart task cancel <taskId> --project <路径或名称>
 ```
 
+### R4 理解已有项目：生成信息优先于成品媒体
+
+接手一个已有项目时，先建立「这次生成做了什么」的事实，再谈看图——生成信息结构化、可引用、
+省上下文，成品图只是它的视觉投影。按手里已有的线索路由：
+
+- **手里有图**（一个资产 id 或本地文件路径）→ 直接 `iart asset get <assetId> --project P --json`：
+  详情里的 `generation` 就是这张图的来历（提示词全文、参数、参考资产、所属批次与任务），
+  `local_file_path` 同时给你文件本体。
+- **手里有批次号** → 直接 `iart batch get <batchId> --project P --json` 读档案：一次提交的
+  完整意图与任务成员全在里面。
+- **手里只有任务 id** → `iart task get <taskId> --project P --json`：响应里的 `generation`
+  带出所属批次（无批次归属的任务无此字段），要再深挖引用链就凭 `generation.batch_id`
+  接 `batch get`。
+- **什么 id 都没有** → 用 `iart asset list --query <关键词> --project P --json` 定位资产 id
+  （命中文件名与提交提示词；只定位条目、不给提示词片段），回到第一支。
+
+判断生成质量时同理：先对照 `generation.prompt` 与 `params` 看提交是否符合预期，再看图核对
+（`local_file_path`）；不要反过来从图猜参数。
+
 ---
 
 ## 7. 纪律与禁止
@@ -228,6 +265,9 @@ iart task cancel <taskId> --project <路径或名称>
   `task list --request-id <幂等键>` 核对——非空 = 已受理勿重提，空 = 从未落库可安全重提。
   重提时复用同一 `--request-id`（幂等重放，绝不重复出图）。**参数不猜**：`--arg` 的 key 与取值域只以 `parameter_schema` 为准。
 - **不碰凭证**：命令面不提供任何服务商凭证/密钥的读取或导出；用户要改配置 → 引导到设置页操作。
+- **不直读数据文件**：不要用 sqlite3/文件读取翻 `project.sqlite`、recent-projects.json 等
+  项目数据文件来替代命令面——数据形状无契约、版本会漂移，且绕过应用可能读到未落盘的中间态；
+  查任何事实都走上面的命令。
 - **画布不是输出垃圾场**：批量生成前想清楚数量与必要性；命令排队执行、用户手工操作优先，
   不要与用户抢画布。
 - **应用未运行时不绕路**：不要直连应用内部接口或发明替代实现；`not_running` 就引导启动应用。

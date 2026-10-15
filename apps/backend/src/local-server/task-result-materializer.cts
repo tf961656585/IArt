@@ -46,6 +46,10 @@ type TaskRecordRaw = DynamicJsonObject & {
   metadata: unknown | undefined;
   projectPath: unknown | undefined;
   response: unknown | undefined;
+  createdAt: unknown | undefined;
+  request: unknown | undefined;
+  startedAt: unknown | undefined;
+  finishedAt: unknown | undefined;
 };
 type LocalTaskOutputRaw = DynamicJsonObject & {
   url: unknown | undefined;
@@ -107,6 +111,10 @@ const isPlainObject = (value: unknown): value is DynamicJsonObject => {
 };
 const readObjectField = (value: DynamicJsonObject, key: string): unknown =>
   Object.prototype.hasOwnProperty.call(value, key) ? value[key] : undefined;
+// 记录级投影只剥大载荷（response.body 由 buildLocalizedTaskResponse 置 null 释放内存），
+// 小体量元数据字段必须原样带过：createdAt（受理时刻）/ request（受理时摘要化的请求）/
+// startedAt / finishedAt（执行真实时刻）——物化链以本投影产物为基底做终态 patch 与整行
+// INSERT OR REPLACE，剥掉这些字段会把受理时刻回落成物化时刻、请求摘要洗成 null（v0.6.10 实锤）。
 const asTaskRecordRaw = (value: unknown): TaskRecordRaw => {
   if (!isPlainObject(value)) {
     return {
@@ -115,6 +123,10 @@ const asTaskRecordRaw = (value: unknown): TaskRecordRaw => {
       metadata: undefined,
       projectPath: undefined,
       response: undefined,
+      createdAt: undefined,
+      request: undefined,
+      startedAt: undefined,
+      finishedAt: undefined,
     };
   }
   return {
@@ -123,6 +135,10 @@ const asTaskRecordRaw = (value: unknown): TaskRecordRaw => {
     metadata: readObjectField(value, 'metadata'),
     projectPath: readObjectField(value, 'projectPath'),
     response: readObjectField(value, 'response'),
+    createdAt: readObjectField(value, 'createdAt'),
+    request: readObjectField(value, 'request'),
+    startedAt: readObjectField(value, 'startedAt'),
+    finishedAt: readObjectField(value, 'finishedAt'),
   };
 };
 const asTaskResponseRaw = (value: unknown): TaskResponseRaw => {

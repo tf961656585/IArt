@@ -622,4 +622,142 @@ describe('editor storage schema（裁断后迁移：v11 → v15 自动升级，�
       db.close();
     }
   });
+
+  it('v18 库打开时自动迁移到 v19：tasks 补 startedAt/finishedAt 列与三个索引、task_outputs 补 assetId 索引（存量行保真）', () => {
+    const schema = loadSchemaModule();
+    const db = new Database(':memory:');
+    try {
+      // 构造一个 v18 库：tasks 为 v18 形状（无 startedAt/finishedAt、无二级索引），
+      // task_outputs 仅有 taskId 索引；存量任务行与输出行模拟历史数据。
+      db.exec(`
+        CREATE TABLE meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        INSERT INTO meta (key, value) VALUES ('storage_schema_version', '18');
+        CREATE TABLE tasks (
+          taskId TEXT PRIMARY KEY,
+          status TEXT NOT NULL,
+          projectPath TEXT NOT NULL,
+          sourceNodeId TEXT,
+          targetNodeId TEXT,
+          batchId TEXT,
+          requestJson TEXT,
+          metadataJson TEXT,
+          remoteRequestId TEXT,
+          progressPercent INTEGER,
+          progressMessage TEXT,
+          progressPhase TEXT,
+          errorMessage TEXT,
+          errorCode TEXT,
+          failureJson TEXT,
+          createdAt INTEGER,
+          updatedAt INTEGER
+        );
+        INSERT INTO tasks (taskId, status, projectPath, batchId, createdAt, updatedAt)
+          VALUES ('task-legacy-1', 'succeeded', '/tmp/demo.iartproj', 'batch-legacy-1', 1000, 2000),
+                 ('task-legacy-2', 'failed', '/tmp/demo.iartproj', NULL, 3000, 4000);
+        CREATE TABLE task_outputs (
+          outputId TEXT PRIMARY KEY,
+          taskId TEXT NOT NULL,
+          assetId TEXT,
+          mediaType TEXT NOT NULL,
+          textValue TEXT,
+          sortOrder INTEGER
+        );
+        INSERT INTO task_outputs (outputId, taskId, assetId, mediaType, textValue, sortOrder)
+          VALUES ('out-legacy-1', 'task-legacy-1', 'asset-legacy-9', 'image', NULL, 0);
+      `);
+
+      schema.initSchema(db);
+
+      const versionRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(
+        schema.STORAGE_SCHEMA_VERSION_KEY,
+      ) as { value: string } | undefined;
+      assert.equal(
+        versionRow !== undefined ? Number(versionRow.value) : null,
+        schema.CURRENT_SCHEMA_VERSION,
+        'version should migrate to current',
+      );
+
+      // 新列就位且可空（存量行一律 NULL：NULL 即「无记录」，不用 createdAt/updatedAt 兜底）。
+      const taskCols = columnNames(db, 'tasks');
+      assert.ok(taskCols.includes('startedAt'), 'tasks.startedAt should exist');
+      assert.ok(taskCols.includes('finishedAt'), 'tasks.finishedAt should exist');
+      const startedAtCol = db
+        .prepare(`PRAGMA table_info('tasks')`)
+        .all()
+        .find((col: { name: string }) => col.name === 'startedAt') as { notnull: number };
+      assert.equal(startedAtCol.notnull, 0, 'startedAt should be nullable');
+
+      // 四个索引就位。
+      const indexNames = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name IS NOT NULL")
+        .all()
+        .map((row: { name: string }) => row.name);
+      for (const expectedIndex of [
+        'tasks_batchId_idx',
+        'tasks_status_idx',
+        'tasks_createdAt_idx',
+        'task_outputs_assetId_idx',
+      ]) {
+        assert.ok(indexNames.includes(expectedIndex), `index ${expectedIndex} should exist`);
+      }
+
+      // 存量行保真：身份/状态/时间戳不变，新列为 NULL。
+      const legacy = db
+        .prepare('SELECT taskId, status, batchId, createdAt, updatedAt, startedAt, finishedAt FROM tasks WHERE taskId = ?')
+        .get('task-legacy-1') as
+        | { taskId: string; status: string; batchId: string | null; createdAt: number; updatedAt: number; startedAt: number | null; finishedAt: number | null }
+        | undefined;
+      assert.ok(legacy !== undefined, 'legacy task row should survive migration');
+      assert.equal(legacy.status, 'succeeded');
+      assert.equal(legacy.batchId, 'batch-legacy-1');
+      assert.equal(legacy.createdAt, 1000);
+      assert.equal(legacy.updatedAt, 2000);
+      assert.equal(legacy.startedAt, null);
+      assert.equal(legacy.finishedAt, null);
+
+      const legacyOutput = db
+        .prepare('SELECT outputId, taskId, assetId, mediaType FROM task_outputs WHERE outputId = ?')
+        .get('out-legacy-1') as
+        | { outputId: string; taskId: string; assetId: string | null; mediaType: string }
+        | undefined;
+      assert.ok(legacyOutput !== undefined, 'legacy task output row should survive migration');
+      assert.equal(legacyOutput.assetId, 'asset-legacy-9');
+
+      // 幂等：重复执行 initSchema 不重复加列/建索引、不报错、数据不变。
+      schema.initSchema(db);
+      assert.ok(columnNames(db, 'tasks').includes('startedAt'));
+      const stillLegacy = db
+        .prepare('SELECT createdAt FROM tasks WHERE taskId = ?')
+        .get('task-legacy-1') as { createdAt: number } | undefined;
+      assert.equal(stillLegacy?.createdAt, 1000);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('全新库直接按 v19 建库：tasks 时间列与四个新索引一步到位', () => {
+    const schema = loadSchemaModule();
+    const db = new Database(':memory:');
+    try {
+      schema.initSchema(db);
+
+      const taskCols = columnNames(db, 'tasks');
+      assert.ok(taskCols.includes('startedAt'), 'tasks.startedAt should exist in fresh DDL');
+      assert.ok(taskCols.includes('finishedAt'), 'tasks.finishedAt should exist in fresh DDL');
+
+      const taskIndexes = db.prepare(`PRAGMA index_list('tasks')`).all() as Array<{ name: string }>;
+      const taskIndexNames = taskIndexes.map((row) => row.name);
+      for (const expectedIndex of ['tasks_batchId_idx', 'tasks_status_idx', 'tasks_createdAt_idx']) {
+        assert.ok(taskIndexNames.includes(expectedIndex), `index ${expectedIndex} should exist in fresh DDL`);
+      }
+      const outputIndexes = db.prepare(`PRAGMA index_list('task_outputs')`).all() as Array<{ name: string }>;
+      const outputIndexNames = outputIndexes.map((row) => row.name);
+      assert.ok(outputIndexNames.includes('task_outputs_assetId_idx'), 'task_outputs_assetId_idx should exist in fresh DDL');
+    } finally {
+      db.close();
+    }
+  });
 });

@@ -97,6 +97,18 @@ const canvasNode = (): Record<string, unknown> => ({
   task_id: null,
 });
 
+const generationArchive = (): Record<string, unknown> => ({
+  batch_id: 'batch_1',
+  model_id: 'model-a',
+  prompt: '一只猫在窗台',
+  params: { aspect_ratio: '1:1' },
+  references: [
+    { asset_id: 'asset_ref_1', media_kind: 'image', file_key: 'ref.png', local_file_path: '/tmp/media/ref.png' },
+  ],
+  task_ids: ['task_1'],
+  created_at: ISO,
+});
+
 const requestSamples: Record<CliCommandName, Record<string, unknown>> = {
   'project.list': {},
   'project.status': { project: PROJECT },
@@ -119,6 +131,7 @@ const requestSamples: Record<CliCommandName, Record<string, unknown>> = {
   'task.get': { project: PROJECT, task_id: 'task_1' },
   'task.cancel': { project: PROJECT, task_id: 'task_1' },
   'task.wait': { project: PROJECT, task_id: 'task_1' },
+  'batch.get': { project: PROJECT, batch_id: 'batch_1' },
   'app.status': {},
 };
 
@@ -137,7 +150,7 @@ const successSamples: Record<CliCommandName, Record<string, unknown>> = {
   'model.list': { models: [modelEntry()] },
   'model.get': { model: modelEntry() },
   'asset.list': { assets: [{ asset_id: 'asset_1', media_type: 'image', source_summary: 'task_1' }] },
-  'asset.get': { asset: mediaAsset(), local_file_path: '/tmp/media/asset_1.png' },
+  'asset.get': { asset: mediaAsset(), local_file_path: '/tmp/media/asset_1.png', generation: generationArchive() },
   'canvas.nodes.list': { nodes: [canvasNode()] },
   'canvas.group.create': { group_node_id: 'group_1' },
   'canvas.group.dissolve': { dissolved: true, group_node_id: 'group_1', member_ids: ['node_1', 'node_2'] },
@@ -150,7 +163,8 @@ const successSamples: Record<CliCommandName, Record<string, unknown>> = {
     task_results: [],
   },
   'task.list': { tasks: [taskView()] },
-  'task.get': { task: taskView() },
+  'task.get': { task: taskView(), generation: generationArchive() },
+  'batch.get': { generation: generationArchive() },
   'task.cancel': { accepted: true, task_id: 'task_1', cancelled_at: ISO },
   'task.wait': {
     task_result: {
@@ -167,7 +181,7 @@ const successSamples: Record<CliCommandName, Record<string, unknown>> = {
 };
 
 describe('CLI 错误码枚举（spec §9）', () => {
-  it('与 spec §9 表格一一对应（15 个，语义顺序一致）', () => {
+  it('与 spec §9 表格一一对应（16 个，语义顺序一致）', () => {
     expect([...CLI_ERROR_CODES]).toEqual([
       'not_running',
       'auth_failed',
@@ -176,6 +190,7 @@ describe('CLI 错误码枚举（spec §9）', () => {
       'project_name_conflict',
       'project_not_open',
       'asset_not_found',
+      'batch_not_found',
       'node_not_found',
       'group_not_found',
       'invalid_reference',
@@ -195,9 +210,9 @@ describe('CLI 错误码枚举（spec §9）', () => {
 });
 
 describe('CLI 命令请求判别联合（spec §5）', () => {
-  it('命令清单共 22 条且判别值唯一', () => {
-    expect(CLI_COMMANDS).toHaveLength(22);
-    expect(new Set(CLI_COMMANDS).size).toBe(22);
+  it('命令清单共 23 条且判别值唯一', () => {
+    expect(CLI_COMMANDS).toHaveLength(23);
+    expect(new Set(CLI_COMMANDS).size).toBe(23);
     expect(() => CliCommandNameSchema.parse('project.list')).not.toThrow();
   });
 

@@ -29,6 +29,8 @@ interface RawTaskRecord {
   id: unknown | undefined;
   createdAt: unknown | undefined;
   updatedAt: unknown | undefined;
+  startedAt: unknown | undefined;
+  finishedAt: unknown | undefined;
 }
 
 interface RawTaskMetadata {
@@ -228,6 +230,8 @@ const buildRuntimeTaskRow = (record: unknown, options: RuntimeTaskBuildOptions =
     id: undefined,
     createdAt: undefined,
     updatedAt: undefined,
+    startedAt: undefined,
+    finishedAt: undefined,
   });
   const metadata = asPlainObject<RawTaskMetadata>(recordObject.metadata, {
     sourceNodeId: undefined,
@@ -279,6 +283,10 @@ const buildRuntimeTaskRow = (record: unknown, options: RuntimeTaskBuildOptions =
   row.errorMessage = (failure !== null && failure !== undefined ? failure.message : undefined) ?? null;
   row.errorCode = (failure !== null && failure !== undefined ? failure.code : undefined) ?? null;
   row.failureJson = failure ? JSON.stringify(projectRuntimeTaskFailureSummary(failure)) : null;
+  // 执行真实开始/结束时刻投影（v19 tasks 新列）：缺省输出 null 而非 undefined，与同侧行为对齐，
+  // 避免契约漂移；createdAt（受理时刻）/updatedAt（最后回写时刻）不互替执行时刻。
+  row.startedAt = normalizeRuntimeTaskNumber(recordObject.startedAt);
+  row.finishedAt = normalizeRuntimeTaskNumber(recordObject.finishedAt);
 
   return row;
 };

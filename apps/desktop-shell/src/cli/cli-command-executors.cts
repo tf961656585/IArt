@@ -23,6 +23,8 @@ import {
   parseTaskListPayload,
   type CliBackendForwarder,
 } from "./cli-backend-forwarder.cjs";
+import type { CliGenerationArchive } from "@iart/contracts";
+import { buildGenerationArchive, resolveTaskBatchId } from "./cli-generation-archive.cjs";
 import type { CliProxyCommandCandidate, CliProxyDispatchOutcome } from "./cli-proxy-dispatcher.cjs";
 import { resolveCliProject, type CliProjectRegistryReader, type CliResolvedProject } from "./cli-project-resolver.cjs";
 
@@ -95,6 +97,10 @@ export interface CliCommandExecutorStorage {
   readBatchByClientRequestId: (projectPath: string, clientRequestId: string) => BatchIntentSnapshot | null;
   /** 按批次读取任务视图（task list --request-id 的任务清单数据源，受理期任务索引排序）。 */
   readTaskViewsByBatchId: (projectPath: string, batchId: string) => readonly RuntimeTaskView[];
+  /** 按任务 id 读取任务视图（生成档案的批次归属解析底座，spec §5.2/CLI-039/040）。 */
+  readTaskById: (projectPath: string, taskId: string) => RuntimeTaskView | null;
+  /** 按批次 id 读取批次快照（batch get 与档案内联的数据源，spec §5.2/CLI-038）。 */
+  readBatchById: (projectPath: string, batchId: string) => BatchIntentSnapshot | null;
   readCanvasNodePayloads: (projectPath: string) => readonly unknown[];
 }
 
@@ -283,6 +289,38 @@ const toCliAssetWithLocalPath = (
 export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<CliCommandRequest["command"], CliCommandExecutor> => {
   const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const registry = new Map<CliCommandRequest["command"], CliCommandExecutor>();
+
+  /**
+   * 生成档案单一读取链（spec §5.2/§5.4 / CLI-038/039/040）：任务 id → 任务视图 → 批次归属
+   * → 批次快照 → buildGenerationArchive。asset get 内联与 task get 内联共用本函数，
+   * 与 batch get 同一构建出口（任何入口不得出现字段子集）；任一环节缺失（无产出来源任务、
+   * 无批次归属、批次快照缺失）返回 null，调用方缺省 generation 字段、主响应照常输出。
+   */
+  const buildArchiveFromTaskId = (projectPath: string, taskId: string): CliGenerationArchive | null => {
+    const task = deps.storage.readTaskById(projectPath, taskId);
+    if (task === null) {
+      console.debug("[cli-executor] 生成档案：任务在项目库不存在，跳过档案内联", { projectPath, taskId });
+      return null;
+    }
+    const batchId = resolveTaskBatchId(task);
+    if (batchId === null) {
+      console.debug("[cli-executor] 生成档案：任务无批次归属，跳过档案内联", { projectPath, taskId });
+      return null;
+    }
+    const snapshot = deps.storage.readBatchById(projectPath, batchId);
+    if (snapshot === null) {
+      console.debug("[cli-executor] 生成档案：批次快照缺失，跳过档案内联", { projectPath, taskId, batchId });
+      return null;
+    }
+    return buildGenerationArchive({
+      projectPath,
+      snapshot,
+      assets: {
+        readAssetById: (assetId: string) => deps.storage.readMediaAssetById(projectPath, assetId),
+        listAssets: () => deps.storage.readMediaAssets(projectPath),
+      },
+    });
+  };
 
   // ── 项目生命周期（§5.1：主进程存储服务与窗口控制） ─────────────────────────────
 
@@ -477,10 +515,18 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
     }
     // 同内容等价 id（存量双 id 残留的可查口径，spec CLI-019）：fileKey 内容指纹分组，无等价项不输出该字段。
     const equivalents = computeEquivalentAssetIds(deps.storage.readMediaAssets(project.path), asset);
+    // 生成档案内联（spec §5.2 / CLI-039）：资产生成产物时附产出批次档案；导入素材等
+    // 非生成产物无产出来源任务，缺省 generation 字段（主响应照常输出，回退现状）。
+    const sourceTaskId = deps.storage.readAssetTaskIndex(project.path).get(request.asset_id);
+    if (sourceTaskId === undefined) {
+      console.debug("[cli-executor] asset.get 资产无产出来源任务，缺省生成档案", { asset_id: request.asset_id });
+    }
+    const generation = sourceTaskId !== undefined ? buildArchiveFromTaskId(project.path, sourceTaskId) : null;
     return okResult(request.command, {
       asset,
       local_file_path: localFilePath,
       ...(equivalents.length > 0 ? { equivalent_asset_ids: equivalents } : {}),
+      ...(generation !== null ? { generation } : {}),
     });
   });
 
@@ -585,7 +631,42 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
       console.debug("[cli-executor] task.get 任务不属于该项目", { taskId: request.task_id });
       return taskNotFoundResult(request.command, request.task_id);
     }
-    return okResult(request.command, { task: parsed.task });
+    // 生成档案内联（spec §5.4 / CLI-040）：任务有批次归属且批次快照在库时附带该批次档案；
+    // 无批次归属（如媒体工具加工任务）或批次行缺失时缺省 generation 字段、任务状态照常输出
+    // （回退现状，留痕见 buildArchiveFromTaskId）。
+    const generation = buildArchiveFromTaskId(resolution.project.path, request.task_id);
+    return okResult(request.command, {
+      task: parsed.task,
+      ...(generation !== null ? { generation } : {}),
+    });
+  });
+
+  // ── 生成档案读取（§5.2：存储只读投影，项目未打开也可用） ─────────────────────────
+
+  registry.set("batch.get", (request) => {
+    if (request.command !== "batch.get") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
+    const resolution = resolveProjectOrFail(request, deps);
+    if (!resolution.ok) return resolution.result;
+    const { project } = resolution;
+    // 批次快照走存储只读投影（task list --request-id 批次反查同先例）：不经运行域端点，
+    // 项目未打开也可读。未命中 = 该项目库里没有这个批次。
+    const snapshot = deps.storage.readBatchById(project.path, request.batch_id);
+    if (snapshot === null) {
+      console.debug("[cli-executor] batch.get 未命中批次快照", { batch_id: request.batch_id, projectPath: project.path });
+      return errorResult(request.command, "batch_not_found", `批次 ${request.batch_id} 不存在。`);
+    }
+    const archive = buildGenerationArchive({
+      projectPath: project.path,
+      snapshot,
+      assets: {
+        readAssetById: (assetId: string) => deps.storage.readMediaAssetById(project.path, assetId),
+        listAssets: () => deps.storage.readMediaAssets(project.path),
+      },
+    });
+    if (archive === null) {
+      return errorResult(request.command, "internal_error", "生成档案暂时读不出来，请稍后重试。");
+    }
+    return okResult(request.command, { generation: archive });
   });
 
   // ── 任务等待（§5.4：运行域轮询；产物资产经存储只读投影） ───────────────────────

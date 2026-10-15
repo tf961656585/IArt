@@ -90,6 +90,9 @@ describe("cli-client 等待语义（真实控制服务 + 假 forwarder）", () =
           readMediaAssetById: () => null,
           readAssetTaskIndex: () => new Map(),
           readTaskOutputAssets: (_projectPath: string, taskId: string) => (taskId === "t1" ? [ASSET] : []),
+          // 生成档案底座（CLI-038/039/040，task.get 轮询路径消费）：假实现无批次归属，档案内联缺省
+          readTaskById: () => null,
+          readBatchById: () => null,
           readCanvasNodePayloads: () => [],
         },
         pollIntervalMs: 10,

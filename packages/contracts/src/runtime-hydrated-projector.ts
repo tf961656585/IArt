@@ -335,6 +335,8 @@ export const runtimeTaskRowToView = (
     failure: parseTaskFailureJson(row.failureJson, row.taskId, options),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    startedAt: row.startedAt ?? null,
+    finishedAt: row.finishedAt ?? null,
   });
 };
 

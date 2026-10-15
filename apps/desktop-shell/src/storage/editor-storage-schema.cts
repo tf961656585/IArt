@@ -2,7 +2,7 @@
  * Editor Storage Service — SQLite Schema
  *
  * 项目级 KV 表 + 业务表。
- * 新库按当前 DDL 建库；已存在的库走裁断后迁移链（当前受支持 v11 → v18）自动幂等升级，
+ * 新库按当前 DDL 建库；已存在的库走裁断后迁移链（当前受支持 v11 → v19）自动幂等升级，
  * 版本低于受支持迁移起点的旧库（< v11）才拒绝打开（一次性裁断，见 memory/decisions.md；
  * 该裁断不构成先例，未来 DDL 变更仍须按迁移兼容追加迁移步骤）。
  */
@@ -31,10 +31,10 @@ type InitSchemaOptions = {
   projectPath: string | undefined;
 };
 
-const CURRENT_STORAGE_SCHEMA_ID = 'storage-schema-v18-batch-client-request-id';
+const CURRENT_STORAGE_SCHEMA_ID = 'storage-schema-v19-task-times-indexes';
 const STORAGE_SCHEMA_META_KEY = 'storage_schema_id';
 
-const CURRENT_SCHEMA_VERSION = 18;
+const CURRENT_SCHEMA_VERSION = 19;
 const STORAGE_SCHEMA_VERSION_KEY = 'storage_schema_version';
 
 class ProjectSqliteSchemaMismatchError extends Error {
@@ -561,6 +561,45 @@ const migrateV17ToV18 = (db: SqliteDatabase): void => {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS batches_clientRequestId_idx ON batches (clientRequestId)');
 };
 
+/**
+ * v18→v19：tasks 表新增 `startedAt` / `finishedAt`（执行真实开始/结束时刻，epoch ms）与
+ * 读通道查询形状索引（tasks.batchId / tasks.status / tasks.createdAt / task_outputs.assetId）。
+ *
+ * - 加列：`ADD COLUMN`（可空、无默认值），已存在的库列形与新建库 DDL 一致；存量任务行一律 NULL
+ *   （NULL 即「无记录」，不用 createdAt/updatedAt 兜底替代执行时刻语义）；
+ * - 时间语义（spec storage-schema.md runtime_domain.tasks）：startedAt/finishedAt 是执行真实时刻，
+ *   createdAt 是受理时刻，updatedAt 是最后回写时刻，三者互不替代；
+ * - 索引：读通道查询形状（readTasksByBatchId 按 batchId、readAllTasks 按 status 过滤/createdAt 排序、
+ *   资产反查按 task_outputs.assetId），全部 IF NOT EXISTS；
+ * - 幂等：列已存在时跳过加列；索引为 IF NOT EXISTS。存量行数据零改动。
+ */
+const migrateV18ToV19 = (db: SqliteDatabase): void => {
+  const tableNames = readUserTableNames(db);
+  if (!tableNames.includes('tasks')) {
+    // 条件跳过必须留痕：无 tasks 表的库（理论上不应存在）无事可做。
+    console.debug('[editor-storage-schema] v18->v19: tasks 表不存在，跳过时间列与索引迁移');
+    return;
+  }
+  const existingColumns = new Set(
+    readTableInfo(db, 'tasks').map((row) => normalizeName(row.name)),
+  );
+  if (!existingColumns.has('startedAt')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN startedAt INTEGER');
+  }
+  if (!existingColumns.has('finishedAt')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN finishedAt INTEGER');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS tasks_batchId_idx ON tasks (batchId)');
+  db.exec('CREATE INDEX IF NOT EXISTS tasks_status_idx ON tasks (status)');
+  db.exec('CREATE INDEX IF NOT EXISTS tasks_createdAt_idx ON tasks (createdAt)');
+  if (!tableNames.includes('task_outputs')) {
+    // 条件跳过必须留痕：无 task_outputs 表的库无资产反查索引可建。
+    console.debug('[editor-storage-schema] v18->v19: task_outputs 表不存在，跳过 assetId 索引迁移');
+    return;
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS task_outputs_assetId_idx ON task_outputs (assetId)');
+};
+
 const MIGRATION_STEPS: MigrationStep[] = [
   { fromVersion: 11, toVersion: 12, migrate: migrateV11ToV12 },
   { fromVersion: 12, toVersion: 13, migrate: migrateV12ToV13 },
@@ -569,6 +608,7 @@ const MIGRATION_STEPS: MigrationStep[] = [
   { fromVersion: 15, toVersion: 16, migrate: migrateV15ToV16 },
   { fromVersion: 16, toVersion: 17, migrate: migrateV16ToV17 },
   { fromVersion: 17, toVersion: 18, migrate: migrateV17ToV18 },
+  { fromVersion: 18, toVersion: 19, migrate: migrateV18ToV19 },
 ];
 
 const runPendingMigrations = (db: SqliteDatabase, fromVersion: number, options: InitSchemaOptions): void => {

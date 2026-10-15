@@ -521,6 +521,35 @@ const handleTerminalPatchWithOutputs = async (
       { error: getErrorMessage(e) },
     );
   }
+  // 带产物终态与无产物终态（handleTerminalPatch）同口径补写 task_events 事件：
+  // task_events 表是数据库内轻量时序（诊断/对账），任务档案 JSONL 是完整事实源——
+  // 两条终态路径都必须在两侧各落一条终态事件，缺一即事件流分裂。
+  try {
+    const projectPath = resolveProjectPathFromMetadata(metadata);
+    const taskId = normalizeString(metadata.taskId || persistedValue.id);
+    if (projectPath && taskId) {
+      await sendTaskEvent({
+        projectPath,
+        event: {
+          taskId,
+          eventType:
+            status === TASK_STATUS.SUCCEEDED
+              ? "task.succeeded"
+              : "task.failed",
+          payload: {
+            status,
+            error: persistedValue.error ?? null,
+          },
+          createdAt: Date.now(),
+        },
+      });
+    }
+  } catch (error) {
+    logWarn("schedule task event failed", {
+      taskId: metadata.taskId || persistedValue.id,
+      error: String(error),
+    });
+  }
   try {
     writeTaskArchiveSnapshot(persisted);
   } catch (error) {

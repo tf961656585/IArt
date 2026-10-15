@@ -61,7 +61,7 @@ describe("runCliClientMain flush 序列（退出信号发出时输出必须已�
     expect(readAfterExitSignal(errPath, stderr)).toBe("");
   });
 
-  it("参数错误：stderr 错误与用法提示在退出信号发出前已完整落盘", async () => {
+  it("参数错误：stderr 错误与单行用法指引在退出信号发出前已完整落盘（CLI-041 收敛）", async () => {
     const outPath = join(tempRoot, "bad-out.log");
     const errPath = join(tempRoot, "bad-err.log");
     const stdout = createWriteStream(outPath);
@@ -70,7 +70,7 @@ describe("runCliClientMain flush 序列（退出信号发出时输出必须已�
     const exitCode = await loadModule().runCliClientMain(["no-such-command"], { stdout, stderr });
 
     expect(exitCode).toBe(2);
-    expect(readAfterExitSignal(errPath, stderr)).toContain("退出码：0 成功");
+    expect(readAfterExitSignal(errPath, stderr)).toContain("用法见 iart --help。");
     expect(readAfterExitSignal(outPath, stdout)).toBe("");
   });
 });

@@ -28,8 +28,10 @@ const runTaskUpsert = (db: SqliteDatabase, task: TaskItem) => {
       errorCode,
       failureJson,
       createdAt,
-      updatedAt
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      updatedAt,
+      startedAt,
+      finishedAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     task.taskId,
     task.status,
@@ -48,6 +50,8 @@ const runTaskUpsert = (db: SqliteDatabase, task: TaskItem) => {
     task.failureJson ?? null,
     task.createdAt,
     task.updatedAt,
+    task.startedAt ?? null,
+    task.finishedAt ?? null,
   );
 };
 

@@ -39,6 +39,10 @@ export const RuntimeTaskRowSchema = z.object({
   failureJson: z.string().nullable().optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
+  /** 执行真实开始时刻（epoch ms）；旧记录/未开始任务为 null（受理时刻是 createdAt，不互替）。 */
+  startedAt: z.number().nullable().optional(),
+  /** 执行真实结束时刻（epoch ms）；未终态任务为 null（最后回写时刻是 updatedAt，不互替）。 */
+  finishedAt: z.number().nullable().optional(),
 }).strict();
 
 export const RuntimeTaskOutputRowSchema = z.object({
@@ -78,6 +82,10 @@ export const RuntimeTaskViewSchema = z.object({
   failure: RuntimeTaskFailureSchema.nullable().optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
+  /** 执行真实开始时刻（epoch ms）；旧记录/未开始任务为 null。 */
+  startedAt: z.number().nullable().optional(),
+  /** 执行真实结束时刻（epoch ms）；未终态任务为 null。 */
+  finishedAt: z.number().nullable().optional(),
 }).strict();
 
 export const RuntimeTaskOutputViewSchema = RuntimeTaskOutputRowSchema;

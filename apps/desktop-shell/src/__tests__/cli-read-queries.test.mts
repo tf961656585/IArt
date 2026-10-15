@@ -84,6 +84,11 @@ describe("cli-command-executors 只读查询（假 forwarder + 假存储）", ()
         readMediaAssetById: (projectPath: string, assetId: string) => (assetId === "asset-1" ? makeAsset("asset-1", "file-a.png") : null),
         readAssetTaskIndex: () => new Map([["asset-1", "task-9"]]),
         readTaskOutputAssets: (_projectPath: string, taskId: string) => (taskId === "task-done" ? [makeAsset("asset-1", "file-a.png")] : []),
+        readBatchByClientRequestId: () => null,
+        readTaskViewsByBatchId: () => [],
+        // 生成档案底座（CLI-038/039/040）：默认假实现无批次归属，档案内联缺省
+        readTaskById: () => null,
+        readBatchById: () => null,
         readCanvasNodePayloads: () => [
           { id: "n1", type: "asset", position: { x: 10, y: 20 }, groupId: "g1", data: { assetId: "asset-1" } },
           { id: "n2", type: "task", position: { x: 0, y: 0 }, data: { taskId: "task-9" } },
@@ -553,6 +558,8 @@ describe("cli-command-executors 只读查询（假 forwarder + 假存储）", ()
         readMediaAssetById: () => null,
         readAssetTaskIndex: () => new Map(),
         readTaskOutputAssets: (_projectPath: string, taskId: string) => (taskId === "t1" ? [makeAsset("asset-1", "file-a.png")] : []),
+        readTaskById: () => null,
+        readBatchById: () => null,
         readCanvasNodePayloads: () => [],
       },
       pollIntervalMs: 1,

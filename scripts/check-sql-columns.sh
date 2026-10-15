@@ -40,6 +40,8 @@ EXCLUDE_PATTERNS=(
   "agent_messages"
   "agent_tool_calls"
   "agent_send_records"
+  # backend v15→v16 迁移期临时表名（agent_tool_calls_v16）
+  "agent_tool_calls_v"
   # desktop-shell meta key 值
   "model_node_usage"
   "node_type_usage"
@@ -49,8 +51,13 @@ EXCLUDE_PATTERNS=(
   # desktop-shell 索引名前缀
   "project_pending_deltas_created"
   "task_outputs_task"
+  "task_outputs_asset"
+  "tasks_batch"
+  "tasks_status_idx"
+  "tasks_created"
   "task_events_task"
   "batches_source"
+  "batches_client"
   "timeline_graph"
   "timeline_points_timeline"
   "timeline_items_timeline"

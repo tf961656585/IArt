@@ -166,8 +166,21 @@ export const DDL_STATEMENTS = [
     errorCode TEXT,
     failureJson TEXT,
     createdAt INTEGER,
-    updatedAt INTEGER
+    updatedAt INTEGER,
+    startedAt INTEGER,
+    finishedAt INTEGER
   )`,
+
+  // 读通道查询形状索引（v19 起）：readTasksByBatchId 按 batchId、readAllTasks 按 status 过滤 /
+  // createdAt 排序（spec storage-schema.md runtime_domain.tasks）。
+  `CREATE INDEX IF NOT EXISTS tasks_batchId_idx
+    ON tasks (batchId)`,
+
+  `CREATE INDEX IF NOT EXISTS tasks_status_idx
+    ON tasks (status)`,
+
+  `CREATE INDEX IF NOT EXISTS tasks_createdAt_idx
+    ON tasks (createdAt)`,
 
   `CREATE TABLE IF NOT EXISTS task_outputs (
     outputId TEXT PRIMARY KEY,
@@ -182,6 +195,10 @@ export const DDL_STATEMENTS = [
 
   `CREATE INDEX IF NOT EXISTS task_outputs_taskId_idx
     ON task_outputs (taskId)`,
+
+  // 资产 → 任务反查（readMediaAssetsByTaskId 的 assetId join 与 readTaskOutputAssetIndex 扫描）。
+  `CREATE INDEX IF NOT EXISTS task_outputs_assetId_idx
+    ON task_outputs (assetId)`,
 
   `CREATE TABLE IF NOT EXISTS task_events (
     eventId INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -382,8 +399,14 @@ export const EXPECTED_TABLES: ExpectedTable[] = [
       { name: 'failureJson', type: 'TEXT', notNull: false, primaryKey: false },
       { name: 'createdAt', type: 'INTEGER', notNull: false, primaryKey: false },
       { name: 'updatedAt', type: 'INTEGER', notNull: false, primaryKey: false },
+      { name: 'startedAt', type: 'INTEGER', notNull: false, primaryKey: false },
+      { name: 'finishedAt', type: 'INTEGER', notNull: false, primaryKey: false },
     ],
-    indexes: undefined,
+    indexes: [
+      'tasks_batchId_idx',
+      'tasks_status_idx',
+      'tasks_createdAt_idx',
+    ],
   },
   {
     name: 'task_outputs',
@@ -395,7 +418,7 @@ export const EXPECTED_TABLES: ExpectedTable[] = [
       { name: 'textValue', type: 'TEXT', notNull: false, primaryKey: false },
       { name: 'sortOrder', type: 'INTEGER', notNull: false, primaryKey: false },
     ],
-    indexes: ['task_outputs_taskId_idx'],
+    indexes: ['task_outputs_taskId_idx', 'task_outputs_assetId_idx'],
   },
   {
     name: 'task_events',

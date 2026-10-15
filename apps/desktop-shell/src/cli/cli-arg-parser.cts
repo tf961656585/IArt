@@ -27,23 +27,35 @@ export const CLI_USAGE_TEXT = `iart — 驱动 IARTStudio 的命令行入口（�
   iart canvas node delete --nodes id1,id2 [--yes] --project P
   iart canvas layout --scope all|group:<id> [--columns N] [--order id1,id2] --project P
   iart generate --prompt T --model M [--count N] [--ref id1,id2] [--arg k=v,k2=v2] [--request-id ID] [--wait] --project P
-  iart task list --project P [--status S] [--since ISO时间] [--request-id ID] | task get <taskId> | task cancel <taskId> | task wait <taskId>
+  iart task list --project P [--status submitting|generating|polling|downloading|succeeded|failed|cancelled] [--since ISO时间] [--request-id ID]
+  iart task get <taskId> | task cancel <taskId> | task wait <taskId>
+  iart batch get <batchId> --project P
   iart app status         查看应用状态：已打开项目、焦点与画布选中
 
 通用参数：
   --project <路径或名称>   目标项目（需要项目上下文的命令必填）
   --yes                    危险操作显式确认（project delete 必需）
   --json                   输出机器可读 JSON
+  --version                显示应用版本（iart --version）
   --help                   显示本用法提示
 
 退出码：0 成功；1 命令失败（含应用未在运行）；2 用法/执行错误`;
 
+/** 参数错误时的人读单行指引（不再全量倾倒用法提示，spec CLI-041）。 */
+export const CLI_USAGE_HINT = "用法见 iart --help。";
+
+/**
+ * 解析结果三态（discriminated union，判别字段 reason 只在 ok:false 分支承载）：
+ * help = --help 用法输出（退出码 0）；version = --version 客户端本地命令（退出码 0，
+ * 不发起请求）；usage-error = 用法/参数错误（退出码 2，message 面向使用者定位问题）。
+ */
 export type CliArgParseResult =
   | { ok: true; request: CliCommandRequest; json: boolean }
-  | { ok: false; help: true }
-  | { ok: false; help: false; message: string };
+  | { ok: false; reason: "help" }
+  | { ok: false; reason: "version"; json: boolean }
+  | { ok: false; reason: "usage-error"; message: string };
 
-const failure = (message: string): CliArgParseResult => ({ ok: false, help: false, message });
+const failure = (message: string): CliArgParseResult => ({ ok: false, reason: "usage-error", message });
 
 /** 参数解析用户可见错误（退出码 2 语义），由 parseCliArgs 统一捕获转 failure。 */
 class CliArgError extends Error {}
@@ -116,6 +128,7 @@ const COMMAND_SPECS = new Map<string, CommandSpec>([
   ["task get", { command: "task.get", positionals: ["task_id"] }],
   ["task cancel", { command: "task.cancel", positionals: ["task_id"] }],
   ["task wait", { command: "task.wait", positionals: ["task_id"] }],
+  ["batch get", { command: "batch.get", positionals: ["batch_id"] }],
   ["app status", { command: "app.status", positionals: [] }],
 ]);
 
@@ -173,7 +186,11 @@ const parseKvList = (raw: string): { key: string; value: string }[] =>
 /** 解析主体：命令短语定位 + flag 收集 + 按命令构造请求草稿 + 契约校验；用户可见错误以 CliArgError 抛出。 */
 const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
   if (argv[0] === "--help" || argv[0] === "-h") {
-    return { ok: false, help: true };
+    return { ok: false, reason: "help" };
+  }
+  // --version 是客户端本地命令（spec §5.5 / CLI-042）：不发起请求，版本数据源是发现文件。
+  if (argv[0] === "--version" || argv[0] === "-v") {
+    return { ok: false, reason: "version", json: argv.includes("--json") };
   }
 
   const resolveCommandSpec = (): { spec: CommandSpec; rest: readonly string[] } | null => {
@@ -210,7 +227,7 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
       continue;
     }
     if (token === "--help" || token === "-h") {
-      return { ok: false, help: true };
+      return { ok: false, reason: "help" };
     }
     if (token.startsWith("--")) {
       const eq = token.indexOf("=");
@@ -458,6 +475,13 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
       };
       break;
     }
+    case "batch.get":
+      draft = {
+        command: "batch.get",
+        project: requireScalar("project", "--project"),
+        batch_id: requirePositional(0, "batch_id"),
+      };
+      break;
     case "app.status":
       // 应用状态感知（spec §5.5）：无参数、全局只读。
       draft = { command: "app.status" };

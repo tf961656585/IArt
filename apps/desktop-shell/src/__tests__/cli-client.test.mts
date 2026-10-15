@@ -189,15 +189,18 @@ describe("cli-client（对真实控制服务）", () => {
     }
   });
 
-  it("未知参数 → 退出码 2 + 用法提示；未知命令 → 退出码 2", async () => {
+  it("未知参数 → 退出码 2 + 单行用法指引（CLI-041 收敛）；未知命令 → 退出码 2", async () => {
     const unknownFlag = await client.runCliClient(["project", "list", "--bogus"], { discoveryFilePath });
     expect(unknownFlag.exitCode).toBe(2);
     expect(unknownFlag.stderr).toContain("未知参数");
-    expect(unknownFlag.stderr).toContain("iart project list");
+    expect(unknownFlag.stderr).toContain("用法见 iart --help");
+    // CLI-041：解析失败不再全量倾倒用法提示（用法提示只在 --help 输出）
+    expect(unknownFlag.stderr).not.toContain("退出码：");
 
     const unknownCommand = await client.runCliClient(["bogus", "command"], { discoveryFilePath });
     expect(unknownCommand.exitCode).toBe(2);
     expect(unknownCommand.stderr).toContain("无法识别的命令");
+    expect(unknownCommand.stderr).toContain("用法见 iart --help");
   });
 
   it("project delete 缺 --yes → 发送前 schema 校验本地报错，退出码 2（CLI-014）", async () => {

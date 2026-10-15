@@ -4,6 +4,7 @@ import { ExecutableModelDirectoryEntrySchema } from './executable-model-catalog-
 import { PromptDockBatchTaskAcceptanceSchema } from './promptdock-batch-contract';
 import { RuntimeMediaAssetViewSchema, RuntimeTaskViewSchema, UnifiedGenerationStatusSchema } from './schemas/runtime-transaction.schema';
 import { TaskCancelAcceptedResponseSchema } from './task-cancel-contract';
+import { TaskSubmitMediaKindSchema } from './task-submit-media-input';
 
 /**
  * CLI 与本地 Agent 集成契约（contracts 层）—— `iart` 命令面、代理执行通道与设置页状态 DTO 的
@@ -29,6 +30,8 @@ import { TaskCancelAcceptedResponseSchema } from './task-cancel-contract';
  * - 生成受理任务身份：复用 PromptDockBatchTaskAcceptanceSchema（批次标识+任务标识列表；
  *   不拖入 intent_snapshot，CLI 面不消费草稿快照）。
  * - 任务取消受理：复用 TaskCancelAcceptedResponseSchema 的形状（展开其 shape 组合）。
+ * - 生成档案引用媒体类型：复用 TaskSubmitMediaKindSchema（与提交媒体输入同一枚举，不复制）；
+ *   生成档案本体（CliGenerationArchiveSchema）是既有契约没有的投影形状，本文件新建。
  * - generate 参数与受理结果：本文件抽出 CliGenerateParamsSchema / CliGenerateAcceptanceSchema
  *   作为共享形状，B 命令面请求/响应与 C 代理执行通道命令/结果组合复用，禁止两处复制字段。
  * - 项目注册表条目 / 画布节点条目：contracts 现有导出无 Zod 承载可复用（project-dto 为
@@ -55,6 +58,7 @@ export const CLI_ERROR_CODES = [
   'project_name_conflict',
   'project_not_open',
   'asset_not_found',
+  'batch_not_found',
   'node_not_found',
   'group_not_found',
   'invalid_reference',
@@ -81,8 +85,8 @@ export type CliError = z.infer<typeof CliErrorSchema>;
 // ---------------------------------------------------------------------------
 
 /**
- * 命令名清单：`iart <名词> <动作>` 的线上一面，顺序对齐 spec §5.1–§5.5。
- * 共 22 条：项目生命周期 6 + 只读查询 7 + 画布命令 5 + 生成与任务 3 + 应用状态感知 1。
+ * 命令名清单：`iart <名词> <动作>` 的线上一面，顺序对齐 spec §5.1–§5.5（batch.get 归 §5.2 只读查询）。
+ * 共 23 条：项目生命周期 6 + 只读查询 8 + 画布命令 5 + 生成与任务 3 + 应用状态感知 1。
  */
 export const CLI_COMMANDS = [
   'project.list',
@@ -106,6 +110,7 @@ export const CLI_COMMANDS = [
   'task.get',
   'task.cancel',
   'task.wait',
+  'batch.get',
   'app.status',
 ] as const;
 
@@ -376,6 +381,8 @@ export const CliCommandRequestSchema = z.discriminatedUnion('command', [
       timeout: z.number().int().min(1).optional(),
     })
     .strict(),
+  // 生成档案读取（spec §5.2 / CLI-038）：只读，项目未打开也可用。
+  z.object({ command: z.literal('batch.get'), project: ProjectParamSchema, batch_id: z.string().min(1) }).strict(),
   // 应用状态感知（spec §5.5）：无参数、全局只读，不携带项目上下文。
   z.object({ command: z.literal('app.status') }).strict(),
 ]);
@@ -530,6 +537,51 @@ export const CliGenerateAcceptanceSchema = z
   .strict();
 export type CliGenerateAcceptance = z.infer<typeof CliGenerateAcceptanceSchema>;
 
+// -- 生成档案（spec §5.2 batch get / asset get 与 task get 内联，CLI-038/039/040） --------
+
+/** 生成档案的单条引用（批次提交时的参考资产）：asset_id 必载；实体可查才附类型/文件键/本地路径。 */
+export const CliGenerationArchiveReferenceSchema = z
+  .object({
+    asset_id: z.string().min(1),
+    /** 引用资产媒体类型（复用提交媒体输入的媒体类型枚举）；实体不可查证时缺省。 */
+    media_kind: TaskSubmitMediaKindSchema.optional(),
+    /** 资产内容文件键（`<内容sha256>.<扩展名>` 形态）；实体不可查证时缺省。 */
+    file_key: z.string().min(1).optional(),
+    /** 本地媒体文件绝对路径；实体不可查证或缺本地文件承载时缺省。 */
+    local_file_path: z.string().min(1).optional(),
+  })
+  .strict();
+export type CliGenerationArchiveReference = z.infer<typeof CliGenerationArchiveReferenceSchema>;
+
+/**
+ * 生成档案（CLI-038）：批次受理时冻结的提交意图（BatchIntentSnapshot）面向 CLI 的投影；
+ * media_refs / reference_asset_ids 两种承载统一投影为 references 并尽量附资产实体信息与本地路径。
+ * prompt 承载提示词**全文**（任务 metadata 预览是 512 字符截断摘要，档案是唯一全文读取位）；
+ * params 与快照同形透传。三入口（batch get / asset get / task get 内联）经同一构建函数产出本形状，
+ * 任何入口不得出现字段子集。
+ */
+export const CliGenerationArchiveSchema = z
+  .object({
+    batch_id: z.string().min(1),
+    model_id: z.string().min(1),
+    /** 提交提示词全文（非任务 metadata 的 512 字符预览摘要）。 */
+    prompt: z.string(),
+    /** 提交时冻结的模型参数（与受理快照同形透传）。 */
+    params: z.record(z.unknown()),
+    /** 参考资产引用（快照无 media_refs 时为空数组，不以 null 占位）。 */
+    references: z.array(CliGenerationArchiveReferenceSchema),
+    /** 批次固定任务成员（受理期任务标识全集）。 */
+    task_ids: z.array(z.string().min(1)).min(1),
+    /** 受理时刻（快照冻结值，UTC ISO 8601 存储口径）。 */
+    created_at: z.string().min(1),
+  })
+  .strict();
+export type CliGenerationArchive = z.infer<typeof CliGenerationArchiveSchema>;
+
+/** `iart --version` 输出（spec §5.5）：版本数据源是发现文件；null = 读不到（如实承载未知，不虚构占位值）。 */
+export const CliVersionReportSchema = z.object({ version: z.string().min(1).nullable() }).strict();
+export type CliVersionReport = z.infer<typeof CliVersionReportSchema>;
+
 // -- 响应判别联合（CLI 客户端出站校验入口） -------------------------------------
 // 统一信封：{ ok: true, ...result } | { ok: false, error: { code, message } }，
 // 判别字段与请求一致为 command；错误码必须走 A 的枚举。
@@ -563,6 +615,8 @@ export const CliCommandSuccessResponseSchema = z.discriminatedUnion('command', [
       command: z.literal('asset.get'),
       ok: z.literal(true),
       ...CliAssetWithLocalPathSchema.shape,
+      // 生成档案内联（CLI-039）：生成产物附带；导入素材等非生成产物缺省（§5.2 档案口径）。
+      generation: CliGenerationArchiveSchema.optional(),
     })
     .strict(),
   z.object({ command: z.literal('canvas.nodes.list'), ok: z.literal(true), nodes: z.array(CliCanvasNodeEntrySchema) }).strict(),
@@ -612,7 +666,9 @@ export const CliCommandSuccessResponseSchema = z.discriminatedUnion('command', [
     })
     .strict(),
   z.object({ command: z.literal('task.list'), ok: z.literal(true), tasks: z.array(RuntimeTaskViewSchema) }).strict(),
-  z.object({ command: z.literal('task.get'), ok: z.literal(true), task: RuntimeTaskViewSchema }).strict(),
+  z.object({ command: z.literal('task.get'), ok: z.literal(true), task: RuntimeTaskViewSchema, generation: CliGenerationArchiveSchema.optional() }).strict(),
+  // 生成档案读取（CLI-038）：generation 与 asset.get / task.get 内联同一形状（单一构建出口）。
+  z.object({ command: z.literal('batch.get'), ok: z.literal(true), generation: CliGenerationArchiveSchema }).strict(),
   // 任务取消受理复用 TaskCancelAcceptedResponseSchema 的形状（accepted/task_id/cancelled_at）。
   z
     .object({
@@ -655,6 +711,7 @@ export const CliCommandErrorResponseSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('task.get'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('task.cancel'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('task.wait'), ok: z.literal(false), error: CliErrorSchema }).strict(),
+  z.object({ command: z.literal('batch.get'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('app.status'), ok: z.literal(false), error: CliErrorSchema }).strict(),
 ]);
 export type CliCommandErrorResponse = z.infer<typeof CliCommandErrorResponseSchema>;

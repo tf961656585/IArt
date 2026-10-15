@@ -85,6 +85,7 @@ type TaskRecordInput = {
   createdAt: unknown | undefined;
   error: unknown | undefined;
   execution: { trace: unknown | undefined } | undefined;
+  finishedAt: unknown | undefined;
   id: unknown | undefined;
   metadata: unknown | undefined;
   polling: unknown | undefined;
@@ -92,6 +93,7 @@ type TaskRecordInput = {
   projectPath: unknown | undefined;
   request: unknown | undefined;
   response: unknown | undefined;
+  startedAt: unknown | undefined;
   status: unknown | undefined;
   taskId: unknown | undefined;
   updatedAt: unknown | undefined;
@@ -197,6 +199,10 @@ const normalizeTaskRecord = (raw: unknown, fallbackTaskId = '') => {
   metadata.taskId = taskId;
   const createdAt = Number.isFinite(raw.createdAt) ? Number(raw.createdAt) : Date.now();
   const updatedAt = Number.isFinite(raw.updatedAt) ? Number(raw.updatedAt) : createdAt;
+  // 执行真实开始/结束时刻（epoch ms；null = 尚未开始/未终态），随状态补丁写入后在此保真：
+  // tasks 表 v19 起有对应列，经 buildRuntimeTaskRow 投影落库，不得在归一化时丢弃。
+  const startedAt = Number.isFinite(raw.startedAt) ? Number(raw.startedAt) : null;
+  const finishedAt = Number.isFinite(raw.finishedAt) ? Number(raw.finishedAt) : null;
   return {
     version: TASK_STORE_VERSION,
     taskId,
@@ -205,6 +211,8 @@ const normalizeTaskRecord = (raw: unknown, fallbackTaskId = '') => {
     status: normalizeFormalTaskStatus(raw.status),
     createdAt,
     updatedAt,
+    startedAt,
+    finishedAt,
     request: cloneValue(raw.request ?? null),
     polling: normalizeTaskPolling(raw.polling),
     response: cloneValue(raw.response ?? null),

@@ -9,7 +9,7 @@ import {
   type CliError,
 } from "@iart/contracts";
 import { readDiscoveryFile, resolveDefaultDiscoveryFilePath, type CliDiscoveryFile } from "./cli-discovery.cjs";
-import { CLI_USAGE_TEXT, parseCliArgs } from "./cli-arg-parser.cjs";
+import { CLI_USAGE_HINT, CLI_USAGE_TEXT, parseCliArgs } from "./cli-arg-parser.cjs";
 
 /**
  * CLI 客户端（spec docs/integrations/CLI与本地Agent集成.md §4.1：薄的无状态转发层）。
@@ -119,6 +119,7 @@ const sleep = (ms: number): Promise<void> =>
   });
 
 /** --json 模式：一切机器可读输出（含错误）走 stdout；人读模式：结果走 stdout、错误走 stderr。 */
+/** 解析/执行失败的本地错误（退出码 2）：stderr 只给错误信息 + 单行用法指引（spec CLI-041），不再全量倾倒用法提示。 */
 const cliSelfErrorResult = (json: boolean, code: CliError["code"], message: string): CliClientRunResult => {
   if (json) {
     return {
@@ -127,7 +128,7 @@ const cliSelfErrorResult = (json: boolean, code: CliError["code"], message: stri
       stderr: "",
     };
   }
-  return { exitCode: 2, stdout: "", stderr: `${message}\n${CLI_USAGE_TEXT}` };
+  return { exitCode: 2, stdout: "", stderr: `${message}\n${CLI_USAGE_HINT}` };
 };
 
 /** not_running 是命令级失败（退出码 1），人读输出启动提示（CLI-004）。 */
@@ -263,7 +264,8 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
     case "asset.get": {
       const equivalents = response.equivalent_asset_ids;
       const equivalentNote = equivalents !== undefined && equivalents.length > 0 ? `；同内容其他资产标识：${equivalents.join("、")}` : "";
-      return `资产 ${response.asset.assetId}：本地文件 ${response.local_file_path}${equivalentNote}`;
+      const generationNote = response.generation !== undefined ? "；附生成档案（generation 字段，--json 查看）" : "";
+      return `资产 ${response.asset.assetId}：本地文件 ${response.local_file_path}${equivalentNote}${generationNote}`;
     }
     case "canvas.nodes.list": {
       const lines = response.nodes.map((node) => `- ${node.node_id}（${node.node_type}）`);
@@ -300,12 +302,16 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
       const lines = response.tasks.map((task) => `- ${task.taskId}：${task.status}${readTaskFailureReason(task)}`);
       return [`任务共 ${response.tasks.length} 个：`, ...lines].join("\n");
     }
-    case "task.get":
-      return `任务 ${response.task.taskId}：${response.task.status}${readTaskFailureReason(response.task)}`;
+    case "task.get": {
+      const generationNote = response.generation !== undefined ? "；附生成档案（generation 字段，--json 查看）" : "";
+      return `任务 ${response.task.taskId}：${response.task.status}${readTaskFailureReason(response.task)}${generationNote}`;
+    }
     case "task.cancel":
       return `取消已受理：${response.task_id}`;
     case "task.wait":
       return `任务 ${response.task_result.task.taskId}：${response.task_result.task.status}，产物 ${response.task_result.assets.length} 个${readTaskFailureReason(response.task_result.task)}`;
+    case "batch.get":
+      return `生成档案（批次 ${response.generation.batch_id}）：模型 ${response.generation.model_id}，参考 ${response.generation.references.length} 个，任务 ${response.generation.task_ids.length} 个；提示词全文与完整内容用 --json 查看`;
     case "app.status": {
       const lines = response.opened_projects.map((project) => {
         const focusMark = project.focused ? "，持有焦点" : "";
@@ -458,10 +464,30 @@ export const runCliClient = async (argv: readonly string[], deps: CliClientDeps 
   // 1. 参数解析（含发送前契约校验：构造错误本地报，退出码 2，不发起请求）
   const parsed = parseCliArgs(argv);
   if (!parsed.ok) {
-    if (parsed.help) {
+    if (parsed.reason === "help") {
       return { exitCode: 0, stdout: CLI_USAGE_TEXT, stderr: "" };
     }
-    return { exitCode: 2, stdout: "", stderr: `${parsed.message}\n${CLI_USAGE_TEXT}` };
+    // --version 是客户端本地命令（spec §5.5 / CLI-042）：版本数据源是发现文件随应用启动
+    // 写出的应用版本；读不到（应用未在运行等）如实输出未知 + 启动提示，命令仍成功。
+    if (parsed.reason === "version") {
+      const discovery = readDiscoveryFile(deps.discoveryFilePath ?? resolveDefaultDiscoveryFilePath());
+      const version = discovery !== null && discovery.version.length > 0 ? discovery.version : null;
+      if (version === null) {
+        console.debug("[cli-client] --version 未能从发现文件读取应用版本");
+      }
+      if (parsed.json) {
+        return { exitCode: 0, stdout: JSON.stringify({ version }, null, 2), stderr: "" };
+      }
+      return {
+        exitCode: 0,
+        stdout:
+          version !== null
+            ? `IARTStudio 版本：${version}`
+            : "未能读取应用版本：IArtStudio 可能未在运行，请启动应用后再试。",
+        stderr: "",
+      };
+    }
+    return { exitCode: 2, stdout: "", stderr: `${parsed.message}\n${CLI_USAGE_HINT}` };
   }
 
   // 2. 发现文件：缺失/损坏一律按 not_running 处理（文件仅是线索，连接成功才算在役）

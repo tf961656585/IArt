@@ -47,6 +47,8 @@ type TaskRawRow = {
   failureJson: string | null | undefined;
   createdAt: number;
   updatedAt: number;
+  startedAt: number | null | undefined;
+  finishedAt: number | null | undefined;
 };
 type MediaAssetDbRow = {
   assetId: string;
