@@ -170,6 +170,7 @@ const legalIntent = (overrides: Partial<ProgrammaticSubmitIntent> = {}): Program
   refAssetIds: ['asset_1'],
   count: 2,
   promptPresetSnapshots: undefined,
+  clientRequestId: undefined,
   ...overrides,
 });
 
@@ -486,6 +487,72 @@ describe('CLI 程序化提交纯入口（CLI-008 / CLI-007）', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 受理幂等键（spec §5.4 受理幂等键 / CLI-033）
+// ---------------------------------------------------------------------------
+
+describe('受理幂等键（CLI-033 Editor 侧）', () => {
+  it('intent 携带幂等键 → 提交请求携带 client_request_id', async () => {
+    submitGenerationBatchMock.mockResolvedValue(acceptanceResponse(1));
+
+    const outcome = await runGenerationBatchSubmission(
+      legalIntent({ clientRequestId: 'req-seam-echo', refAssetIds: [] }),
+    );
+
+    expect(outcome.ok).toBe(true);
+    const request = submitGenerationBatchMock.mock.calls[0]?.[0];
+    expect(request?.client_request_id).toBe('req-seam-echo');
+  });
+
+  it('界面形态（intent 不带幂等键）→ 提交请求不出现 client_request_id 键', async () => {
+    submitGenerationBatchMock.mockResolvedValue(acceptanceResponse(1));
+
+    await runGenerationBatchSubmission(legalIntent({ refAssetIds: [] }));
+
+    const request = submitGenerationBatchMock.mock.calls[0]?.[0];
+    expect(request).not.toHaveProperty('client_request_id');
+  });
+
+  it('幂等重放（replayed: true）→ 不创建任务节点投影、outcome 标记 replayed，受理结果原样返回', async () => {
+    submitGenerationBatchMock.mockResolvedValue({
+      ...acceptanceResponse(2),
+      replayed: true,
+    });
+    const nodesBefore = useCanvasStore.getState().nodeGraph?.nodes.length ?? 0;
+
+    const outcome = await runGenerationBatchSubmission(
+      legalIntent({ clientRequestId: 'req-seam-replay' }),
+    );
+
+    if (!outcome.ok) throw new Error('expected ok outcome');
+    expect(outcome.replayed).toBe(true);
+    expect(outcome.batchId).toBe('batch_1');
+    expect(outcome.tasks.map((task) => task.task_id)).toEqual(['task_1', 'task_2']);
+    // 重放不触发投影创建：画布无新增节点（既有投影由画布既有恢复/通知机制持有）
+    expect(useCanvasStore.getState().nodeGraph?.nodes.length).toBe(nodesBefore);
+    expect(findTaskNodeByTaskId('task_1')).toBeNull();
+    expect(findTaskNodeByTaskId('task_2')).toBeNull();
+  });
+
+  it('CLI 纯入口：重放回执携带幂等键回显与 replayed 标志；全新受理 replayed: false', async () => {
+    submitGenerationBatchMock.mockResolvedValue({ ...acceptanceResponse(1), replayed: true });
+    const replay = await submitGenerationBatchFromIntent(
+      legalIntent({ clientRequestId: 'req-seam-replay', refAssetIds: [] }),
+    );
+    if (!replay.ok) throw new Error('expected ok result');
+    expect(replay.acceptance.replayed).toBe(true);
+    expect(replay.acceptance.client_request_id).toBe('req-seam-replay');
+
+    submitGenerationBatchMock.mockResolvedValue(acceptanceResponse(1));
+    const fresh = await submitGenerationBatchFromIntent(
+      legalIntent({ clientRequestId: 'req-seam-fresh', refAssetIds: [] }),
+    );
+    if (!fresh.ok) throw new Error('expected ok result');
+    expect(fresh.acceptance.replayed).toBe(false);
+    expect(fresh.acceptance.client_request_id).toBe('req-seam-fresh');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // CLI 契约参数 → 意图映射
 // ---------------------------------------------------------------------------
 
@@ -508,6 +575,7 @@ describe('buildProgrammaticIntentFromCliParams（契约参数 → 提交意图�
       refAssetIds: [],
       count: 1,
       promptPresetSnapshots: undefined,
+      clientRequestId: undefined,
     });
   });
 
@@ -523,5 +591,15 @@ describe('buildProgrammaticIntentFromCliParams（契约参数 → 提交意图�
     expect(intent.count).toBe(3);
     expect(intent.refAssetIds).toEqual(['asset_9']);
     expect('wait' in intent).toBe(false);
+  });
+
+  it('幂等键 client_request_id 进入意图（受理幂等键链路起点，spec CLI-033）', () => {
+    const intent = buildProgrammaticIntentFromCliParams({
+      prompt: 'x',
+      model: 'm',
+      client_request_id: 'req-seam-1',
+    });
+
+    expect(intent.clientRequestId).toBe('req-seam-1');
   });
 });

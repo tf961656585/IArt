@@ -11,6 +11,7 @@ import {
   acceptGenerationBatch,
   dispatchAcceptedBatch,
   persistAcceptedBatch,
+  resolveBatchReplayByClientRequestId,
 } from "../business-actions/generation-batch.cts";
 import * as backendIpcSenderModule from "../backend-ipc-sender.cts";
 import * as loggingModule from "../logging.cts";
@@ -25,6 +26,10 @@ const { sendJson, sendError } = httpUtilsModule;
  *   单个 RuntimeTransaction 原子写入 1 个 batch 行 + 恰好 N 个 task 行；
  *   ack-before-dispatch：响应先行写出，随后 setImmediate 直接并发派发 N 个任务。
  * - 接受失败不得返回部分任务集合。
+ * - 受理幂等键（spec docs/integrations/CLI与本地Agent集成.md §5.4 / CLI-033）：请求携带
+ *   client_request_id 时先按幂等键查重，命中既有批次即幂等重放——返回既有 batch_id 与
+ *   任务身份（响应 replayed: true），不重新受理、不重复派发；未命中走正常受理并把幂等键
+ *   随批次行持久化（batches.clientRequestId 唯一索引是并发重复的兜底防线）。
  */
 const handleGenerationBatchSubmit = async (
   body: unknown,
@@ -39,6 +44,27 @@ const handleGenerationBatchSubmit = async (
     sendError(res, 400, ERROR_CODES.INVALID_TASK, parsed.error.message, corsHeaders);
     return;
   }
+  const clientRequestId = parsed.data.client_request_id ?? null;
+  if (clientRequestId !== null) {
+    const replaySnapshot = await resolveBatchReplayByClientRequestId({
+      projectPath: parsed.data.project_path,
+      clientRequestId,
+    });
+    if (replaySnapshot !== null) {
+      loggingModule.logDebug("[generation-batch] idempotent replay hit", {
+        clientRequestId,
+        batchId: replaySnapshot.batch_id,
+      });
+      const replayPayload = PromptDockBatchSubmitResponseSchema.parse({
+        batch_id: replaySnapshot.batch_id,
+        intent_snapshot: replaySnapshot,
+        tasks: replaySnapshot.task_ids.map((task_id, index) => ({ task_id, task_index: index })),
+        replayed: true,
+      });
+      sendJson(res, 200, replayPayload, corsHeaders);
+      return;
+    }
+  }
   const accepted = await acceptGenerationBatch({
     body: parsed.data,
     baseDir: null,
@@ -51,6 +77,7 @@ const handleGenerationBatchSubmit = async (
     projectPath: parsed.data.project_path,
     intentSnapshot: accepted.intentSnapshot,
     tasks: accepted.tasks,
+    clientRequestId,
   });
   if (!persisted.ok) {
     sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, persisted.message, corsHeaders);
@@ -64,6 +91,7 @@ const handleGenerationBatchSubmit = async (
       task_id: task.taskId,
       task_index: task.taskIndex,
     })),
+    replayed: false,
   });
   // ack-before-dispatch：响应落库并写出后，才直接并发派发（避免任务状态通知早于 Editor 建投影）。
   sendJson(res, 200, responsePayload, corsHeaders);

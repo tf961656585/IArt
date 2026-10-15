@@ -2,7 +2,7 @@ import * as z from 'zod';
 
 import { ExecutableModelDirectoryEntrySchema } from './executable-model-catalog-contract';
 import { PromptDockBatchTaskAcceptanceSchema } from './promptdock-batch-contract';
-import { RuntimeMediaAssetViewSchema, RuntimeTaskViewSchema } from './schemas/runtime-transaction.schema';
+import { RuntimeMediaAssetViewSchema, RuntimeTaskViewSchema, UnifiedGenerationStatusSchema } from './schemas/runtime-transaction.schema';
 import { TaskCancelAcceptedResponseSchema } from './task-cancel-contract';
 
 /**
@@ -220,6 +220,13 @@ export type CliGenerateArgEntry = z.infer<typeof CliGenerateArgEntrySchema>;
  * generate 参数（spec §5.4）：B 命令面请求与 C 代理执行通道命令共享同一参数 schema（不复制）。
  * `wait`（受理后轮询至终态）的轮询执行归 CLI 客户端侧（受理后逐任务轮询至终态）；代理执行通道只承载程序化提交，
  * 画布窗口执行侧对 `wait` 不消费（契约允许携带、执行侧忽略，同 canvas.layout 的 columns 先例）。
+ *
+ * `client_request_id`（CLI flag `--request-id`，spec §5.4 受理幂等键）：客户端幂等键，batch 级。
+ * 未传时 CLI 客户端自动生成 uuid 并随请求携带；同一 request_id 重复提交命中已受理批次时
+ * 幂等重放（返回既有批次与任务身份、`replayed: true`），不重新受理。
+ * 命名口径：不得叫 `request_id`——该名已被代理执行通道的请求关联标识占用
+ * （`CliProxyCommandSchema` generate 变体的 `request_id` 与本参数形状经 `.shape` 组合到同一
+ * strict 对象，同名字段会互相覆盖），幂等键统一用 `client_request_id`。
  */
 export const CliGenerateParamsSchema = z
   .object({
@@ -234,6 +241,8 @@ export const CliGenerateParamsSchema = z
     arg: z.array(CliGenerateArgEntrySchema).optional(),
     /** `--wait` 可选：受理后继续轮询至全部任务终态。 */
     wait: z.boolean().optional(),
+    /** `--request-id` 可选：客户端幂等键（未传时 CLI 自动生成 uuid 并在受理回执回显）。 */
+    client_request_id: z.string().min(1).optional(),
   })
   .strict();
 export type CliGenerateParams = z.infer<typeof CliGenerateParamsSchema>;
@@ -326,7 +335,28 @@ export const CliCommandRequestSchema = z.discriminatedUnion('command', [
       ...CliGenerateParamsSchema.shape,
     })
     .strict(),
-  z.object({ command: z.literal('task.list'), project: ProjectParamSchema }).strict(),
+  z
+    .object({
+      command: z.literal('task.list'),
+      project: ProjectParamSchema,
+      /**
+       * 任务状态过滤（`--status`，spec §5.4/CLI-034）：透传运行域列表端点的既有 status 参数；
+       * 非法取值在契约 parse 即失败（CLI 本地报参数错误，不发起请求）。
+       */
+      status: UnifiedGenerationStatusSchema.nullable().default(null),
+      /**
+       * 时间下界过滤（`--since`，ISO 8601 字符串，spec CLI-034）：按任务 createdAt 过滤，
+       * 客户端后滤（运行域列表端点无 since 参数，改动面最小裁定）；可解析性由执行侧校验。
+       */
+      since: z.string().min(1).nullable().default(null),
+      /**
+       * 受理幂等键反查（`--request-id`，spec CLI-033 考古语义）：按批次反查该次提交受理的
+       * 全部任务（配合 generate 幂等键「重提前先核对」）；未命中返回空任务列表且命令成功
+       * （「该 request_id 没有对应批次」本身就是对账答案）。与 `--status`/`--since` 可组合。
+       */
+      client_request_id: z.string().min(1).nullable().default(null),
+    })
+    .strict(),
   z
     .object({ command: z.literal('task.get'), project: ProjectParamSchema, task_id: z.string().min(1) })
     .strict(),
@@ -481,6 +511,10 @@ export type CliTaskTerminalResult = z.infer<typeof CliTaskTerminalResultSchema>;
  * generate 受理结果（spec §5.4 受理成功输出）：批次标识 + 任务身份列表。
  * B 命令面响应与 C 代理执行通道结果共享同一形状（不复制）——两者都是「程序化提交受理」的
  * 同一产物；`--wait` 的逐任务终态（task_results）只在 B 命令面响应承载，不进共享形状。
+ *
+ * `client_request_id` / `replayed`（spec §5.4 受理幂等键 / CLI-033）：幂等键回显与幂等重放
+ * 标志。新受理 `replayed: false`；同 request_id 命中已受理批次时 `replayed: true` 且任务
+ * 身份来自既有批次（未重新受理）。未携带幂等键的提交两者都缺省。
  */
 export const CliGenerateAcceptanceSchema = z
   .object({
@@ -488,6 +522,10 @@ export const CliGenerateAcceptanceSchema = z
     batch_id: z.string().min(1),
     /** 受理的任务身份（复用 PromptDockBatchTaskAcceptanceSchema；原子受理恒 ≥1）。 */
     tasks: z.array(PromptDockBatchTaskAcceptanceSchema).min(1),
+    /** 幂等键回显：仅提交携带了 `--request-id`（或 CLI 自动生成）时输出。 */
+    client_request_id: z.string().min(1).optional(),
+    /** 幂等重放标志：true = 命中既有批次，任务身份为既有受理结果（未重复创建）。 */
+    replayed: z.boolean().optional(),
   })
   .strict();
 export type CliGenerateAcceptance = z.infer<typeof CliGenerateAcceptanceSchema>;

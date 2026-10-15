@@ -2,15 +2,17 @@ import {
   readAllMediaAssets,
   readAllTasks,
   readBatchById,
+  readBatchByClientRequestId,
   readMediaAssetById,
   readManifestFromDb,
   readNodeGraphFromDb,
   readTaskOutputAssetIndex,
   readTaskOutputs,
+  readTasksByBatchId,
 } from "../storage/editor-storage-read-model.cjs";
 import { getDbForExistingProject } from "../storage/editor-storage-service.cjs";
 import { touchRecentProjectOpenedAt } from "../storage/editor-storage-recent-projects.cjs";
-import type { RuntimeMediaAssetView } from "@iart/contracts";
+import type { BatchIntentSnapshot, RuntimeMediaAssetView, RuntimeTaskView } from "@iart/contracts";
 
 /**
  * CLI 执行器的存储只读查询适配（spec docs/integrations/CLI与本地Agent集成.md §4.2：
@@ -134,6 +136,33 @@ export const readCliTaskOutputAssets = (projectPath: string, taskId: string): Ru
     assets.push(asset);
   }
   return assets;
+};
+
+/**
+ * 按客户端受理幂等键读取批次快照（spec docs/integrations/CLI与本地Agent集成.md §5.4 受理幂等键，
+ * `task list --request-id` 反查与 generate 幂等重放读取的底座）。未命中返回 null（幂等键没有
+ * 对应批次 = 该次提交从未落库，是对账答案不是错误）。
+ */
+export const readCliBatchByClientRequestId = (
+  projectPath: string,
+  clientRequestId: string,
+): BatchIntentSnapshot | null => {
+  const db = getDbForExistingProject(projectPath);
+  if (db === null) {
+    console.debug("[cli-storage] 项目库不可用，按无批次处理", { projectPath, clientRequestId });
+    return null;
+  }
+  return readBatchByClientRequestId(db, clientRequestId);
+};
+
+/** 按批次读取任务视图（task list --request-id 的任务清单数据源，按受理期任务索引排序）。 */
+export const readCliTaskViewsByBatchId = (projectPath: string, batchId: string): RuntimeTaskView[] => {
+  const db = getDbForExistingProject(projectPath);
+  if (db === null) {
+    console.debug("[cli-storage] 项目库不可用，按空任务清单处理", { projectPath, batchId });
+    return [];
+  }
+  return readTasksByBatchId(db, batchId);
 };
 
 /** 画布节点载荷清单（raw payload 数组，投影由 cli-canvas-projection 承担）。 */

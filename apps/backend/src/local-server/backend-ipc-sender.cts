@@ -10,6 +10,7 @@ import type {
   ReadTasksPayload,
   ReadTaskByIdPayload,
   ReadBatchByIdPayload,
+  ReadBatchByClientRequestIdPayload,
   ReadTaskOutputsPayload,
   ReadMediaAssetsByTaskPayload,
   ReadMediaAssetByIdPayload,
@@ -87,6 +88,7 @@ type BackendIpcRequestMessage =
   | ReadTasksPayload
   | ReadTaskByIdPayload
   | ReadBatchByIdPayload
+  | ReadBatchByClientRequestIdPayload
   | ReadTaskOutputsPayload
   | ReadMediaAssetsByTaskPayload
   | ReadMediaAssetByIdPayload
@@ -248,6 +250,25 @@ export const sendReadBatchById = (
     transactionId: generateTransactionId(),
     projectPath: payload.projectPath,
     batchId: payload.batchId,
+  });
+};
+
+/**
+ * 按客户端幂等键读取批次（spec docs/integrations/CLI与本地Agent集成.md §5.4 受理幂等键）：
+ * 受理去重重放与批次反查的 Backend→Main 读取通道。结果经 RuntimeTransactionResult.data 的
+ * `{ batch: BatchIntentSnapshot | null }` 返回（与 sendReadBatchById 同形）。
+ */
+export const sendReadBatchByClientRequestId = (
+  payload: {
+    projectPath: string;
+    clientRequestId: string;
+  },
+): Promise<RuntimeTransactionResult> => {
+  return sendIpcMessage({
+    type: 'runtime:read-batch-by-client-request-id',
+    transactionId: generateTransactionId(),
+    projectPath: payload.projectPath,
+    clientRequestId: payload.clientRequestId,
   });
 };
 

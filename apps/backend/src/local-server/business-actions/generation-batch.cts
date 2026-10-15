@@ -16,7 +16,7 @@ import * as loggingModule from '../logging.cts';
 import * as taskExecutorModule from '../task-executor.cts';
 import { isJsonObject } from '../routes/task-submit-helpers.cts';
 
-const { sendRuntimeTransaction, sendTaskEvent } = backendIpcSenderModule;
+const { sendRuntimeTransaction, sendTaskEvent, sendReadBatchByClientRequestId } = backendIpcSenderModule;
 const { startTaskExecution } = taskExecutorModule;
 const { logDebug, logWarn } = loggingModule;
 
@@ -186,8 +186,10 @@ const persistAcceptedBatch = async (params: {
   projectPath: string;
   intentSnapshot: BatchIntentSnapshot;
   tasks: Array<{ taskId: string; taskIndex: number; record: unknown }>;
+  /** 客户端受理幂等键（spec docs/integrations/CLI与本地Agent集成.md §5.4）；界面提交不携带时为 null。 */
+  clientRequestId: string | null;
 }): Promise<PersistResult> => {
-  const { projectPath, intentSnapshot, tasks } = params;
+  const { projectPath, intentSnapshot, tasks, clientRequestId } = params;
   const batchPayloadJson = JSON.stringify(intentSnapshot);
   const taskRows = tasks.map(({ record }) =>
     buildRuntimeTaskRow(record, {
@@ -205,6 +207,7 @@ const persistAcceptedBatch = async (params: {
         {
           batchId: intentSnapshot.batch_id,
           payloadJson: batchPayloadJson,
+          clientRequestId: clientRequestId ?? undefined,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         },
@@ -229,6 +232,54 @@ const persistAcceptedBatch = async (params: {
     });
     return { ok: false, code: 'runtime_write_failed', message: `Failed to persist generation batch: ${message}` };
   }
+};
+
+/**
+ * 按客户端幂等键解析幂等重放（spec §5.4 受理幂等键）。
+ *
+ * 命中即返回既有批次的不可变 BatchIntentSnapshot（batch_id / task_ids 都在快照内，响应据此
+ * 重放既有受理结果）；未命中返回 null（走正常受理）。Main 侧读取失败（项目库不可用等 IPC
+ * 失败）**不视为未命中**：返回 null 会继续走受理，而幂等键唯一索引会在持久化层硬拒重复
+ * 批次（第二个 batchId 同幂等键的行写不进去）——读取失败时按未命中放行是安全的降级，
+ * 留 debug 痕说明防线转移到唯一索引。
+ */
+const resolveBatchReplayByClientRequestId = async (params: {
+  projectPath: string;
+  clientRequestId: string;
+}): Promise<BatchIntentSnapshot | null> => {
+  let result;
+  try {
+    result = await sendReadBatchByClientRequestId({
+      projectPath: params.projectPath,
+      clientRequestId: params.clientRequestId,
+    });
+  } catch (error) {
+    logDebug('generation batch accept: replay lookup ipc failed, fall through to fresh accept', {
+      clientRequestId: params.clientRequestId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+  if (!result.success) {
+    logDebug('generation batch accept: replay lookup unsuccessful at Main, fall through to fresh accept', {
+      clientRequestId: params.clientRequestId,
+      error: normalizeString(result.error) || 'unknown',
+    });
+    return null;
+  }
+  const data = result.data;
+  const batchField =
+    data !== null && typeof data === 'object' && !Array.isArray(data)
+      ? (data as { batch?: unknown }).batch
+      : null;
+  if (batchField === null || batchField === undefined) return null;
+  const parsed = BatchIntentSnapshotSchema.safeParse(batchField);
+  if (parsed.success) return parsed.data;
+  logDebug('generation batch accept: replay lookup payload failed BatchIntentSnapshotSchema parse', {
+    clientRequestId: params.clientRequestId,
+    issue: parsed.error.message.slice(0, 300),
+  });
+  return null;
 };
 
 /**
@@ -285,6 +336,7 @@ export {
   generateTaskId,
   acceptGenerationBatch,
   persistAcceptedBatch,
+  resolveBatchReplayByClientRequestId,
   dispatchAcceptedBatch,
   type AcceptResult,
   type PersistResult,

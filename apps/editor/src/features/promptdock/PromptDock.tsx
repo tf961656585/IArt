@@ -343,6 +343,8 @@ export function PromptDock() {
       refAssetIds: currentDraft.references.map((reference) => reference.assetId),
       count: currentDraft.taskCount,
       promptPresetSnapshots: currentDraft.promptPresetSnapshots,
+      // 界面提交不携带受理幂等键（幂等键是 CLI 提交面语义，spec §5.4 受理幂等键）。
+      clientRequestId: undefined,
     };
     setSubmitting(true);
     setPreflightIssues(null);

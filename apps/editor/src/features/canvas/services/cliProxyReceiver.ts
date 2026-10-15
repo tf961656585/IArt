@@ -753,16 +753,25 @@ const executeGenerate = async (
     arg: command.arg,
     // wait 由本地控制服务侧消费（受理后轮询）；画布窗口只做程序化提交，原样透传不消费。
     wait: command.wait,
+    // 受理幂等键原样透传（spec §5.4 受理幂等键 / CLI-033）：未携带为 undefined。
+    client_request_id: command.client_request_id,
   });
   try {
     const outcome = await submitGenerationBatchFromIntent(intent);
     if (outcome.ok) {
-      // 受理结果与 B 命令面 generate 响应的受理部分同形状（批次标识 + 任务身份列表）。
+      // 受理结果与 B 命令面 generate 响应的受理部分同形状（批次标识 + 任务身份列表）；
+      // 幂等键回显与重放标志原样透传（spec §5.4 受理幂等键 / CLI-033）。
       return {
         command: 'generate',
         request_id: requestId,
         batch_id: outcome.acceptance.batch_id,
         tasks: outcome.acceptance.tasks,
+        ...(outcome.acceptance.client_request_id !== undefined
+          ? { client_request_id: outcome.acceptance.client_request_id }
+          : {}),
+        ...(outcome.acceptance.replayed !== undefined
+          ? { replayed: outcome.acceptance.replayed }
+          : {}),
       };
     }
     console.debug('[cliProxyReceiver] generate rejected', {

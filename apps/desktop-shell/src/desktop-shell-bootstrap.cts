@@ -55,10 +55,12 @@ import { CLI_PROXY_REQUEST_CHANNEL } from "@iart/contracts";
 import {
   readCliAssetGenerationIndex,
   readCliAssetTaskIndex,
+  readCliBatchByClientRequestId,
   readCliCanvasNodePayloads,
   readCliProjectMediaAssetById,
   readCliProjectMediaAssets,
   readCliTaskOutputAssets,
+  readCliTaskViewsByBatchId,
   touchCliProjectOpenedAt,
 } from "./cli/cli-storage-queries.cjs";
 
@@ -244,6 +246,8 @@ const cliExecutorDeps = {
     readAssetTaskIndex: readCliAssetTaskIndex,
     readAssetGenerationIndex: readCliAssetGenerationIndex,
     readTaskOutputAssets: readCliTaskOutputAssets,
+    readBatchByClientRequestId: readCliBatchByClientRequestId,
+    readTaskViewsByBatchId: readCliTaskViewsByBatchId,
     readCanvasNodePayloads: readCliCanvasNodePayloads,
   },
   proxy: {

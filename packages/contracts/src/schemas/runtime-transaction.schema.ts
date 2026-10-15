@@ -148,6 +148,12 @@ export const RuntimeBatchRowSchema = z.object({
   payloadJson: z.string(),
   createdAt: z.number().nullable().optional(),
   updatedAt: z.number().nullable().optional(),
+  /**
+   * 客户端幂等键（spec docs/integrations/CLI与本地Agent集成.md §5.4 受理幂等键）：batch 级
+   * 去重键，由提交请求 client_request_id 承载；界面提交不携带时为 null/缺省。存储层
+   * batches.clientRequestId（唯一索引）的写路径契约。
+   */
+  clientRequestId: z.string().nullable().optional(),
 }).strict();
 
 export const MediaAssetsChangedNotificationSchema = z.object({

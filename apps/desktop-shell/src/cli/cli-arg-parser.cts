@@ -26,8 +26,8 @@ export const CLI_USAGE_TEXT = `iart — 驱动 IARTStudio 的命令行入口（�
   iart canvas node move --node <节点id> --x N --y N --project P
   iart canvas node delete --nodes id1,id2 [--yes] --project P
   iart canvas layout --scope all|group:<id> [--columns N] [--order id1,id2] --project P
-  iart generate --prompt T --model M [--count N] [--ref id1,id2] [--arg k=v,k2=v2] [--wait] --project P
-  iart task list --project P | task get <taskId> | task cancel <taskId> | task wait <taskId>
+  iart generate --prompt T --model M [--count N] [--ref id1,id2] [--arg k=v,k2=v2] [--request-id ID] [--wait] --project P
+  iart task list --project P [--status S] [--since ISO时间] [--request-id ID] | task get <taskId> | task cancel <taskId> | task wait <taskId>
   iart app status         查看应用状态：已打开项目、焦点与画布选中
 
 通用参数：
@@ -82,6 +82,9 @@ const FLAG_SPECS = new Map<string, FlagSpec>([
   ["--yes", { field: "yes", kind: "boolean" }],
   ["--wait", { field: "wait", kind: "boolean" }],
   ["--timeout", { field: "timeout", kind: "number" }],
+  ["--request-id", { field: "client_request_id", kind: "string" }],
+  ["--status", { field: "status", kind: "string" }],
+  ["--since", { field: "since", kind: "string" }],
 ]);
 
 interface CommandSpec {
@@ -404,6 +407,7 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
       const ref = optionalStringList("ref");
       const argRaw = listValues.get("arg");
       const arg = argRaw === undefined ? undefined : argRaw.flatMap((item) => parseKvList(item));
+      const clientRequestId = scalarValues.get("client_request_id");
       draft = {
         command: "generate",
         project: requireScalar("project", "--project"),
@@ -413,12 +417,23 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
         ...(ref !== undefined ? { ref } : {}),
         ...(arg !== undefined ? { arg } : {}),
         ...(booleanFlags.has("wait") ? { wait: true } : {}),
+        ...(clientRequestId !== undefined ? { client_request_id: clientRequestId } : {}),
       };
       break;
     }
-    case "task.list":
-      draft = { command: "task.list", project: requireScalar("project", "--project") };
+    case "task.list": {
+      const status = scalarValues.get("status");
+      const since = scalarValues.get("since");
+      const clientRequestId = scalarValues.get("client_request_id");
+      draft = {
+        command: "task.list",
+        project: requireScalar("project", "--project"),
+        ...(status !== undefined ? { status } : {}),
+        ...(since !== undefined ? { since } : {}),
+        ...(clientRequestId !== undefined ? { client_request_id: clientRequestId } : {}),
+      };
       break;
+    }
     case "task.get":
       draft = {
         command: "task.get",

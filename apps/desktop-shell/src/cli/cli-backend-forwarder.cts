@@ -141,7 +141,12 @@ export const parseTaskListPayload = (payload: unknown): { tasks: RuntimeTaskView
   return { tasks };
 };
 
-/** Hub 任务摘要条目 → RuntimeTaskView 投影（列表摘要没有 request/metadata/进度字段，不虚构）。 */
+/**
+ * Hub 任务摘要条目 → RuntimeTaskView 投影（列表摘要没有 request/metadata 字段，不虚构）。
+ * progressPercent 恢复透传（spec CLI-034 任务列表可观测）：backend 列表端点已带
+ * progress=progressPercent 投影（HubTaskSummaryItemSchema.progress），此处映射进任务状态
+ * 契约视图；列表未写入进度的任务为 null，映射为字段缺省（契约 optional）。
+ */
 const projectTaskSummaryToView = (entry: HubTaskSummaryItem): RuntimeTaskView | null => {
   const candidate = {
     taskId: entry.taskId,
@@ -151,6 +156,7 @@ const projectTaskSummaryToView = (entry: HubTaskSummaryItem): RuntimeTaskView | 
     ...(entry.targetNodeId !== null ? { targetNodeId: entry.targetNodeId } : {}),
     ...(entry.remoteRequestId !== null ? { remoteRequestId: entry.remoteRequestId } : {}),
     ...(entry.errorMessage !== null ? { errorMessage: entry.errorMessage } : {}),
+    ...(entry.progress !== null ? { progressPercent: entry.progress } : {}),
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
   };

@@ -1,11 +1,13 @@
 import {
   TaskCancelAcceptedResponseSchema,
   UNIFIED_GENERATION_RUNNING_STATUSES,
+  type BatchIntentSnapshot,
   type CliCanvasSelection,
   type CliCommandRequest,
   type CliErrorCode,
   type OpenEditorWindowResult,
   type RuntimeMediaAssetView,
+  type RuntimeTaskView,
 } from "@iart/contracts";
 import * as path from "node:path";
 import type { CliCanvasNodeEntry } from "@iart/contracts";
@@ -86,6 +88,13 @@ export interface CliCommandExecutorStorage {
   /** 资产 → 生成来源索引（--query 提示词命中与 --model 过滤的数据源；仅 --query/--model 时消费）。 */
   readAssetGenerationIndex: (projectPath: string) => ReadonlyMap<string, CliAssetGenerationSource>;
   readTaskOutputAssets: (projectPath: string, taskId: string) => readonly RuntimeMediaAssetView[];
+  /**
+   * 按客户端受理幂等键读取批次快照（spec §5.4 受理幂等键 / CLI-033）：
+   * task list --request-id 反查的底座；未命中（幂等键没有对应批次）返回 null。
+   */
+  readBatchByClientRequestId: (projectPath: string, clientRequestId: string) => BatchIntentSnapshot | null;
+  /** 按批次读取任务视图（task list --request-id 的任务清单数据源，受理期任务索引排序）。 */
+  readTaskViewsByBatchId: (projectPath: string, batchId: string) => readonly RuntimeTaskView[];
   readCanvasNodePayloads: (projectPath: string) => readonly unknown[];
 }
 
@@ -177,6 +186,13 @@ const resolveProjectOrFail = (request: CliCommandRequest, deps: CliCommandExecut
 const buildTaskQueryPath = (pathname: string, projectPath: string): string =>
   `${pathname}?projectPath=${encodeURIComponent(projectPath)}`;
 
+/** 带额外出发端查询参数的任务列表路径（status 等）：单一定位符拼装，避免双 `?`。 */
+const buildTaskListQueryPath = (params: { projectPath: string; status: string | null }): string => {
+  const query = new URLSearchParams({ projectPath: params.projectPath });
+  if (params.status !== null) query.set("status", params.status);
+  return `/api/tasks?${query.toString()}`;
+};
+
 /**
  * 画布命令 / 生成提交的项目已打开守卫（CLI-007，spec §4.2/§13）：
  * 无存活画布窗口一律 project_not_open 拒绝，编辑域存储无任何写入、不做任何降级。
@@ -239,9 +255,15 @@ const proxyOutcomeToResult = (
         cancelled_at: response.cancelled_at,
       });
     case "generate":
-      // 受理结果直通（批次标识 + 任务身份列表）；逐任务终态由 CLI 客户端 --wait 轮询
-      // task.wait 命令收集（批次三实现），代理通道不承载，恒为空数组。
-      return okResult(command, { batch_id: response.batch_id, tasks: response.tasks, task_results: [] });
+      // 受理结果直通（批次标识 + 任务身份列表 + 幂等键回显/重放标志）；逐任务终态由 CLI 客户端
+      // --wait 轮询 task.wait 命令收集（批次三实现），代理通道不承载，恒为空数组。
+      return okResult(command, {
+        batch_id: response.batch_id,
+        tasks: response.tasks,
+        ...(response.client_request_id !== undefined ? { client_request_id: response.client_request_id } : {}),
+        ...(response.replayed !== undefined ? { replayed: response.replayed } : {}),
+        task_results: [],
+      });
     case "canvas.selection.get":
       // 防御分支：画布状态只读查询不经本映射（app.status 执行器直读 selection），不应到达此处。
       return errorResult(command, "internal_error", "命令执行出现内部错误，请稍后重试。");
@@ -481,17 +503,62 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
     if (request.command !== "task.list") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
     const resolution = resolveProjectOrFail(request, deps);
     if (!resolution.ok) return resolution.result;
-    const forwarded = await deps.forwarder.getJson(buildTaskQueryPath("/api/tasks", resolution.project.path));
-    if (!forwarded.ok) {
-      console.debug("[cli-executor] task.list 转发失败", { reason: forwarded.reason, detail: forwarded.detail });
-      return errorResult(request.command, "internal_error", "生成任务列表暂时读不出来，请稍后重试。");
+    const { project } = resolution;
+    // --since 可解析性前置校验（本地报参数错误，不发起请求）；解析为 epoch ms 客户端后滤。
+    let sinceMs: number | null = null;
+    if (request.since !== null) {
+      const parsed = Date.parse(request.since);
+      if (!Number.isFinite(parsed)) {
+        console.debug("[cli-executor] task.list --since 不是合法时间", { since: request.since });
+        return errorResult(
+          request.command,
+          "command_rejected",
+          `--since 需要是合法的 ISO 8601 时间（如 2026-10-14T08:00:00Z），收到：${request.since}。`,
+        );
+      }
+      sinceMs = parsed;
     }
-    const list = parseTaskListPayload(forwarded.payload);
-    if (list === null) {
-      return errorResult(request.command, "internal_error", "生成任务列表暂时读不出来，请稍后重试。");
+
+    let tasks: RuntimeTaskView[];
+    if (request.client_request_id !== null) {
+      // 受理幂等键反查（spec §5.4 受理幂等键 / CLI-033 考古语义）：按批次反查任务清单，
+      // 存储只读投影承载（不经运行域列表端点）；未命中返回空列表且命令成功——
+      // 「该 request_id 没有对应批次」本身就是对账答案（该次提交从未落库，可安全重提）。
+      const batch = deps.storage.readBatchByClientRequestId(project.path, request.client_request_id);
+      if (batch === null) {
+        console.debug("[cli-executor] task.list 幂等键未命中批次，返回空列表", {
+          clientRequestId: request.client_request_id,
+          projectPath: project.path,
+        });
+        tasks = [];
+      } else {
+        tasks = deps.storage.readTaskViewsByBatchId(project.path, batch.batch_id).slice();
+      }
+    } else {
+      const forwarded = await deps.forwarder.getJson(
+        buildTaskListQueryPath({ projectPath: project.path, status: request.status }),
+      );
+      if (!forwarded.ok) {
+        console.debug("[cli-executor] task.list 转发失败", { reason: forwarded.reason, detail: forwarded.detail });
+        return errorResult(request.command, "internal_error", "生成任务列表暂时读不出来，请稍后重试。");
+      }
+      const list = parseTaskListPayload(forwarded.payload);
+      if (list === null) {
+        return errorResult(request.command, "internal_error", "生成任务列表暂时读不出来，请稍后重试。");
+      }
+      // 服务端已按 projectPath 过滤，此处再按解析出的项目路径收敛一次（防查询参数被忽略的漂移）。
+      tasks = list.tasks.filter((task) => task.projectPath === project.path);
     }
-    // 服务端已按 projectPath 过滤，此处再按解析出的项目路径收敛一次（防查询参数被忽略的漂移）。
-    const tasks = list.tasks.filter((task) => task.projectPath === resolution.project.path);
+
+    // --status 兜底过滤：转发路径服务端已按 status 过滤，此处幂等收敛（防参数被忽略的漂移，
+    // 与 projectPath 双保险同语义）；幂等键反查路径在此处实际生效。
+    if (request.status !== null) {
+      tasks = tasks.filter((task) => task.status === request.status);
+    }
+    // --since 客户端后滤（改动面最小裁定：运行域列表端点无 since 参数）。
+    if (sinceMs !== null) {
+      tasks = tasks.filter((task) => task.createdAt >= sinceMs);
+    }
     return okResult(request.command, { tasks });
   });
 
@@ -641,7 +708,7 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
     const guard = guardProjectOpenOrFail(request.command, resolution.project.path, deps);
     if (guard !== null) return guard;
     // 程序化提交（spec §6.4）：画布窗口执行创作面提交主链；wait 轮询由 CLI 客户端承接，
-    // 代理通道只承载受理（wait 原样携带、画布窗口执行侧忽略）。
+    // 代理通道只承载受理（wait 原样携带、画布窗口执行侧忽略）。幂等键原样透传（CLI-033）。
     const outcome = await deps.proxy.dispatch(resolution.project.path, {
       command: "generate",
       prompt: request.prompt,
@@ -650,6 +717,7 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
       ...(request.ref !== undefined ? { ref: request.ref } : {}),
       ...(request.arg !== undefined ? { arg: request.arg } : {}),
       ...(request.wait !== undefined ? { wait: request.wait } : {}),
+      ...(request.client_request_id !== undefined ? { client_request_id: request.client_request_id } : {}),
     });
     return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
   });

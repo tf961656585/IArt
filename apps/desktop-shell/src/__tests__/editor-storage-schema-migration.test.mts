@@ -542,4 +542,84 @@ describe('editor storage schema（裁断后迁移：v11 → v15 自动升级，�
       db.close();
     }
   });
+
+  it('v17 库打开时自动迁移到 v18：batches 补 clientRequestId 列与唯一索引（存量批次行保持 NULL）', () => {
+    const schema = loadSchemaModule();
+    const db = new Database(':memory:');
+    try {
+      // 构造一个 v17 库：batches 为 v12 重建后的形状（无 clientRequestId），存量两行
+      // （界面提交批次无幂等键；模拟历史数据）。
+      db.exec(`
+        CREATE TABLE meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        INSERT INTO meta (key, value) VALUES ('storage_schema_version', '17');
+        CREATE TABLE batches (
+          batchId TEXT PRIMARY KEY,
+          payloadJson TEXT NOT NULL,
+          createdAt INTEGER,
+          updatedAt INTEGER
+        );
+        INSERT INTO batches (batchId, payloadJson, createdAt, updatedAt)
+          VALUES ('batch-legacy-a', '{"batch_id":"batch-legacy-a"}', 1000, 2000),
+                 ('batch-legacy-b', '{"batch_id":"batch-legacy-b"}', 3000, 4000);
+      `);
+
+      schema.initSchema(db);
+
+      const versionRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(
+        schema.STORAGE_SCHEMA_VERSION_KEY,
+      ) as { value: string } | undefined;
+      assert.equal(
+        versionRow !== undefined ? Number(versionRow.value) : null,
+        schema.CURRENT_SCHEMA_VERSION,
+        'version should migrate to current',
+      );
+      assert.ok(columnNames(db, 'batches').includes('clientRequestId'), 'clientRequestId should exist');
+
+      // 存量行保真：批次身份/快照/时间戳不变，clientRequestId 为 NULL（界面提交无幂等键）。
+      const legacy = db
+        .prepare('SELECT batchId, payloadJson, clientRequestId, createdAt, updatedAt FROM batches WHERE batchId = ?')
+        .get('batch-legacy-a') as
+        | { batchId: string; payloadJson: string; clientRequestId: string | null; createdAt: number; updatedAt: number }
+        | undefined;
+      assert.ok(legacy !== undefined, 'legacy batch row should survive migration');
+      assert.equal(legacy.payloadJson, '{"batch_id":"batch-legacy-a"}');
+      assert.equal(legacy.clientRequestId, null);
+      assert.equal(legacy.createdAt, 1000);
+
+      // 唯一索引就位且对 NULL 不去重：两个 NULL 行可并存；非空值唯一（同幂等键第二行被硬拒）。
+      const indexRow = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'batches_clientRequestId_idx'")
+        .get() as { name: string } | undefined;
+      assert.ok(indexRow !== undefined, 'unique index should exist');
+      const nullCount = db.prepare('SELECT COUNT(*) AS n FROM batches WHERE clientRequestId IS NULL').get() as { n: number };
+      assert.equal(nullCount.n, 2, 'multiple NULL rows coexist (unique index ignores NULL)');
+
+      // 幂等：重复执行 initSchema 不重复加列、不报错。
+      schema.initSchema(db);
+      assert.ok(columnNames(db, 'batches').includes('clientRequestId'));
+    } finally {
+      db.close();
+    }
+  });
+
+  it('v18 唯一索引兜底：同 clientRequestId 的第二个批次行写入被硬拒（UNIQUE constraint）', () => {
+    const schema = loadSchemaModule();
+    const db = new Database(':memory:');
+    try {
+      schema.initSchema(db);
+      const insert = db.prepare(
+        'INSERT INTO batches (batchId, payloadJson, clientRequestId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)',
+      );
+      insert.run('batch-a', '{"batch_id":"batch-a"}', 'req-dup', 1, 2);
+      assert.throws(() => insert.run('batch-b', '{"batch_id":"batch-b"}', 'req-dup', 3, 4), /UNIQUE/);
+      // 不同 clientRequestId 与 NULL（界面提交批次）不受影响。
+      insert.run('batch-c', '{"batch_id":"batch-c"}', 'req-other', 5, 6);
+      insert.run('batch-d', '{"batch_id":"batch-d"}', null, 7, 8);
+    } finally {
+      db.close();
+    }
+  });
 });

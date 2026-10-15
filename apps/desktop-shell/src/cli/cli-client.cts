@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   UNIFIED_GENERATION_RUNNING_STATUSES,
   CliCommandResponseSchema,
@@ -30,7 +31,8 @@ import { CLI_USAGE_TEXT, parseCliArgs } from "./cli-arg-parser.cjs";
  *   任务 id 列表后轮询至全部终态，逐任务取终态与产物，部分失败逐任务如实输出（CLI-009），
  *   不整体掩盖。
  *
- * 禁止项（spec §13）：生成提交不自动重试（提交受理非幂等，传输层失败原样报错）；
+ * 禁止项（spec §13）：生成提交不自动重试（传输层失败原样报错；CLI 自身自动生成幂等键——
+ * 同键重提命中既有批次时幂等重放返回既有受理结果，不重复创建任务，spec §5.4 受理幂等键）；
  * CLI 不自动启动应用；连接失败一律按 not_running 处理，发现文件仅是线索非在役判据（CLI-004）。
  */
 
@@ -64,6 +66,44 @@ const NOT_RUNNING_MESSAGE = "IArtStudio 未在运行，请先启动应用后再�
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 
 const RUNNING_STATUS_SET: ReadonlySet<string> = new Set<string>(UNIFIED_GENERATION_RUNNING_STATUSES);
+
+/** 人读失败原因截断上限（spec CLI-035）：首 200 字符 + 截断省略号，不整段倾倒堆栈文本。 */
+const FAILURE_REASON_MAX_LENGTH = 200;
+
+const truncateFailureReason = (text: string): string =>
+  text.length > FAILURE_REASON_MAX_LENGTH
+    ? `${text.slice(0, FAILURE_REASON_MAX_LENGTH)}…`
+    : text;
+
+/**
+ * 任务终态失败的人读原因（spec CLI-035）：errorMessage 优先，缺省回落失败结构的人读链
+ * （userMessage → message → backendMessage）。先截断到首 200 字符再拼错误码前缀。
+ * 非失败任务或无原因返回空串。
+ */
+const readTaskFailureReason = (task: {
+  status: string;
+  errorMessage?: string | null | undefined;
+  errorCode?: string | null | undefined;
+  failure?: {
+    code?: string | null | undefined;
+    message?: string | null | undefined;
+    userMessage?: string | null | undefined;
+    backendMessage?: string | null | undefined;
+  } | null | undefined;
+}): string => {
+  if (task.status !== "failed") return "";
+  const reason =
+    task.errorMessage !== undefined && task.errorMessage !== null && task.errorMessage !== ""
+      ? task.errorMessage
+      : task.failure?.userMessage ?? task.failure?.message ?? task.failure?.backendMessage ?? "";
+  const trimmed = reason.trim();
+  if (trimmed.length === 0) return "";
+  const truncated = truncateFailureReason(trimmed);
+  const code = task.errorCode ?? task.failure?.code ?? null;
+  return code !== null && code !== undefined && code.length > 0
+    ? `，失败原因：[${code}] ${truncated}`
+    : `，失败原因：${truncated}`;
+};
 
 const safeJsonParse = (text: string): unknown => {
   try {
@@ -242,23 +282,30 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
     case "generate": {
       if (response.task_results.length === 0) {
         const taskIds = response.tasks.map((task) => task.task_id).join("、");
-        return `生成已受理：批次 ${response.batch_id}，任务 ${taskIds}`;
+        const idempotencyNote =
+          response.client_request_id !== undefined ? `（幂等键 ${response.client_request_id}）` : "";
+        if (response.replayed === true) {
+          return `该幂等键此前已提交成功${idempotencyNote}，返回已受理批次、未重复创建：批次 ${response.batch_id}，任务 ${taskIds}`;
+        }
+        return `生成已受理${idempotencyNote}：批次 ${response.batch_id}，任务 ${taskIds}`;
       }
       const lines = response.task_results.map(
-        (result) => `- ${result.task.taskId}：${result.task.status}，产物 ${result.assets.length} 个`,
+        (result) => `- ${result.task.taskId}：${result.task.status}，产物 ${result.assets.length} 个${readTaskFailureReason(result.task)}`,
       );
-      return [`批次 ${response.batch_id} 已到终态：`, ...lines].join("\n");
+      const replayNote =
+        response.replayed === true ? `（幂等键命中既有批次，未重复创建）` : "";
+      return [`批次 ${response.batch_id} 已到终态${replayNote}：`, ...lines].join("\n");
     }
     case "task.list": {
-      const lines = response.tasks.map((task) => `- ${task.taskId}：${task.status}`);
+      const lines = response.tasks.map((task) => `- ${task.taskId}：${task.status}${readTaskFailureReason(task)}`);
       return [`任务共 ${response.tasks.length} 个：`, ...lines].join("\n");
     }
     case "task.get":
-      return `任务 ${response.task.taskId}：${response.task.status}`;
+      return `任务 ${response.task.taskId}：${response.task.status}${readTaskFailureReason(response.task)}`;
     case "task.cancel":
       return `取消已受理：${response.task_id}`;
     case "task.wait":
-      return `任务 ${response.task_result.task.taskId}：${response.task_result.task.status}，产物 ${response.task_result.assets.length} 个`;
+      return `任务 ${response.task_result.task.taskId}：${response.task_result.task.status}，产物 ${response.task_result.assets.length} 个${readTaskFailureReason(response.task_result.task)}`;
     case "app.status": {
       const lines = response.opened_projects.map((project) => {
         const focusMark = project.focused ? "，持有焦点" : "";
@@ -389,6 +436,10 @@ const runGenerateWait = async (
     ok: true,
     batch_id: acceptance.batch_id,
     tasks: acceptance.tasks,
+    // 幂等键回显与重放标志原样随行（spec §5.4 受理幂等键 / CLI-033）：--wait 全量响应
+    // 与受理回执保持同一幂等语义。
+    ...(acceptance.client_request_id !== undefined ? { client_request_id: acceptance.client_request_id } : {}),
+    ...(acceptance.replayed !== undefined ? { replayed: acceptance.replayed } : {}),
     task_results: taskResults,
   };
   // 组装后的完整响应同样过契约校验（CLI-014 客户端侧）；非法形状按执行失败呈现。
@@ -422,16 +473,24 @@ export const runCliClient = async (argv: readonly string[], deps: CliClientDeps 
   const fetchImpl = deps.fetchImpl ?? fetch;
   const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
+  // 幂等键自动生成（spec §5.4 受理幂等键 / CLI-033）：generate 未显式传 --request-id 时
+  // 自动生成 uuid 随请求携带，受理回执回显该键——进程崩溃后凭回执里的键即可
+  // `task list --request-id` 对账（命中已有批次则安全重提同键幂等重放），不必盲目重提。
+  let request = parsed.request;
+  if (request.command === "generate") {
+    request = { ...request, client_request_id: request.client_request_id ?? randomUUID() };
+  }
+
   // 3. 等待型命令：客户端轮询语义（spec §5.4，批次三）
-  if (parsed.request.command === "task.wait") {
-    return runTaskWait(fetchImpl, discovery, parsed.json, parsed.request, pollIntervalMs);
+  if (request.command === "task.wait") {
+    return runTaskWait(fetchImpl, discovery, parsed.json, request, pollIntervalMs);
   }
 
   // 4. 发送请求；连接失败（ECONNREFUSED 等）一律 not_running；不设超时、不自动重试
-  const outcome = await sendCommandRequest(fetchImpl, discovery, parsed.request);
+  const outcome = await sendCommandRequest(fetchImpl, discovery, request);
   if (
-    parsed.request.command === "generate" &&
-    parsed.request.wait === true &&
+    request.command === "generate" &&
+    request.wait === true &&
     outcome.kind === "response" &&
     outcome.response.ok &&
     outcome.response.command === "generate" &&
@@ -442,7 +501,7 @@ export const runCliClient = async (argv: readonly string[], deps: CliClientDeps 
       fetchImpl,
       discovery,
       parsed.json,
-      parsed.request,
+      request,
       outcome.response,
       pollIntervalMs,
       deps.emitWaitProgress,

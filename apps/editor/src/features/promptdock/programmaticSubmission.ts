@@ -67,6 +67,14 @@ export type ProgrammaticSubmitIntent = {
    * 前置校验要按它阻断失效 token、提交前要按它展开正文——两者都属共享核心的「校验→构造」段。
    */
   promptPresetSnapshots: Record<string, PromptCollectionItem> | undefined;
+  /**
+   * 客户端受理幂等键（spec docs/integrations/CLI与本地Agent集成.md §5.4 受理幂等键）。
+   * CLI 提交携带（CLI 客户端未传时自动生成 uuid）；界面提交恒为 undefined（不携带）。
+   * 同一幂等键重复提交命中既有批次时后端幂等重放（响应 replayed: true），本模块跳过
+   * 任务节点投影创建（投影的创建触发事实是「全新受理」的重放回执不成立，重复创建会在
+   * 画布产生重复任务节点）。
+   */
+  clientRequestId: string | undefined;
 };
 
 /** 共享核心的失败分类（UI 与 CLI 各自映射反馈形态；transport 失败原样抛出不在此收敛）。 */
@@ -96,6 +104,8 @@ export type GenerationSubmissionOutcome =
       batchId: string;
       /** 受理的任务身份（task_id + task_index，与提交响应逐条一致） */
       tasks: PromptDockBatchTaskAcceptance[];
+      /** 幂等重放标志（spec §5.4 受理幂等键）：true = 命中既有批次，未重新受理、未创建投影。 */
+      replayed: boolean;
     }
   | { ok: false; failure: GenerationSubmissionFailure };
 
@@ -269,7 +279,19 @@ export const runGenerationBatchSubmission = async (
     task_count: intent.count,
     project_path: projectPath,
     mention_map: mentionMap,
+    ...(intent.clientRequestId !== undefined ? { client_request_id: intent.clientRequestId } : {}),
   });
+
+  // 幂等重放（spec §5.4 受理幂等键）：命中既有批次时任务身份为既有受理结果——投影的创建
+  // 触发事实是「全新受理」，重放回执不再触发投影创建（重复创建会在画布产生重复任务节点；
+  // 既有投影由画布既有恢复/通知机制持有）。留 debug 痕说明跳过。
+  if (response.replayed === true) {
+    console.debug('[programmaticSubmission] idempotent replay hit, skip task projection creation', {
+      batchId: response.batch_id,
+      clientRequestId: intent.clientRequestId,
+    });
+    return { ok: true, batchId: response.batch_id, tasks: response.tasks, replayed: true };
+  }
 
   // 受理回执是任务节点投影的唯一创建触发事实（spec 固定任务数批次提交与投影语义）；
   // 与界面提交同一函数，不另建补投影旁路。
@@ -284,7 +306,7 @@ export const runGenerationBatchSubmission = async (
   if (!createResult.ok) {
     return { ok: false, failure: { kind: 'projection-failed', reason: createResult.reason } };
   }
-  return { ok: true, batchId: response.batch_id, tasks: response.tasks };
+  return { ok: true, batchId: response.batch_id, tasks: response.tasks, replayed: false };
 };
 
 // ---------------------------------------------------------------------------
@@ -309,6 +331,7 @@ export const buildProgrammaticIntentFromCliParams = (
   refAssetIds: params.ref ?? [],
   count: params.count ?? 1,
   promptPresetSnapshots: undefined,
+  clientRequestId: params.client_request_id,
 });
 
 /** CLI `--arg k=v` 条目 → 参数记录：同名键后者覆盖（重复键留 debug 痕，条件跳过必须留痕）。 */
@@ -471,7 +494,15 @@ export const submitGenerationBatchFromIntent = async (
       { selectCreatedNodes: false },
     );
     if (outcome.ok) {
-      return { ok: true, acceptance: { batch_id: outcome.batchId, tasks: outcome.tasks } };
+      return {
+        ok: true,
+        acceptance: {
+          batch_id: outcome.batchId,
+          tasks: outcome.tasks,
+          ...(intent.clientRequestId !== undefined ? { client_request_id: intent.clientRequestId } : {}),
+          ...(outcome.replayed ? { replayed: true } : { replayed: false }),
+        },
+      };
     }
     switch (outcome.failure.kind) {
       case 'preflight': {

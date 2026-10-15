@@ -115,6 +115,16 @@ export const ReadBatchByIdPayloadSchema = RuntimeMessageBaseSchema.extend({
   batchId: z.string(),
 });
 
+/**
+ * 按客户端幂等键读取批次（spec CLI与本地Agent集成.md §5.4 受理幂等键）：受理去重重放与
+ * `task list --request-id` 反查的读取通道。batches.clientRequestId 有唯一索引，至多命中一行；
+ * 未命中 data.batch 为 null。
+ */
+export const ReadBatchByClientRequestIdPayloadSchema = RuntimeMessageBaseSchema.extend({
+  type: z.literal("runtime:read-batch-by-client-request-id"),
+  clientRequestId: z.string().min(1),
+});
+
 export const ReadTaskOutputsPayloadSchema = RuntimeMessageBaseSchema.extend({
   type: z.literal("runtime:read-task-outputs"),
   taskId: z.string(),
@@ -177,6 +187,7 @@ export type TaskEventPayload = z.infer<typeof TaskEventPayloadSchema>;
 export type ReadTasksPayload = z.infer<typeof ReadTasksPayloadSchema>;
 export type ReadTaskByIdPayload = z.infer<typeof ReadTaskByIdPayloadSchema>;
 export type ReadBatchByIdPayload = z.infer<typeof ReadBatchByIdPayloadSchema>;
+export type ReadBatchByClientRequestIdPayload = z.infer<typeof ReadBatchByClientRequestIdPayloadSchema>;
 export type ReadTaskOutputsPayload = z.infer<typeof ReadTaskOutputsPayloadSchema>;
 export type ReadMediaAssetsByTaskPayload = z.infer<typeof ReadMediaAssetsByTaskPayloadSchema>;
 export type ReadMediaAssetByIdPayload = z.infer<typeof ReadMediaAssetByIdPayloadSchema>;
@@ -197,6 +208,7 @@ export type BackendToMainMessage =
   | ReadTasksPayload
   | ReadTaskByIdPayload
   | ReadBatchByIdPayload
+  | ReadBatchByClientRequestIdPayload
   | ReadTaskOutputsPayload
   | ReadMediaAssetsByTaskPayload
   | ReadMediaAssetByIdPayload

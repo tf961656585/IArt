@@ -263,6 +263,65 @@ describe("parseCliArgs（参数名 → 契约字段映射表）", () => {
     });
   });
 
+  // @spec: CLI-033
+  it("generate：--request-id 映射为契约 client_request_id（受理幂等键）", () => {
+    const parsed = parser.parseCliArgs([
+      "generate",
+      "--project",
+      "P",
+      "--prompt",
+      "T",
+      "--model",
+      "M",
+      "--request-id",
+      "req-abc",
+    ]);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("unreachable");
+    expect(parsed.request).toMatchObject({ command: "generate", client_request_id: "req-abc" });
+  });
+
+  // @spec: CLI-034
+  it("task list：--status/--since/--request-id 解析为契约过滤字段；缺省时字段缺省", () => {
+    const filtered = parser.parseCliArgs([
+      "task",
+      "list",
+      "--project",
+      "P",
+      "--status",
+      "failed",
+      "--since",
+      "2026-10-14T00:00:00Z",
+      "--request-id",
+      "req-1",
+    ]);
+    expect(filtered.ok).toBe(true);
+    if (!filtered.ok) throw new Error("unreachable");
+    expect(filtered.request).toEqual({
+      command: "task.list",
+      project: "P",
+      status: "failed",
+      since: "2026-10-14T00:00:00Z",
+      client_request_id: "req-1",
+    });
+
+    // 缺省：契约 default 物化为不过滤语义（旧客户端兼容）
+    const bare = parser.parseCliArgs(["task", "list", "--project", "P"]);
+    expect(bare.ok).toBe(true);
+    if (!bare.ok) throw new Error("unreachable");
+    expect(bare.request).toEqual({
+      command: "task.list",
+      project: "P",
+      status: null,
+      since: null,
+      client_request_id: null,
+    });
+
+    // 非法 status：契约枚举在发送前校验失败（本地报参数错误）
+    const badStatus = parser.parseCliArgs(["task", "list", "--project", "P", "--status", "bogus"]);
+    expect(badStatus.ok).toBe(false);
+  });
+
   it("canvas layout：--scope group:<id> 映射为 { group } 对象形态，--columns 解析为数字", () => {
     const parsed = parser.parseCliArgs(["canvas", "layout", "--project", "P", "--scope", "group:g1", "--columns", "3"]);
     expect(parsed.ok).toBe(true);
@@ -405,5 +464,174 @@ describe("parseCliArgs（参数名 → 契约字段映射表）", () => {
 
     const extra = parser.parseCliArgs(["app", "status", "extra"]);
     expect(extra.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 人读失败原因透传与 generate 受理幂等键回执（fetchImpl 注入固定响应，CLI-033/CLI-035）
+// ---------------------------------------------------------------------------
+
+describe("cli-client 人读失败原因与幂等键回执（fetchImpl 注入）", () => {
+  const client = loadClientModule();
+  const discoveryFilePath = join(tmpdir(), `cli-client-idem-${process.pid}`, "cli-runtime.json");
+
+  beforeAll(() => {
+    mkdirSync(join(tmpdir(), `cli-client-idem-${process.pid}`), { recursive: true });
+    writeDiscoveryFile(discoveryFilePath, {
+      port: 59999,
+      token: "unused-injected-fetch",
+      pid: process.pid,
+      version: "test-1.0.0",
+      startedAt: new Date().toISOString(),
+    });
+  });
+
+  const jsonResponse = (payload: unknown): Response =>
+    new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
+
+  // @spec: CLI-035
+  it("task get 人读：终态失败任务输出失败原因，超 200 字符截断", async () => {
+    const longMessage = "很长的失败说明。".repeat(40); // 320 字符
+    const fetchImpl: typeof fetch = async () =>
+      jsonResponse({
+        command: "task.get",
+        ok: true,
+        task: {
+          taskId: "task-f-1",
+          status: "failed",
+          projectPath: "/tmp/p",
+          createdAt: 1,
+          updatedAt: 2,
+          errorCode: "PUBLIC_ERROR_DEMO",
+          errorMessage: longMessage,
+        },
+      });
+    const result = await client.runCliClient(["task", "get", "task-f-1", "--project", "P"], {
+      discoveryFilePath,
+      fetchImpl,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("task-f-1");
+    expect(result.stdout).toContain("failed");
+    expect(result.stdout).toContain("失败原因：[PUBLIC_ERROR_DEMO]");
+    // 截断：人读行只保留首 200 字符 + 省略号，不整段倾倒
+    expect(result.stdout).toContain(longMessage.slice(0, 200));
+    expect(result.stdout).not.toContain(longMessage.slice(0, 201));
+  });
+
+  // @spec: CLI-035
+  it("task get 人读：errorMessage 缺省回落 failure.userMessage；非失败任务不输出原因行", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      jsonResponse({
+        command: "task.get",
+        ok: true,
+        task: {
+          taskId: "task-f-2",
+          status: "failed",
+          projectPath: "/tmp/p",
+          createdAt: 1,
+          updatedAt: 2,
+          failure: { code: "UPSTREAM_5XX", userMessage: "服务商暂时不可用，请稍后重试。" },
+        },
+      });
+    const result = await client.runCliClient(["task", "get", "task-f-2", "--project", "P"], {
+      discoveryFilePath,
+      fetchImpl,
+    });
+    expect(result.stdout).toContain("失败原因：[UPSTREAM_5XX] 服务商暂时不可用，请稍后重试。");
+
+    const okFetch: typeof fetch = async () =>
+      jsonResponse({
+        command: "task.get",
+        ok: true,
+        task: { taskId: "task-ok", status: "succeeded", projectPath: "/tmp/p", createdAt: 1, updatedAt: 2 },
+      });
+    const okResult = await client.runCliClient(["task", "get", "task-ok", "--project", "P"], {
+      discoveryFilePath,
+      fetchImpl: okFetch,
+    });
+    expect(okResult.stdout).not.toContain("失败原因");
+  });
+
+  // @spec: CLI-035
+  it("task list 人读：失败任务行内联失败原因，成功任务行不带", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      jsonResponse({
+        command: "task.list",
+        ok: true,
+        tasks: [
+          { taskId: "t-ok", status: "succeeded", projectPath: "/tmp/p", createdAt: 1, updatedAt: 2 },
+          {
+            taskId: "t-bad",
+            status: "failed",
+            projectPath: "/tmp/p",
+            createdAt: 1,
+            updatedAt: 2,
+            errorMessage: "参数越界",
+          },
+        ],
+      });
+    const result = await client.runCliClient(["task", "list", "--project", "P"], {
+      discoveryFilePath,
+      fetchImpl,
+    });
+    expect(result.stdout).toContain("t-ok：succeeded");
+    expect(result.stdout).toContain("t-bad：failed，失败原因：参数越界");
+  });
+
+  // @spec: CLI-033
+  it("generate 非 --wait：未显式传 --request-id 时客户端自动生成 uuid 并在回执回显", async () => {
+    const requestBodies: unknown[] = [];
+    // 假服务端按真实链路语义把请求携带的幂等键回显进受理响应（真实链路中该回显经
+    // 画布窗口纯入口从 intent 原样返回）。
+    const fetchImpl: typeof fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { client_request_id?: string };
+      requestBodies.push(body);
+      return jsonResponse({
+        command: "generate",
+        ok: true,
+        batch_id: "batch-auto-1",
+        tasks: [{ task_id: "task-auto-1", task_index: 0 }],
+        replayed: false,
+        ...(body.client_request_id !== undefined ? { client_request_id: body.client_request_id } : {}),
+        task_results: [],
+      });
+    }) as typeof fetch;
+    const result = await client.runCliClient(["generate", "--project", "P", "--prompt", "T", "--model", "M"], {
+      discoveryFilePath,
+      fetchImpl,
+    });
+    expect(result.exitCode).toBe(0);
+    const requestBody = requestBodies[0] as { client_request_id?: string };
+    expect(typeof requestBody.client_request_id).toBe("string");
+    expect(requestBody.client_request_id?.length).toBeGreaterThan(10);
+    // 回执回显幂等键
+    expect(result.stdout).toContain("幂等键");
+    expect(result.stdout).toContain(requestBody.client_request_id ?? "");
+  });
+
+  // @spec: CLI-033
+  it("generate 非 --wait：显式 --request-id 原样透传；命中重放时人读回执说明未重复创建", async () => {
+    const requestBodies: unknown[] = [];
+    const fetchImpl: typeof fetch = (async (_url, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as unknown);
+      return jsonResponse({
+        command: "generate",
+        ok: true,
+        batch_id: "batch-replay-1",
+        tasks: [{ task_id: "task-replay-1", task_index: 0 }],
+        client_request_id: "req-explicit-1",
+        replayed: true,
+        task_results: [],
+      });
+    }) as typeof fetch;
+    const result = await client.runCliClient(
+      ["generate", "--project", "P", "--prompt", "T", "--model", "M", "--request-id", "req-explicit-1"],
+      { discoveryFilePath, fetchImpl },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(requestBodies[0]).toMatchObject({ client_request_id: "req-explicit-1" });
+    expect(result.stdout).toContain("req-explicit-1");
+    expect(result.stdout).toContain("未重复创建");
   });
 });

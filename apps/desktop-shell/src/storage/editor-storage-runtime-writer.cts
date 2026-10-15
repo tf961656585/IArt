@@ -102,17 +102,20 @@ const runBatchInsert = (db: SqliteDatabase, batch: BatchItem) => {
     `INSERT INTO batches (
       batchId,
       payloadJson,
+      clientRequestId,
       createdAt,
       updatedAt
-    ) VALUES (?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(batchId)
     DO UPDATE SET
       payloadJson = COALESCE(NULLIF(excluded.payloadJson, ''), batches.payloadJson),
+      clientRequestId = COALESCE(batches.clientRequestId, excluded.clientRequestId),
       createdAt = COALESCE(batches.createdAt, excluded.createdAt),
       updatedAt = COALESCE(excluded.updatedAt, batches.updatedAt)`,
   ).run(
     batch.batchId,
     batch.payloadJson,
+    batch.clientRequestId ?? null,
     batch.createdAt ?? null,
     batch.updatedAt ?? null,
   );

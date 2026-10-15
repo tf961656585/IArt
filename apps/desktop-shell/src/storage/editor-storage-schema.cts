@@ -2,7 +2,7 @@
  * Editor Storage Service — SQLite Schema
  *
  * 项目级 KV 表 + 业务表。
- * 新库按当前 DDL 建库；已存在的库走裁断后迁移链（当前受支持 v11 → v15）自动幂等升级，
+ * 新库按当前 DDL 建库；已存在的库走裁断后迁移链（当前受支持 v11 → v18）自动幂等升级，
  * 版本低于受支持迁移起点的旧库（< v11）才拒绝打开（一次性裁断，见 memory/decisions.md；
  * 该裁断不构成先例，未来 DDL 变更仍须按迁移兼容追加迁移步骤）。
  */
@@ -31,10 +31,10 @@ type InitSchemaOptions = {
   projectPath: string | undefined;
 };
 
-const CURRENT_STORAGE_SCHEMA_ID = 'storage-schema-v17-agent-last-message';
+const CURRENT_STORAGE_SCHEMA_ID = 'storage-schema-v18-batch-client-request-id';
 const STORAGE_SCHEMA_META_KEY = 'storage_schema_id';
 
-const CURRENT_SCHEMA_VERSION = 17;
+const CURRENT_SCHEMA_VERSION = 18;
 const STORAGE_SCHEMA_VERSION_KEY = 'storage_schema_version';
 
 class ProjectSqliteSchemaMismatchError extends Error {
@@ -535,6 +535,32 @@ const migrateV16ToV17 = (db: SqliteDatabase): void => {
   }
 };
 
+/**
+ * v17→v18：batches 表新增 `clientRequestId`（客户端受理幂等键）与唯一索引
+ * （spec docs/integrations/CLI与本地Agent集成.md §5.4 受理幂等键，2026-10-14 v0.6.8）。
+ *
+ * - 加列：`ADD COLUMN`（可空、无默认值），已存在的库列形与新建库 DDL 一致；
+ *   界面提交不携带幂等键，存量批次行一律 NULL（SQLite 唯一索引对 NULL 不去重，互不影响）；
+ * - 唯一索引：`batches_clientRequestId_idx`（UNIQUE）——非空值唯一，同幂等键重复受理在
+ *   写入层硬拒，是「按幂等键查重重放」读取路径的兜底防线；
+ * - 幂等：列已存在时跳过加列；索引为 IF NOT EXISTS。历史批次数据零改动。
+ */
+const migrateV17ToV18 = (db: SqliteDatabase): void => {
+  const tableNames = readUserTableNames(db);
+  if (!tableNames.includes('batches')) {
+    // 条件跳过必须留痕：无 batches 表的库（理论上不应存在）无事可做。
+    console.debug('[editor-storage-schema] v17->v18: batches 表不存在，跳过 clientRequestId 迁移');
+    return;
+  }
+  const existingColumns = new Set(
+    readTableInfo(db, 'batches').map((row) => normalizeName(row.name)),
+  );
+  if (!existingColumns.has('clientRequestId')) {
+    db.exec('ALTER TABLE batches ADD COLUMN clientRequestId TEXT');
+  }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS batches_clientRequestId_idx ON batches (clientRequestId)');
+};
+
 const MIGRATION_STEPS: MigrationStep[] = [
   { fromVersion: 11, toVersion: 12, migrate: migrateV11ToV12 },
   { fromVersion: 12, toVersion: 13, migrate: migrateV12ToV13 },
@@ -542,6 +568,7 @@ const MIGRATION_STEPS: MigrationStep[] = [
   { fromVersion: 14, toVersion: 15, migrate: migrateV14ToV15 },
   { fromVersion: 15, toVersion: 16, migrate: migrateV15ToV16 },
   { fromVersion: 16, toVersion: 17, migrate: migrateV16ToV17 },
+  { fromVersion: 17, toVersion: 18, migrate: migrateV17ToV18 },
 ];
 
 const runPendingMigrations = (db: SqliteDatabase, fromVersion: number, options: InitSchemaOptions): void => {

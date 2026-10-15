@@ -38,6 +38,11 @@ import { BatchIntentSnapshotSchema } from './provider-connection-contract';
  * - media_inputs / reference_asset_ids：已解析且兼容的媒体引用（spec 45 §5.1）。
  * - mention_map："@锚点 → 素材" 绑定（spec task-submit-request.ts 头注 §5.4/§7）；mention 注入归后端物化层。
  * - project_path：受理所在项目路径。
+ * - client_request_id（可选，spec docs/integrations/CLI与本地Agent集成.md §5.4 受理幂等键）：
+ *   客户端幂等键（batch 级）。CLI 程序化提交携带（未传时 CLI 自动生成）；界面提交不携带。
+ *   同一幂等键重复提交命中既有批次时幂等重放（响应 replayed: true），不重新受理。
+ *   存储承载为 batches.clientRequestId（唯一索引）。与 remote_request_id（远端轮询用请求 id）
+ *   是两个概念，不得混淆。
  */
 export const PromptDockBatchSubmitRequestSchema = z
   .object({
@@ -50,6 +55,7 @@ export const PromptDockBatchSubmitRequestSchema = z
     model_version: z.string().min(1),
     project_path: z.string().min(1),
     mention_map: z.record(MentionMapEntrySchema).optional(),
+    client_request_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -76,12 +82,15 @@ export type PromptDockBatchTaskAcceptance = z.infer<typeof PromptDockBatchTaskAc
  *
  * - intent_snapshot：受理后返回的不可变 BatchIntentSnapshot（PromptDock 以此确认草稿定稿）。
  * - tasks：恰好 N 个任务身份；受理失败不得返回部分任务集合（runtime spec「原子受理」）。
+ * - replayed（可选）：幂等重放标志（spec §5.4 受理幂等键）。true = 本次请求命中既有批次，
+ *   batch_id/tasks 为既有受理结果，未重新受理；false = 全新受理。旧版后端不输出该字段。
  */
 export const PromptDockBatchSubmitResponseSchema = z
   .object({
     batch_id: z.string().min(1),
     intent_snapshot: BatchIntentSnapshotSchema,
     tasks: z.array(PromptDockBatchTaskAcceptanceSchema).min(1).max(10),
+    replayed: z.boolean().optional(),
   })
   .strict()
   .refine(

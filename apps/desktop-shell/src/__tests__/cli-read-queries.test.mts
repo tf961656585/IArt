@@ -332,6 +332,180 @@ describe("cli-command-executors 只读查询（假 forwarder + 假存储）", ()
     forwardResultOverride = null;
   });
 
+  // ── task list 可观测与过滤（spec CLI-034/CLI-033）──
+
+  const makeSummary = (taskId: string, overrides: Record<string, unknown> = {}) => ({
+    taskId,
+    id: taskId,
+    projectPath: PROJECT_PATH,
+    nodeGraphId: null,
+    sourceNodeId: null,
+    targetNodeId: null,
+    executionId: null,
+    modelId: null,
+    remoteRequestId: null,
+    status: "succeeded",
+    createdAt: 1000,
+    updatedAt: 2000,
+    errorMessage: null,
+    progress: null,
+    ...overrides,
+  });
+
+  // @spec: CLI-034
+  it("task.list 投影恢复 progress_percent（backend 列表已带 progress，forwarder 不再丢弃）", async () => {
+    const { parseTaskListPayload } = requireDesktop(
+      `${workspaceRoot}/apps/desktop-shell/dist/cli/cli-backend-forwarder.cjs`,
+    ) as { parseTaskListPayload: (payload: unknown) => { tasks: Array<Record<string, unknown>> } | null };
+    const list = parseTaskListPayload({
+      total: 1,
+      limit: 1,
+      offset: 0,
+      tasks: [
+        makeSummary("t-progress", { status: "generating", progress: 42 }),
+        makeSummary("t-no-progress", { progress: null }),
+      ],
+    });
+    expect(list).not.toBeNull();
+    expect(list?.tasks.find((task) => task.taskId === "t-progress")?.progressPercent).toBe(42);
+    // 未写入进度的任务：字段缺省（契约 optional），不以 0 或占位虚构。
+    expect(list?.tasks.find((task) => task.taskId === "t-no-progress")).not.toHaveProperty("progressPercent");
+  });
+
+  // @spec: CLI-034
+  it("task.list --status 透传服务端过滤参数并本地幂等收敛", async () => {
+    forwardResultOverride = {
+      ok: true,
+      payload: {
+        total: 2,
+        limit: 2,
+        offset: 0,
+        tasks: [makeSummary("t-run", { status: "generating" }), makeSummary("t-done", { status: "succeeded" })],
+      },
+    };
+    const registry = buildRegistry();
+    const forwardsBefore = forwardPaths.length;
+    const result = await runExecutor(registry, "task.list", {
+      command: "task.list",
+      project: "demo",
+      status: "generating",
+    });
+    const parsed = parseResponse(result);
+    if (!parsed.ok || parsed.command !== "task.list") throw new Error("unexpected");
+    expect(parsed.tasks.map((task) => task.taskId)).toEqual(["t-run"]);
+    expect(forwardPaths[forwardPaths.length - 1]).toBe(
+      `/api/tasks?${new URLSearchParams({ projectPath: PROJECT_PATH, status: "generating" }).toString()}`,
+    );
+    expect(forwardPaths.length).toBe(forwardsBefore + 1);
+    forwardResultOverride = null;
+  });
+
+  // @spec: CLI-034
+  it("task.list --since 客户端后滤 createdAt（服务端无该参数，改动面最小）", async () => {
+    forwardResultOverride = {
+      ok: true,
+      payload: {
+        total: 3,
+        limit: 3,
+        offset: 0,
+        tasks: [
+          makeSummary("t-old", { createdAt: 1700000000000 }),
+          makeSummary("t-new-1", { createdAt: 1792000000000 }),
+          makeSummary("t-new-2", { createdAt: 1792000000001 }),
+        ],
+      },
+    };
+    const registry = buildRegistry();
+    const result = await runExecutor(registry, "task.list", {
+      command: "task.list",
+      project: "demo",
+      since: "2026-10-14T00:00:00Z",
+    });
+    const parsed = parseResponse(result);
+    if (!parsed.ok || parsed.command !== "task.list") throw new Error("unexpected");
+    expect(parsed.tasks.map((task) => task.taskId)).toEqual(["t-new-1", "t-new-2"]);
+    forwardResultOverride = null;
+  });
+
+  // @spec: CLI-034
+  it("task.list --since 非法时间 → command_rejected 本地拒绝，不发起请求", async () => {
+    const registry = buildRegistry();
+    const forwardsBefore = forwardPaths.length;
+    const result = await runExecutor(registry, "task.list", {
+      command: "task.list",
+      project: "demo",
+      since: "not-a-date",
+    });
+    const parsed = parseResponse(result);
+    if (parsed.ok) throw new Error("unexpected ok");
+    expect(parsed.error.code).toBe("command_rejected");
+    expect(parsed.error.message).toContain("--since");
+    expect(forwardPaths.length).toBe(forwardsBefore);
+  });
+
+  // @spec: CLI-033
+  it("task.list --request-id 按幂等键反查批次任务（存储只读投影）；未命中返回空列表且成功", async () => {
+    const batchTasks = [
+      { taskId: "bt-1", status: "succeeded", projectPath: PROJECT_PATH, createdAt: 1, updatedAt: 2 },
+      { taskId: "bt-2", status: "failed", projectPath: PROJECT_PATH, createdAt: 1, updatedAt: 2, errorMessage: "上游失败" },
+    ];
+    const registry = buildRegistry({
+      storage: {
+        readBatchByClientRequestId: (_projectPath: string, clientRequestId: string) =>
+          clientRequestId === "req-hit"
+            ? { batch_id: "batch-hit", task_ids: ["bt-1", "bt-2"] }
+            : null,
+        readTaskViewsByBatchId: (_projectPath: string, batchId: string) =>
+          batchId === "batch-hit" ? batchTasks : [],
+      },
+    });
+    const forwardsBefore = forwardPaths.length;
+    const hit = await runExecutor(registry, "task.list", {
+      command: "task.list",
+      project: "demo",
+      client_request_id: "req-hit",
+    });
+    const hitParsed = parseResponse(hit);
+    if (!hitParsed.ok || hitParsed.command !== "task.list") throw new Error("unexpected");
+    expect(hitParsed.tasks.map((task) => task.taskId)).toEqual(["bt-1", "bt-2"]);
+    // 反查路径不经运行域转发
+    expect(forwardPaths.length).toBe(forwardsBefore);
+
+    // 未命中（提交从未落库）：空列表 + 命令成功（对账答案，不是错误）
+    const miss = await runExecutor(registry, "task.list", {
+      command: "task.list",
+      project: "demo",
+      client_request_id: "req-never-landed",
+    });
+    const missParsed = parseResponse(miss);
+    if (!missParsed.ok || missParsed.command !== "task.list") throw new Error("unexpected");
+    expect(missParsed.tasks).toEqual([]);
+  });
+
+  // @spec: CLI-033
+  it("task.list --request-id 与 --status/--since 组合过滤", async () => {
+    const batchTasks = [
+      { taskId: "bt-1", status: "succeeded", projectPath: PROJECT_PATH, createdAt: 1000, updatedAt: 2 },
+      { taskId: "bt-2", status: "failed", projectPath: PROJECT_PATH, createdAt: 5000, updatedAt: 2, errorMessage: "x" },
+    ];
+    const registry = buildRegistry({
+      storage: {
+        readBatchByClientRequestId: () => ({ batch_id: "batch-hit", task_ids: ["bt-1", "bt-2"] }),
+        readTaskViewsByBatchId: () => batchTasks,
+      },
+    });
+    const result = await runExecutor(registry, "task.list", {
+      command: "task.list",
+      project: "demo",
+      client_request_id: "req-hit",
+      status: "failed",
+      since: "1970-01-01T00:00:03Z",
+    });
+    const parsed = parseResponse(result);
+    if (!parsed.ok || parsed.command !== "task.list") throw new Error("unexpected");
+    expect(parsed.tasks.map((task) => task.taskId)).toEqual(["bt-2"]);
+  });
+
   it("task.get：命中返回任务状态；任务不存在 → task_not_found 且 message 指明任务不存在", async () => {
     forwardResultOverride = {
       ok: true,

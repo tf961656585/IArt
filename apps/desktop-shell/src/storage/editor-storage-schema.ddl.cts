@@ -195,12 +195,19 @@ export const DDL_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS task_events_taskId_idx
     ON task_events (taskId)`,
 
+  // clientRequestId：客户端受理幂等键（spec docs/integrations/CLI与本地Agent集成.md §5.4 受理幂等键，
+  // 2026-10-14 v0.6.8 新增）。可空：界面提交不携带幂等键；SQLite 唯一索引对 NULL 不去重，
+  // 多个无幂等键批次可并存；非空值唯一 → 同 request_id 重复受理在写入层硬拒（去重读取的兜底防线）。
   `CREATE TABLE IF NOT EXISTS batches (
     batchId TEXT PRIMARY KEY,
     payloadJson TEXT NOT NULL,
+    clientRequestId TEXT,
     createdAt INTEGER,
     updatedAt INTEGER
   )`,
+
+  `CREATE UNIQUE INDEX IF NOT EXISTS batches_clientRequestId_idx
+    ON batches (clientRequestId)`,
 
   `CREATE TABLE IF NOT EXISTS chat_sessions (
     sessionId TEXT PRIMARY KEY,
@@ -406,10 +413,11 @@ export const EXPECTED_TABLES: ExpectedTable[] = [
     columns: [
       { name: 'batchId', type: 'TEXT', notNull: true, primaryKey: true },
       { name: 'payloadJson', type: 'TEXT', notNull: true, primaryKey: false },
+      { name: 'clientRequestId', type: 'TEXT', notNull: false, primaryKey: false },
       { name: 'createdAt', type: 'INTEGER', notNull: false, primaryKey: false },
       { name: 'updatedAt', type: 'INTEGER', notNull: false, primaryKey: false },
     ],
-    indexes: undefined,
+    indexes: ['batches_clientRequestId_idx'],
   },
   {
     name: 'chat_sessions',

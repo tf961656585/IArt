@@ -13,8 +13,9 @@ description: |
 # IARTStudio CLI 使用指南
 
 > **版本门槛**：本 skill 描述的命令面与行为自 **IARTStudio v0.6.7** 起（CLI 以轻量纯 Node
-> 进程运行）。旧版本软件的 `iart` 可能表现不同（启动慢、偶发无输出崩溃、控制台中文乱码）；
-> 遇到这类旧行为时请用户把应用升级到 v0.6.7 或更高，并重启一次应用——应用启动时会自动把
+> 进程运行）；`generate --request-id` 受理幂等键、`task list` 过滤参数与人读失败原因自
+> **v0.6.8** 起。旧版本软件的 `iart` 可能表现不同（启动慢、偶发无输出崩溃、控制台中文乱码）；
+> 遇到这类旧行为时请用户把应用升级到最新版本，并重启一次应用——应用启动时会自动把
 > 命令入口修正到新形态，无需手动重新注册。
 
 `iart` 是随 IARTStudio 分发的命令行入口，让 agent 驱动正在运行的应用。Agent 做的事
@@ -78,7 +79,7 @@ description: |
 | `iart asset list --project P [--query K] [--media-type image\|video\|audio] [--model M] [--limit N] [--offset O]` | 项目资产清单。`--query` 关键词搜索（命中素材原始文件名与生成产物的提交提示词）、`--media-type`/`--model` 过滤、`--limit`/`--offset` 分页；全不带参数=全量。条目 `source_file_name` 是导入素材的原始文件名 |
 | `iart asset get <assetId> --project P` | 资产详情，必含本地媒体文件绝对路径；同内容存在其他资产 id 时输出 `equivalent_asset_ids`（同一内容的历史双身份，引用任一等效） |
 | `iart canvas nodes list --project P` | 画布节点清单（节点 id、类型、位置、组归属、资产/任务引用；图片/视频/音频素材节点与资产节点同样输出 `asset_id`） |
-| `iart task list --project P` / `iart task get <taskId> --project P` | 任务状态。⚠ `task get` 的 `--project` 必填（帮助文本省略了它） |
+| `iart task list --project P [--status S] [--since <ISO 时间>] [--request-id ID]` / `iart task get <taskId> --project P` | 任务状态。`--status` 按状态过滤、`--since` 按创建时间下界过滤（ISO 8601，如 `2026-10-14T08:00:00Z`）、`--request-id` 按受理幂等键反查该次提交的全部任务（未命中=空列表且命令成功，见下「崩溃后对账」）；可组合。任务条目含 `progress_percent`（无进度时缺省）。⚠ `task get` 的 `--project` 必填（帮助文本省略了它） |
 
 ### 画布命令（必须项目已打开）
 
@@ -94,7 +95,7 @@ description: |
 
 | 命令 | 说明 |
 |---|---|
-| `iart generate --prompt T --model M [--count N] [--ref id1,id2] [--arg k=v,k2=v2] [--wait] --project P` | 提交生成（见下） |
+| `iart generate --prompt T --model M [--count N] [--ref id1,id2] [--arg k=v,k2=v2] [--request-id ID] [--wait] --project P` | 提交生成（见下） |
 | `iart task cancel <taskId> --project P` | 取消任务（与界面取消同语义） |
 | `iart task wait <taskId> [--timeout S] --project P` | 轮询至终态。默认不设时限；`--timeout` 到期只是本次命令以 `wait_timeout` 退出，任务继续跑 |
 
@@ -102,8 +103,18 @@ description: |
 - `--count` 缺省 1，范围 1–10。
 - `--ref` 引用**已存在**的资产（id 来源：`asset list`（可 `--query` 按文件名/提示词搜）、`canvas nodes list` 的 `asset_id`，或用户从画布右键菜单「复制素材 ID」贴给你的 id；同一内容出现多个 id 时任一等效，`asset get` 的 `equivalent_asset_ids` 可核对）。
 - `--arg` 的参数名与取值域以 `model get` 的 `parameter_schema` 为准，**不要猜**。
-- `--wait` 先在 stderr 即时输出受理回执（批次与任务标识，见下），再轮询到全部任务终态，
-  逐任务输出终态与产物；等待中途进程死亡时凭回执改用 `task wait` 恢复观测，**不要盲目重提**（会创建重复任务）。
+- `--request-id` 受理幂等键（batch 级）：不传时 CLI 自动生成 uuid 并在受理回执回显；**重提时复用同一 request_id 即幂等**——命中已受理批次会原样返回既有批次与任务身份（`replayed: true`），不重复出图。
+- `--wait` 先在 stderr 即时输出受理回执（批次与任务标识与幂等键回显，见下），再轮询到全部任务终态，
+  逐任务输出终态与产物（失败任务附失败原因）；等待中途进程死亡时凭回执改用 `task wait` 恢复观测。
+
+**崩溃后对账（先核对再决定重提）**：提交后无输出、连接中断或进程死亡时，不要盲目重提——
+
+```bash
+iart task list --request-id <回执里的幂等键> --project P --json
+```
+
+- 列表**非空** = 该次提交已成功受理（任务在跑），不要重提；用 `task wait`/`task get` 恢复观测。
+- 列表**为空** = 该次提交从未落库，可安全重提（复用同一 `--request-id`，双重保险幂等）。
 
 ### 通用规则
 
@@ -127,10 +138,14 @@ description: |
 `{"ok":false,"error":{"code":"...","message":"..."}}`）：
 
 - **受理回执**（generate 不带 `--wait`；`--wait` 时也先经 **stderr** 即时输出一次再开始等待）：
-  `{ ok, batch_id, tasks: [{task_id, task_index}] }`。stdout 是最终结果的数据通道，进度信息走 stderr——解析最终结果只读 stdout。
+  `{ ok, batch_id, tasks: [{task_id, task_index}], client_request_id, replayed }`——`client_request_id`
+  是本次受理幂等键（显式传入或自动生成），`replayed: true` 表示命中既有批次（未重复创建）。
+  stdout 是最终结果的数据通道，进度信息走 stderr——解析最终结果只读 stdout。
 - **终态产物**（`generate --wait` 的 `task_results[]` / `task wait` 的 `task_result`）：
-  每项 `{ task: {taskId, status, errorMessage, ...}, assets: [{ local_file_path, asset: {assetId, mediaType, ...} }] }`。
-  `local_file_path` 是产物媒体文件的**绝对路径**，可直接读取展示给用户。
+  每项 `{ task: {taskId, status, errorMessage, failure, ...}, assets: [{ local_file_path, asset: {assetId, mediaType, ...} }] }`。
+  `local_file_path` 是产物媒体文件的**绝对路径**，可直接读取展示给用户；失败任务读
+  `task.failure`（code/message/userMessage）或 `task.errorMessage`——`--json` 里有完整失败结构，
+  人读模式会在任务行内联截断后的失败原因。
 - ⚠ 人读（默认）模式下等待类输出只报条数、**不含产物路径**——要拿路径必须 `--json`。
 - `model get` 的 `model.parameter_schema.fields[]` 中 `fieldKey / required / enumOptions /
   defaultValue` 是构造 `--arg` 的依据；`model.deployment.deployable=false` 时读 `failure_code`。
@@ -198,6 +213,9 @@ iart canvas node delete --nodes <id1,id2> --project <路径或名称>      # 删
 
 ```bash
 iart task list --project <路径或名称> --json
+iart task list --project <路径或名称> --status failed --json              # 只看失败任务
+iart task list --project <路径或名称> --since 2026-10-14T08:00:00Z --json # 只看这之后的任务
+iart task list --request-id <幂等键> --project <路径或名称> --json        # 崩溃后对账：该次提交落库了吗
 iart task wait <taskId> --json --project <路径或名称>  # 长任务默认不限时；需兜底时加 --timeout <秒>
 iart task cancel <taskId> --project <路径或名称>
 ```
@@ -206,8 +224,9 @@ iart task cancel <taskId> --project <路径或名称>
 
 ## 7. 纪律与禁止
 
-- **生成提交不幂等，不自动重试**：传输层失败原样报错；是否重新提交由你判断并让用户知情。
-- **参数不猜**：`--arg` 的 key 与取值域只以 `parameter_schema` 为准。
+- **不盲目重提，用幂等键对账**：CLI 自身不自动重试；提交后无输出/中断/崩溃时先
+  `task list --request-id <幂等键>` 核对——非空 = 已受理勿重提，空 = 从未落库可安全重提。
+  重提时复用同一 `--request-id`（幂等重放，绝不重复出图）。**参数不猜**：`--arg` 的 key 与取值域只以 `parameter_schema` 为准。
 - **不碰凭证**：命令面不提供任何服务商凭证/密钥的读取或导出；用户要改配置 → 引导到设置页操作。
 - **画布不是输出垃圾场**：批量生成前想清楚数量与必要性；命令排队执行、用户手工操作优先，
   不要与用户抢画布。

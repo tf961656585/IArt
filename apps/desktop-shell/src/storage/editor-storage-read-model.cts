@@ -142,6 +142,71 @@ export const readBatchById = (db: SqliteDatabase, batchId: string): BatchIntentS
   return null;
 };
 
+/**
+ * 按客户端幂等键读取 BatchIntentSnapshot（spec docs/integrations/CLI与本地Agent集成.md §5.4
+ * 受理幂等键）：受理去重重放与 `task list --request-id` 反查的读取底座。
+ * clientRequestId 有唯一索引（非空值唯一），至多命中一行；无命中或 payload 不合规返回 null
+ * （「未受理过」本身就是合法查询答案，不是错误）。条件跳过留 debug 痕。
+ */
+export const readBatchByClientRequestId = (
+  db: SqliteDatabase,
+  clientRequestId: string,
+): BatchIntentSnapshot | null => {
+  const row = db
+    .prepare(
+      'SELECT batchId, payloadJson, createdAt, updatedAt FROM batches WHERE clientRequestId = ? LIMIT 1',
+    )
+    .get(clientRequestId) as BatchDbRow | undefined;
+  if (!row) {
+    console.debug('[editor-storage-read-model] readBatchByClientRequestId: no batch for client request id', {
+      clientRequestId,
+    });
+    return null;
+  }
+  try {
+    const parsed = BatchIntentSnapshotSchema.safeParse(JSON.parse(row.payloadJson) as unknown);
+    if (parsed.success) return parsed.data;
+    console.debug('[editor-storage-read-model] readBatchByClientRequestId: payload schema mismatch', {
+      batchId: row.batchId,
+      clientRequestId,
+      issue: parsed.error.message,
+    });
+  } catch (error) {
+    console.debug('[editor-storage-read-model] readBatchByClientRequestId: payload parse failed', {
+      batchId: row.batchId,
+      clientRequestId,
+      error,
+    });
+  }
+  return null;
+};
+
+/**
+ * 按批次读取任务视图（task.list --request-id 按批次反查的存储底座）：tasks.batchId 列由
+ * 任务 metadata.batchId 投影写入（task-payload-builder），原子受理的 N 个任务共享同一 batchId。
+ * 按任务索引（metadata.taskIndex）升序、taskId 兜底稳定排序，输出受理期成员顺序。
+ */
+export const readTasksByBatchId = (db: SqliteDatabase, batchId: string): RuntimeTaskView[] => {
+  const rows = db
+    .prepare('SELECT * FROM tasks WHERE batchId = ? ORDER BY createdAt ASC, taskId ASC')
+    .all(batchId) as TaskRawRow[];
+  const views = rows
+    .map((row) => hydrateTaskRow(row))
+    .filter((row): row is RuntimeTaskView => row !== null);
+  const taskIndexOf = (view: RuntimeTaskView): number | null => {
+    const raw = view.metadata?.taskIndex;
+    return typeof raw === 'number' && Number.isInteger(raw) ? raw : null;
+  };
+  return views.sort((left, right) => {
+    const leftIndex = taskIndexOf(left);
+    const rightIndex = taskIndexOf(right);
+    if (leftIndex !== null && rightIndex !== null) return leftIndex - rightIndex;
+    if (leftIndex !== null) return -1;
+    if (rightIndex !== null) return 1;
+    return 0;
+  });
+};
+
 export const readTaskOutputs = (db: SqliteDatabase, taskId: string): RuntimeTaskOutputRow[] => {
   return db.prepare('SELECT * FROM task_outputs WHERE taskId = ? ORDER BY sortOrder').all(taskId) as RuntimeTaskOutputRow[];
 };

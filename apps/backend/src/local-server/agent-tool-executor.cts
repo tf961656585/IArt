@@ -292,6 +292,8 @@ const executeGenerationTool = async (params: {
     projectPath: context.projectPath,
     intentSnapshot: accepted.intentSnapshot,
     tasks: accepted.tasks,
+    // agent 工具调用派生批次不携带客户端受理幂等键（幂等键是 CLI 提交面语义，spec §5.4）。
+    clientRequestId: null,
   });
   if (!persisted.ok) {
     return {

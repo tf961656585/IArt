@@ -30,6 +30,8 @@ export {
   readMediaAssetsByTaskId,
   readTaskById,
   readBatchById,
+  readBatchByClientRequestId,
+  readTasksByBatchId,
   readTaskOutputs,
   readTaskOutputAssetIndex,
   removeOutputItem,

@@ -10,6 +10,7 @@ import {
   readAllTasks,
   readAllMediaAssets,
   readBatchById,
+  readBatchByClientRequestId,
   readMediaAssetById,
   readMediaAssetsByTaskId,
   readTaskById,
@@ -21,6 +22,7 @@ import {
   ReadAgentMessagesPayloadSchema,
   ReadAllMediaAssetsPayloadSchema,
   ReadBatchByIdPayloadSchema,
+  ReadBatchByClientRequestIdPayloadSchema,
   ReadMediaAssetByIdPayloadSchema,
   ReadMediaAssetsByTaskPayloadSchema,
   ReadTaskByIdPayloadSchema,
@@ -207,6 +209,28 @@ export const createRuntimeStorageMessageHandler = ({
         sendResult(payload.transactionId, {
           success: Boolean(db),
           data: { batch: db ? readBatchById(db, payload.batchId) : null },
+          ...(!db ? { error: "project db unavailable" } : {}),
+        });
+      } catch (error) {
+        sendResult(payload.transactionId, {
+          success: false,
+          error: toErrorMessage(error),
+        });
+      }
+      return true;
+    }
+    if (msg.type === "runtime:read-batch-by-client-request-id") {
+      const parsed = ReadBatchByClientRequestIdPayloadSchema.safeParse(msg);
+      if (!parsed.success) {
+        sendInvalidPayloadResult(msg, "runtime:read-batch-by-client-request-id");
+        return true;
+      }
+      const payload = parsed.data;
+      const db = getDbForExistingProject(payload.projectPath);
+      try {
+        sendResult(payload.transactionId, {
+          success: Boolean(db),
+          data: { batch: db ? readBatchByClientRequestId(db, payload.clientRequestId) : null },
           ...(!db ? { error: "project db unavailable" } : {}),
         });
       } catch (error) {
