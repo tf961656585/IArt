@@ -12,10 +12,10 @@
     {
       "id": "iart-cli",
       "name": "IARTStudio CLI",
-      "version": "1.6.0",
-      "description": "通过 iart 命令行驱动正在运行的 IARTStudio 桌面应用：感知打开项目与画布选中、打开/创建项目、提交生成并把产物落进画布、建组/解散/移动/删除节点与按序整理布局、查询与等待生成任务。",
-      "bundleKey": "skills/bundles/iart-cli-1.6.0.json",
-      "sha512": "633be028faa3bab8317a86d4f51481bcbe23b72708b0d84d845e7812aec38f0643fa657969af10af7c81ebacdf9b6ba8f04256d293849a43cb3a961f0e0618b9"
+      "version": "1.7.0",
+      "description": "通过 iart 命令行驱动正在运行的 IARTStudio 桌面应用：感知打开项目与画布选中、打开/创建项目、提交生成（受理幂等键防重复出图）并把产物落进画布、建组/解散/移动/删除节点与按序整理布局、过滤查询与等待生成任务（失败原因可读）。",
+      "bundleKey": "skills/bundles/iart-cli-1.7.0.json",
+      "sha512": "bf067436594db015c690e01cdf0cc0c4d31aff549b38626443d45fa09124d840431406452885544fe6d0d4fc0d31d339a03cd2988d36eaedf35a1e5b8b750275"
     }
   ]
 }
