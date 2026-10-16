@@ -34,13 +34,23 @@ type StoreModule = {
   };
 };
 
+// 与实现侧 BundleFetcher 同形（skill-store-installer.cts）。
+type BundleFetcher = (url: string) => Promise<{
+  ok: boolean;
+  status: number;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}>;
+
 type InstallerModule = {
-  installSkill: (request: {
-    bundleUrl: string;
-    sha512: string;
-    target: string;
-    skillId: string;
-  }) => Promise<{ ok: true; installedPath: string } | { ok: false; error: string }>;
+  installSkill: (
+    request: {
+      bundleUrl: string;
+      sha512: string;
+      target: string;
+      skillId: string;
+    },
+    fetchBundle: BundleFetcher,
+  ) => Promise<{ ok: true; installedPath: string } | { ok: false; error: string }>;
   getInstalledSkillState: () => {
     skills: Array<{ skillId: string; version: string; target: string }>;
   };
@@ -103,6 +113,15 @@ describe("skill-install-targets-store + installer（自定义安装目标）", (
   let fakeHome: string;
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
+
+  // fetchBundle 是必传注入参数（生产 = net.fetch 搭 default session，受代理治理约束）；
+  // 测试按 PROXY-003 允许的同形注入，用 Node 全局 fetch 打本地 bundle 服务。
+  const installWithTestFetch = (request: {
+    bundleUrl: string;
+    sha512: string;
+    target: string;
+    skillId: string;
+  }) => installer.installSkill(request, (url) => fetch(url));
 
   beforeEach(() => {
     store = loadStore();
@@ -342,7 +361,7 @@ describe("skill-install-targets-store + installer（自定义安装目标）", (
       const bundleJson = buildBundle("gpt-image", "1.0.0");
       const mock = await startBundleServer(bundleJson);
       try {
-        const result = await installer.installSkill({
+        const result = await installWithTestFetch({
           bundleUrl: mock.url,
           sha512: mock.sha512,
           target: added.target.id,
@@ -361,7 +380,7 @@ describe("skill-install-targets-store + installer（自定义安装目标）", (
     });
 
     it("installSkill 目标解析不到 → { ok: false, error: 'unknown-target' }", async () => {
-      const result = await installer.installSkill({
+      const result = await installWithTestFetch({
         bundleUrl: "http://127.0.0.1:9/bundle.json",
         sha512: "x",
         target: "custom-ffffffff",
@@ -379,7 +398,7 @@ describe("skill-install-targets-store + installer（自定义安装目标）", (
       const bundleJson = buildBundle("gpt-image", "2.0.0");
       const mock = await startBundleServer(bundleJson);
       try {
-        const result = await installer.installSkill({
+        const result = await installWithTestFetch({
           bundleUrl: mock.url,
           sha512: mock.sha512,
           target: "agents",

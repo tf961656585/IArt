@@ -19,6 +19,7 @@ import type { NodeGraph } from '@/features/canvas/types/nodeGraph';
 import type { AssetNodeData, GraphNode, NodePosition, TaskNodeData } from '@/features/canvas/types/node';
 import { createTestNodeGraphParams } from '@/features/canvas/components/__tests__/fixtures/canvasTestBuilders';
 import { ASSET_NODE_DEFAULT_SIZE } from '@/features/canvas/nodes/asset/assetNodeFactory';
+import { buildCanvasSizeSources } from '@/features/canvas/utils/nodeOccupancy';
 import {
   TASK_BATCH_GAP_X,
   TASK_BATCH_GAP_Y,
@@ -142,6 +143,7 @@ const defaultPlacementBase = (nodes: ReadonlyArray<GraphNode>): NodePosition =>
     nodeSize: ASSET_NODE_DEFAULT_SIZE,
     perRow: 3,
     referencePositions: [],
+    sizeSources: buildCanvasSizeSources(useCanvasStore.getState()),
   }).base;
 
 const seedAgentNode = (position: NodePosition, agentSessionId: string = AGENT_SESSION_ID): GraphNode => {

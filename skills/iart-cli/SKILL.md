@@ -15,7 +15,10 @@ description: |
 > **版本门槛**：本 skill 描述的命令面与行为自 **IARTStudio v0.6.7** 起（CLI 以轻量纯 Node
 > 进程运行）；`generate --request-id` 受理幂等键、`task list` 过滤参数与人读失败原因自
 > **v0.6.8** 起；`batch get` 生成档案读取、`asset get`/`task get` 内联 `generation` 档案、
-> `--version` 与解析失败单行指引自 **v0.6.10** 起。旧版本软件的 `iart` 可能表现不同（启动慢、
+> `--version` 与解析失败单行指引自 **v0.6.10** 起；`generate --group` 出生组、
+> `canvas group list` 组清单、空组建组、受理回执/终态输出的画布投影身份（`node_id`/`group_id`），
+> 以及产物落位自动排布（出生防重叠、批次收口整块重排）自 **v0.6.11** 起。旧版本软件的 `iart`
+> 可能表现不同（启动慢、
 > 偶发无输出崩溃、控制台中文乱码、`batch get` 报「无法识别的命令」）；
 > 遇到这类旧行为时请用户把应用升级到最新版本，并重启一次应用——应用启动时会自动把
 > 命令入口修正到新形态，无需手动重新注册。
@@ -82,13 +85,14 @@ description: |
 | `iart asset get <assetId> --project P` | 资产详情，必含本地媒体文件绝对路径；同内容存在其他资产 id 时输出 `equivalent_asset_ids`（同一内容的历史双身份，引用任一等效）。资产是生成产物时附 `generation` 生成档案（见下「生成档案」） |
 | `iart batch get <batchId> --project P` | 读取生成档案（见下「生成档案」）：一批次提交的完整意图——提示词**全文**、参数、参考资产、任务成员。批次不存在报 `batch_not_found` |
 | `iart canvas nodes list --project P` | 画布节点清单（节点 id、类型、位置、组归属、资产/任务引用；图片/视频/音频素材节点与资产节点同样输出 `asset_id`） |
+| `iart canvas group list --project P` | 画布组与 Agent 容器清单（组 id `group_node_id`、名称、类型 `group`/`agent_container`、成员数）。规划分组、生成前盘点、`--group` 前核对组名是否唯一都用它；项目未打开也可用 |
 | `iart task list --project P [--status S] [--since <ISO 时间>] [--request-id ID]` / `iart task get <taskId> --project P` | 任务状态。`--status` 按状态过滤，合法值只有七个：`submitting`/`generating`/`polling`/`downloading`/`succeeded`/`failed`/`cancelled`；`--since` 按创建时间下界过滤（ISO 8601，如 `2026-10-14T08:00:00Z`）、`--request-id` 按受理幂等键反查该次提交的全部任务（未命中=空列表且命令成功，见下「崩溃后对账」）；可组合。任务条目含 `progress_percent`（无进度时缺省）。⚠ `task get` 的 `--project` 必填（帮助文本省略了它）。人读模式 `task get` 只输出一行（任务 + 状态 + 失败原因）——读字段结构必须 `--json` |
 
 ### 画布命令（必须项目已打开）
 
 | 命令 | 说明 |
 |---|---|
-| `iart canvas group create --name N --members id1,id2 --project P` | 建组并纳入成员（至少 1 个，逗号分隔，可重复传参累积）；成员已属其他组则改归属到新组；返回 `group_node_id` |
+| `iart canvas group create --name N [--members id1,id2] --project P` | 建组。带 `--members`：建组并纳入成员（逗号分隔，可重复传参累积），成员已属其他组则改归属到新组；不带 `--members`：建**空组**（先规划分组、稍后让生成任务出生其内的标准动作，组框自动在画布空白处落位）；返回 `group_node_id` |
 | `iart canvas group dissolve --group <容器id> --project P` | 解散容器（组或 Agent 容器）：组解散删除组节点、成员保留画布原位且归属解除；Agent 容器解散解除成员关系、头节点保留回落单节点形态、会话保留。**不提供连删**（连删是界面显式危险动作）。返回 `group_node_id` 与解散前 `member_ids`；目标不存在 `group_not_found`、目标非容器或 Agent 无成员 `command_rejected` |
 | `iart canvas node move --node <id> --x N --y N --project P` | 移动单个节点到目标画布坐标（可负、可小数）。**容器节点不能直接移动**（组位置由成员派生，移动一律成员级，指定容器 `command_rejected`）；返回 `node_id`、最终 `position` 与实际位移的 `moved_node_ids` |
 | `iart canvas node delete --nodes id1,id2 [--yes] --project P` | 删除节点（与界面删除同一连带语义：删除组节点=解散、成员保留原位；Agent 节点删除会级联清除其会话且**不可恢复**）。请求集命中 Agent 节点时必须加 `--yes` 显式确认；**不提供连删**；返回实际删除的 `deleted_node_ids`（含连带级联） |
@@ -98,7 +102,7 @@ description: |
 
 | 命令 | 说明 |
 |---|---|
-| `iart generate --prompt T --model M [--count N] [--ref id1,id2] [--arg k=v,k2=v2] [--request-id ID] [--wait] --project P` | 提交生成（见下） |
+| `iart generate --prompt T --model M [--count N] [--ref id1,id2] [--arg k=v,k2=v2] [--group 组名] [--request-id ID] [--wait] --project P` | 提交生成（见下） |
 | `iart task cancel <taskId> --project P` | 取消任务（与界面取消同语义） |
 | `iart task wait <taskId> [--timeout S] --project P` | 轮询至终态。默认不设时限；`--timeout` 到期只是本次命令以 `wait_timeout` 退出，任务继续跑 |
 
@@ -107,6 +111,7 @@ description: |
 - `--ref` 引用**已存在**的资产（id 来源：`asset list`（可 `--query` 按文件名/提示词搜）、`canvas nodes list` 的 `asset_id`，或用户从画布右键菜单「复制素材 ID」贴给你的 id；同一内容出现多个 id 时任一等效，`asset get` 的 `equivalent_asset_ids` 可核对）。
 - `--arg` 的参数名与取值域以 `model get` 的 `parameter_schema` 为准，**不要猜**。
 - `--request-id` 受理幂等键（batch 级）：不传时 CLI 自动生成 uuid 并在受理回执回显；**重提时复用同一 request_id 即幂等**——命中已受理批次会原样返回既有批次与任务身份（`replayed: true`），不重复出图。
+- `--group <组名>` 出生组：唯一同名组 → 本批任务出生其内（组内按任务号网格续排）；没有同名组 → 受理成功后自动建组再出生；多个同名组 → 报 `group_name_ambiguous` 且不提交。指定后落位锚点改为组内续排（不再以参考资产旁为锚）。**先规划分组、再提交生成**的标准工作流见 R2。不指定时行为不变（`group_id` 为 null）。
 - `--wait` 先在 stderr 即时输出受理回执（批次与任务标识与幂等键回显，见下），再轮询到全部任务终态，
   逐任务输出终态与产物（失败任务附失败原因）；等待中途进程死亡时凭回执改用 `task wait` 恢复观测。
 
@@ -141,12 +146,14 @@ iart task list --request-id <回执里的幂等键> --project P --json
 `{"ok":false,"error":{"code":"...","message":"..."}}`）：
 
 - **受理回执**（generate 不带 `--wait`；`--wait` 时也先经 **stderr** 即时输出一次再开始等待）：
-  `{ ok, batch_id, tasks: [{task_id, task_index}], client_request_id, replayed }`——`client_request_id`
-  是本次受理幂等键（显式传入或自动生成），`replayed: true` 表示命中既有批次（未重复创建）。
+  `{ ok, batch_id, tasks: [{task_id, task_index, node_id, group_id}], client_request_id, replayed }`——`client_request_id`
+  是本次受理幂等键（显式传入或自动生成），`replayed: true` 表示命中既有批次（未重复创建）；
+  `node_id` 是该任务的画布任务节点标识，`group_id` 是出生组标识（未指定 `--group` 时为 null）。
   stdout 是最终结果的数据通道，进度信息走 stderr——解析最终结果只读 stdout。
 - **终态产物**（`generate --wait` 的 `task_results[]` / `task wait` 的 `task_result`）：
-  每项 `{ task: {taskId, status, errorMessage, failure, ...}, assets: [{ local_file_path, asset: {assetId, mediaType, ...} }] }`。
-  `local_file_path` 是产物媒体文件的**绝对路径**，可直接读取展示给用户；失败任务读
+  每项 `{ task: {taskId, status, node_id, group_id, errorMessage, failure, ...}, assets: [{ local_file_path, asset: {assetId, mediaType, ...} }] }`。
+  `local_file_path` 是产物媒体文件的**绝对路径**，可直接读取展示给用户；`node_id`/`group_id` 是画布
+  投影身份（项目已关闭期间查询时为 null）；失败任务读
   `task.failure`（code/message/userMessage）或 `task.errorMessage`——`--json` 里有完整失败结构，
   人读模式会在任务行内联截断后的失败原因。
 - **任务字段结构**（`task get --json` 的 `task`）：`taskId`、`status`、`batchId`（所属批次，
@@ -178,6 +185,7 @@ iart task list --request-id <回执里的幂等键> --project P --json
 | `project_not_open` | 画布命令/生成提交时项目未打开 | 先 `iart project open --project P`，再重试原命令 |
 | `asset_not_found` / `node_not_found` / `group_not_found` | 引用的资产/节点/组不存在 | 用对应 list 命令核对 id |
 | `batch_not_found` | 批次标识不存在 | `task get` 从任务的 `generation`/`batchId` 核对批次号 |
+| `group_name_ambiguous` | `--group` 组名命中多个同名节点组 | `canvas group list --json` 核对现有组，改用唯一组名后重试 |
 | `invalid_reference` | 引用资产不可用或与模型不兼容 | 核对资产与模型输入要求 |
 | `model_not_available` | 模型不在可执行目录或不可执行 | 读失败原因码：缺部署/凭证等问题引导用户到设置页「服务商」分区配置 |
 | `task_not_found` | 任务标识不存在 | `task list` 核对 id |
@@ -216,16 +224,39 @@ iart generate --prompt "<提示词>" --model <model_id> --wait --json --project 
 # 仅当档案信息不足以回答用户（如要看画面细节）才用 local_file_path 打开成品图核对
 ```
 
-### R2 组织画布
+### R2 画布组织方法论（先规划分组，再提交生成）
+
+批量生成的标准工作流——把秩序放在提交之前，产物落位由系统自动完成，全程不需要坐标：
 
 ```bash
-iart canvas nodes list --project <路径或名称> --json  # 拿 node_id 与现有 group_id
-iart canvas group create --name <组名> --members <id1,id2> --project <路径或名称>
-iart canvas layout --scope group:<组id> --order <按序的id列表> --project <路径或名称> --json  # 显式顺序排格（如分镜 1..8）；不带 --order 则保持默认
-iart canvas group dissolve --group <组id> --project <路径或名称>      # 解散组（成员保留原位、归属解除）
-iart canvas node move --node <id> --x <横坐标> --y <纵坐标> --project <路径或名称>   # 移动单个节点（容器不能直接移动）
-iart canvas node delete --nodes <id1,id2> --project <路径或名称>      # 删除节点；删 Agent 需加 --yes（会话不可恢复）
+# 1) 盘点现状：打开了什么、画布上有哪些组
+iart app status --json
+iart canvas group list --project <路径或名称> --json
+
+# 2) 规划分组：想清楚哪些产物归哪个组、组叫什么（组名取唯一，如「分镜」「角色定稿」）
+
+# 3) 建组（可空组，组框先出现在画布空白处）
+iart canvas group create --name "分镜" --project <路径或名称> --json
+
+# 4) 带组提交：任务出生在组内、按任务号网格续排
+iart generate --prompt "..." --model <model_id> --count 8 --group "分镜" --wait --json --project <路径或名称>
+
+# 5) 收口自动重排：本批全部任务到终态时，系统自动把成功产物整理成一个紧凑网格块
+#    （按任务号排序、单步可撤销）——不需要也不建议再手动 layout
+
+# 6) 仅在想自定义列数时手动整理该组
+iart canvas layout --scope group:<组id> --columns 4 --project <路径或名称> --json
 ```
+
+要点：
+
+- **不手动摆位置**：生成产物的出生落位、成功追加、批次收口重排全部由系统防重叠自动完成；
+  `canvas node move --x --y` 是坐标微调逃生口，仅在语义化方法覆盖不了时才用（容器不能直接移动）。
+- **组名要唯一**：`--group` 按名称精确匹配节点组（Agent 容器不参与）；重名被 `group_name_ambiguous` 拒绝，不提交。
+- **批次收口重排只作用于本批成功产物**，失败任务记录原地保留；编辑器关闭期间收口的批次不补重排。
+- 其他组织动作：`canvas group dissolve`（解散，成员保留原位归属解除）、`canvas node delete`
+  （删除节点，删 Agent 需加 `--yes`，会话不可恢复）、`canvas layout --scope all`
+  （整理全部自由散点；散点会避开已有组的范围摆放）。
 
 ### R3 任务观测与取消
 

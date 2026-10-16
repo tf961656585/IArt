@@ -4,7 +4,14 @@ import { ExecutableModelDirectoryEntrySchema } from './executable-model-catalog-
 import { PromptDockBatchTaskAcceptanceSchema } from './promptdock-batch-contract';
 import { RuntimeMediaAssetViewSchema, RuntimeTaskViewSchema, UnifiedGenerationStatusSchema } from './schemas/runtime-transaction.schema';
 import { TaskCancelAcceptedResponseSchema } from './task-cancel-contract';
-import { TaskSubmitMediaKindSchema } from './task-submit-media-input';
+import { CliGenerationArchiveSchema } from './cli-generation-archive-contract';
+import {
+  CliCanvasPositionSchema,
+  CliCanvasNodeEntrySchema,
+  CliCanvasGroupSummarySchema,
+  CliCanvasSelectionSchema,
+  CliTaskCanvasIdentitySchema,
+} from './cli-canvas-contract';
 
 /**
  * CLI 与本地 Agent 集成契约（contracts 层）—— `iart` 命令面、代理执行通道与设置页状态 DTO 的
@@ -61,6 +68,7 @@ export const CLI_ERROR_CODES = [
   'batch_not_found',
   'node_not_found',
   'group_not_found',
+  'group_name_ambiguous',
   'invalid_reference',
   'model_not_available',
   'task_not_found',
@@ -86,7 +94,7 @@ export type CliError = z.infer<typeof CliErrorSchema>;
 
 /**
  * 命令名清单：`iart <名词> <动作>` 的线上一面，顺序对齐 spec §5.1–§5.5（batch.get 归 §5.2 只读查询）。
- * 共 23 条：项目生命周期 6 + 只读查询 8 + 画布命令 5 + 生成与任务 3 + 应用状态感知 1。
+ * 共 24 条：项目生命周期 6 + 只读查询 9 + 画布命令 5 + 生成与任务 3 + 应用状态感知 1。
  */
 export const CLI_COMMANDS = [
   'project.list',
@@ -100,6 +108,7 @@ export const CLI_COMMANDS = [
   'asset.list',
   'asset.get',
   'canvas.nodes.list',
+  'canvas.group.list',
   'canvas.group.create',
   'canvas.group.dissolve',
   'canvas.node.move',
@@ -130,11 +139,15 @@ const ProjectNameSchema = z
     message: 'project name must not contain path separators',
   });
 
-/** `canvas group create` 参数：组名 + 至少一个成员节点标识（spec §5.3）。 */
+/**
+ * `canvas group create` 参数：组名 + 成员节点标识（spec §5.3）。
+ * members 允许空数组（CLI-044 空组建组，仅 CLI 侧放开：界面多选入口保持 ≥2 语义）——
+ * 空组建组由执行侧经防重叠搜索在视口安全区定位初始位置。
+ */
 export const CliCanvasGroupCreateParamsSchema = z
   .object({
     name: z.string().min(1),
-    members: z.array(z.string().min(1)).min(1),
+    members: z.array(z.string().min(1)),
   })
   .strict();
 export type CliCanvasGroupCreateParams = z.infer<typeof CliCanvasGroupCreateParamsSchema>;
@@ -248,6 +261,12 @@ export const CliGenerateParamsSchema = z
     wait: z.boolean().optional(),
     /** `--request-id` 可选：客户端幂等键（未传时 CLI 自动生成 uuid 并在受理回执回显）。 */
     client_request_id: z.string().min(1).optional(),
+    /**
+     * `--group` 可选（spec §5.4 / CLI-043）：出生组组名。提交前置校验阶段按名称解析目标组——
+     * 唯一同名节点组入它、零个自动建组、≥2 个同名以 group_name_ambiguous 拒绝（不发起提交）。
+     * 组名匹配只作用于节点组（type=group），不含 Agent 容器。
+     */
+    group: z.string().min(1).optional(),
   })
   .strict();
 export type CliGenerateParams = z.infer<typeof CliGenerateParamsSchema>;
@@ -297,6 +316,8 @@ export const CliCommandRequestSchema = z.discriminatedUnion('command', [
     .object({ command: z.literal('asset.get'), project: ProjectParamSchema, asset_id: z.string().min(1) })
     .strict(),
   z.object({ command: z.literal('canvas.nodes.list'), project: ProjectParamSchema }).strict(),
+  // 画布组/容器清单（spec §5.2 / CLI-045）：存储只读投影，项目未打开也可用。
+  z.object({ command: z.literal('canvas.group.list'), project: ProjectParamSchema }).strict(),
   z
     .object({
       command: z.literal('canvas.group.create'),
@@ -443,46 +464,23 @@ export const CliAssetWithLocalPathSchema = z
   .strict();
 export type CliAssetWithLocalPath = z.infer<typeof CliAssetWithLocalPathSchema>;
 
-/**
- * 画布节点条目（spec §5.2 canvas nodes list：节点标识、类型、位置、组归属、资产/任务引用）。
- * 新建判定：画布节点投影属 Editor 内部类型，contracts 无既有跨边界承载可复用。
- */
-export const CliCanvasPositionSchema = z
-  .object({
-    x: z.number(),
-    y: z.number(),
-  })
-  .strict();
-export type CliCanvasPosition = z.infer<typeof CliCanvasPositionSchema>;
-
-export const CliCanvasNodeEntrySchema = z
-  .object({
-    node_id: z.string().min(1),
-    /** 节点类型（资产/任务/注释/组等画布节点种类），由画布投影侧填定。 */
-    node_type: z.string().min(1),
-    position: CliCanvasPositionSchema,
-    /** 组归属；未归属任何组为 null。 */
-    group_id: z.string().min(1).nullable(),
-    /** 引用的资产标识；无资产引用为 null。 */
-    asset_id: z.string().min(1).nullable(),
-    /** 引用的任务标识；无任务引用为 null。 */
-    task_id: z.string().min(1).nullable(),
-  })
-  .strict();
-export type CliCanvasNodeEntry = z.infer<typeof CliCanvasNodeEntrySchema>;
-
-/**
- * 画布选中状态（spec §5.5/CLI-021：节点标识列表与注释标识列表，分类型输出）。
- * B 命令面 app.status 响应与 C 代理执行通道 canvas.selection.get 结果共享同一形状（不复制）；
- * 「画布尚未就绪」的选中态缺失由外层字段 nullable 承载（整体为 null），本形状只承载已就绪的选中集合。
- */
-export const CliCanvasSelectionSchema = z
-  .object({
-    node_ids: z.array(z.string().min(1)),
-    annotation_ids: z.array(z.string().min(1)),
-  })
-  .strict();
-export type CliCanvasSelection = z.infer<typeof CliCanvasSelectionSchema>;
+// 画布域 DTO（节点条目 / 组容器清单 / 任务画布投影身份 / 选中状态）承载在 cli-canvas-contract.ts
+// （cli-contract.ts 行数预算拆分）；此处 import 供本文件判别变体组合复用，并 re-export 保持
+// '@iart/contracts' 单一取用面不变。
+export {
+  CliCanvasPositionSchema,
+  CliCanvasNodeEntrySchema,
+  CliTaskCanvasIdentitySchema,
+  CliCanvasGroupSummarySchema,
+  CliCanvasSelectionSchema,
+} from './cli-canvas-contract';
+export type {
+  CliCanvasPosition,
+  CliCanvasNodeEntry,
+  CliTaskCanvasIdentity,
+  CliCanvasGroupSummary,
+  CliCanvasSelection,
+} from './cli-canvas-contract';
 
 /**
  * app.status 的单个已打开项目条目（spec §5.5/CLI-020：名称、路径、查询时点焦点）。
@@ -503,16 +501,30 @@ export type CliAppStatusOpenedProject = z.infer<typeof CliAppStatusOpenedProject
 /**
  * 单个任务终态结果（spec §5.4 generate --wait / task wait：终态 + 产物资产）。
  * 任务状态复用 RuntimeTaskViewSchema（失败任务经 failure/error 字段如实逐任务承载，不整体掩盖）；
- * 产物资产复用 CliAssetWithLocalPath（资产标识 + 本地媒体文件绝对路径）。
+ * 产物资产复用 CliAssetWithLocalPath（资产标识 + 本地媒体文件绝对路径）；
+ * 画布投影身份（node_id/group_id，CLI-046）经画布存储投影按 task_id 关联，读不到为 null。
  */
 export const CliTaskTerminalResultSchema = z
   .object({
     task: RuntimeTaskViewSchema,
     /** 产物资产列表；失败/取消任务可为空数组。 */
     assets: z.array(CliAssetWithLocalPathSchema),
+    ...CliTaskCanvasIdentitySchema.shape,
   })
   .strict();
 export type CliTaskTerminalResult = z.infer<typeof CliTaskTerminalResultSchema>;
+
+/**
+ * generate 受理的单个任务身份（spec §5.4 / CLI-046）：批次受理身份（复用
+ * PromptDockBatchTaskAcceptanceSchema 的 task_id + task_index，不复制）扩展画布投影身份——
+ * node_id 为画布任务节点标识（受理投影创建后回填；幂等重放按 task_id 关联既有投影，
+ * 投影缺失为 null，缺省不伪造）；group_id 为出生组标识（未指定 --group 为 null）。
+ */
+export const CliGenerateTaskIdentitySchema = PromptDockBatchTaskAcceptanceSchema.extend({
+  node_id: z.string().min(1).nullable(),
+  group_id: z.string().min(1).nullable(),
+});
+export type CliGenerateTaskIdentity = z.infer<typeof CliGenerateTaskIdentitySchema>;
 
 /**
  * generate 受理结果（spec §5.4 受理成功输出）：批次标识 + 任务身份列表。
@@ -527,8 +539,8 @@ export const CliGenerateAcceptanceSchema = z
   .object({
     /** 批次标识。 */
     batch_id: z.string().min(1),
-    /** 受理的任务身份（复用 PromptDockBatchTaskAcceptanceSchema；原子受理恒 ≥1）。 */
-    tasks: z.array(PromptDockBatchTaskAcceptanceSchema).min(1),
+    /** 受理的任务身份（CLI-046 扩展 PromptDockBatchTaskAcceptance：附画布投影身份）。 */
+    tasks: z.array(CliGenerateTaskIdentitySchema).min(1),
     /** 幂等键回显：仅提交携带了 `--request-id`（或 CLI 自动生成）时输出。 */
     client_request_id: z.string().min(1).optional(),
     /** 幂等重放标志：true = 命中既有批次，任务身份为既有受理结果（未重复创建）。 */
@@ -537,46 +549,13 @@ export const CliGenerateAcceptanceSchema = z
   .strict();
 export type CliGenerateAcceptance = z.infer<typeof CliGenerateAcceptanceSchema>;
 
-// -- 生成档案（spec §5.2 batch get / asset get 与 task get 内联，CLI-038/039/040） --------
-
-/** 生成档案的单条引用（批次提交时的参考资产）：asset_id 必载；实体可查才附类型/文件键/本地路径。 */
-export const CliGenerationArchiveReferenceSchema = z
-  .object({
-    asset_id: z.string().min(1),
-    /** 引用资产媒体类型（复用提交媒体输入的媒体类型枚举）；实体不可查证时缺省。 */
-    media_kind: TaskSubmitMediaKindSchema.optional(),
-    /** 资产内容文件键（`<内容sha256>.<扩展名>` 形态）；实体不可查证时缺省。 */
-    file_key: z.string().min(1).optional(),
-    /** 本地媒体文件绝对路径；实体不可查证或缺本地文件承载时缺省。 */
-    local_file_path: z.string().min(1).optional(),
-  })
-  .strict();
-export type CliGenerationArchiveReference = z.infer<typeof CliGenerationArchiveReferenceSchema>;
-
-/**
- * 生成档案（CLI-038）：批次受理时冻结的提交意图（BatchIntentSnapshot）面向 CLI 的投影；
- * media_refs / reference_asset_ids 两种承载统一投影为 references 并尽量附资产实体信息与本地路径。
- * prompt 承载提示词**全文**（任务 metadata 预览是 512 字符截断摘要，档案是唯一全文读取位）；
- * params 与快照同形透传。三入口（batch get / asset get / task get 内联）经同一构建函数产出本形状，
- * 任何入口不得出现字段子集。
- */
-export const CliGenerationArchiveSchema = z
-  .object({
-    batch_id: z.string().min(1),
-    model_id: z.string().min(1),
-    /** 提交提示词全文（非任务 metadata 的 512 字符预览摘要）。 */
-    prompt: z.string(),
-    /** 提交时冻结的模型参数（与受理快照同形透传）。 */
-    params: z.record(z.unknown()),
-    /** 参考资产引用（快照无 media_refs 时为空数组，不以 null 占位）。 */
-    references: z.array(CliGenerationArchiveReferenceSchema),
-    /** 批次固定任务成员（受理期任务标识全集）。 */
-    task_ids: z.array(z.string().min(1)).min(1),
-    /** 受理时刻（快照冻结值，UTC ISO 8601 存储口径）。 */
-    created_at: z.string().min(1),
-  })
-  .strict();
-export type CliGenerationArchive = z.infer<typeof CliGenerationArchiveSchema>;
+// 生成档案（spec §5.2 batch get / asset get 与 task get 内联，CLI-038/039/040）承载在
+// cli-generation-archive-contract.ts（行数预算拆分）；re-export 保持单一取用面。
+export {
+  CliGenerationArchiveReferenceSchema,
+  CliGenerationArchiveSchema,
+} from './cli-generation-archive-contract';
+export type { CliGenerationArchiveReference, CliGenerationArchive } from './cli-generation-archive-contract';
 
 /** `iart --version` 输出（spec §5.5）：版本数据源是发现文件；null = 读不到（如实承载未知，不虚构占位值）。 */
 export const CliVersionReportSchema = z.object({ version: z.string().min(1).nullable() }).strict();
@@ -620,6 +599,8 @@ export const CliCommandSuccessResponseSchema = z.discriminatedUnion('command', [
     })
     .strict(),
   z.object({ command: z.literal('canvas.nodes.list'), ok: z.literal(true), nodes: z.array(CliCanvasNodeEntrySchema) }).strict(),
+  // 组/容器清单（spec §5.2 / CLI-045）：存储只读投影。
+  z.object({ command: z.literal('canvas.group.list'), ok: z.literal(true), groups: z.array(CliCanvasGroupSummarySchema) }).strict(),
   z.object({ command: z.literal('canvas.group.create'), ok: z.literal(true), group_node_id: z.string().min(1) }).strict(),
   /** 解散结果：目标容器标识 + 受影响成员列表（成员保留画布原位，归属解除）。 */
   z
@@ -666,7 +647,16 @@ export const CliCommandSuccessResponseSchema = z.discriminatedUnion('command', [
     })
     .strict(),
   z.object({ command: z.literal('task.list'), ok: z.literal(true), tasks: z.array(RuntimeTaskViewSchema) }).strict(),
-  z.object({ command: z.literal('task.get'), ok: z.literal(true), task: RuntimeTaskViewSchema, generation: CliGenerationArchiveSchema.optional() }).strict(),
+  // 任务画布投影身份（CLI-046）：node_id/group_id 按任务标识经画布存储投影关联，读不到为 null。
+  z
+    .object({
+      command: z.literal('task.get'),
+      ok: z.literal(true),
+      task: RuntimeTaskViewSchema,
+      generation: CliGenerationArchiveSchema.optional(),
+      ...CliTaskCanvasIdentitySchema.shape,
+    })
+    .strict(),
   // 生成档案读取（CLI-038）：generation 与 asset.get / task.get 内联同一形状（单一构建出口）。
   z.object({ command: z.literal('batch.get'), ok: z.literal(true), generation: CliGenerationArchiveSchema }).strict(),
   // 任务取消受理复用 TaskCancelAcceptedResponseSchema 的形状（accepted/task_id/cancelled_at）。
@@ -701,6 +691,7 @@ export const CliCommandErrorResponseSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('asset.list'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('asset.get'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.nodes.list'), ok: z.literal(false), error: CliErrorSchema }).strict(),
+  z.object({ command: z.literal('canvas.group.list'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.group.create'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.group.dissolve'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.node.move'), ok: z.literal(false), error: CliErrorSchema }).strict(),

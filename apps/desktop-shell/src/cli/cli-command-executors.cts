@@ -13,7 +13,12 @@ import * as path from "node:path";
 import type { CliCanvasNodeEntry } from "@iart/contracts";
 import type { ProjectRegistryEntry } from "../storage/editor-storage-recent-projects.cjs";
 import { getEntryLastOpenedAt } from "../storage/editor-storage-recent-projects.cjs";
-import { projectCanvasNodePayload, resolveLocalMediaFilePath } from "./cli-canvas-projection.cjs";
+import {
+  buildTaskCanvasIdentityIndex,
+  projectCanvasNodePayload,
+  projectCanvasGroupSummaries,
+  resolveLocalMediaFilePath,
+} from "./cli-canvas-projection.cjs";
 import type { CliAssetGenerationSource } from "./cli-storage-queries.cjs";
 import mediaFileKeyModule = require("@iart/utils/media-file-key");
 const { extractContentHashFromFileKey } = mediaFileKeyModule;
@@ -545,6 +550,16 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
     return okResult(request.command, { nodes });
   });
 
+  registry.set("canvas.group.list", (request) => {
+    if (request.command !== "canvas.group.list") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
+    const resolution = resolveProjectOrFail(request, deps);
+    if (!resolution.ok) return resolution.result;
+    // 组/容器清单走存储只读投影（spec §5.2 / CLI-045）：与 canvas nodes list 同通道定位，
+    // 项目未打开也可读。聚合（成员计数）在投影函数内完成，执行器只做编排。
+    const payloads = deps.storage.readCanvasNodePayloads(resolution.project.path);
+    return okResult(request.command, { groups: projectCanvasGroupSummaries(payloads) });
+  });
+
   registry.set("task.list", async (request) => {
     if (request.command !== "task.list") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
     const resolution = resolveProjectOrFail(request, deps);
@@ -635,8 +650,15 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
     // 无批次归属（如媒体工具加工任务）或批次行缺失时缺省 generation 字段、任务状态照常输出
     // （回退现状，留痕见 buildArchiveFromTaskId）。
     const generation = buildArchiveFromTaskId(resolution.project.path, request.task_id);
+    // 任务画布投影身份（spec §5.4 / CLI-046）：按 task_id 经画布存储投影关联；无投影或项目
+    // 库不可用时为 null（缺省不伪造）。
+    const identity = buildTaskCanvasIdentityIndex(deps.storage.readCanvasNodePayloads(resolution.project.path)).get(
+      request.task_id,
+    );
     return okResult(request.command, {
       task: parsed.task,
+      node_id: identity?.node_id ?? null,
+      group_id: identity?.group_id ?? null,
       ...(generation !== null ? { generation } : {}),
     });
   });
@@ -695,7 +717,18 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
             .readTaskOutputAssets(project.path, request.task_id)
             .map((asset) => toCliAssetWithLocalPath(project.path, asset))
             .filter((entry): entry is { asset: RuntimeMediaAssetView; local_file_path: string } => entry !== null);
-          return okResult(request.command, { task_result: { task: parsed.task, assets } });
+          // 任务画布投影身份（spec §5.4 / CLI-046）：与 task get 同一关联通道（画布存储投影）。
+          const identity = buildTaskCanvasIdentityIndex(deps.storage.readCanvasNodePayloads(project.path)).get(
+            request.task_id,
+          );
+          return okResult(request.command, {
+            task_result: {
+              task: parsed.task,
+              assets,
+              node_id: identity?.node_id ?? null,
+              group_id: identity?.group_id ?? null,
+            },
+          });
         }
       } else if (forwarded.reason === "http_error" && forwarded.status === 404) {
         return taskNotFoundResult(request.command, request.task_id);
@@ -790,6 +823,7 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
     if (guard !== null) return guard;
     // 程序化提交（spec §6.4）：画布窗口执行创作面提交主链；wait 轮询由 CLI 客户端承接，
     // 代理通道只承载受理（wait 原样携带、画布窗口执行侧忽略）。幂等键原样透传（CLI-033）。
+    // 出生组组名原样透传（spec §5.4 / CLI-043）：组名解析与出生入组在画布窗口执行侧完成。
     const outcome = await deps.proxy.dispatch(resolution.project.path, {
       command: "generate",
       prompt: request.prompt,
@@ -799,6 +833,7 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
       ...(request.arg !== undefined ? { arg: request.arg } : {}),
       ...(request.wait !== undefined ? { wait: request.wait } : {}),
       ...(request.client_request_id !== undefined ? { client_request_id: request.client_request_id } : {}),
+      ...(request.group !== undefined ? { group: request.group } : {}),
     });
     return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
   });

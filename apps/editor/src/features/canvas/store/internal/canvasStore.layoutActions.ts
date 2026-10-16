@@ -1,8 +1,16 @@
 import { computeAutoLayout } from '../../layout/autoLayout';
 import type { AutoLayoutResult } from '../../layout/autoLayoutTypes';
 import { applyLayoutInputOrder } from '../../layout/layoutPrimitives';
+import { bboxTopLeft } from '../../layout/containerArrangement';
 import type { EffectiveSizeSources } from '../../utils/effectiveSize';
-import { normalizeNodeGraphSettings } from '../../types/nodeGraph';
+import { DEFAULT_NODE_SIZE, resolveEffectiveSizeByNodeId } from '../../utils/effectiveSize';
+import { buildNodeOccupancyRects } from '../../utils/nodeOccupancy';
+import {
+  searchFreeBlockPosition,
+  type PlacementCell,
+} from '../../utils/taskNodePlacement';
+import type { NodePosition } from '../../types';
+import { normalizeNodeGraphSettings, normalizeSnapGrid } from '../../types/nodeGraph';
 import type { DesiredSize, NodeSize } from '../../types';
 import { isContainerNode } from '../../services/groupMembership';
 import { markNodesDirty } from './canvasStore.persistence';
@@ -191,9 +199,72 @@ export const createCanvasLayoutActions = (
       layoutOptions,
     );
 
-    const positions = layoutResult.positions;
-    if (!Object.keys(positions).length) {
+    const rawPositions = layoutResult.positions;
+    if (!Object.keys(rawPositions).length) {
       return { ...layoutResult, changedCount: 0 };
+    }
+
+    // 锚点保持（与容器内整理同一包围盒口径，spec：画布节点组.md「自动布局协作」）：
+    // 整理前参与自由节点整块包围盒左上角作为锚点。
+    const beforeAnchor = bboxTopLeft(layoutEligibleNodes);
+
+    // 容器几何约束（spec：画布自动布局算法.md「容器几何约束」）：整块经防重叠搜索求位，
+    // 摆放输出不得与任何容器的实际占位相交——展开态容器按成员派生包围盒、折叠态按折叠
+    // 卡片尺寸（nodeOccupancy 统一占位口径）。障碍 = 全部容器占位：自由节点整块将整体
+    // 重摆（旧位置不构成障碍），容器成员占位被其容器包围盒覆盖（排除非容器节点后仅剩
+    // 容器矩形，excludeNodeIds 机制复用 nodeOccupancy 既有口径）。
+    const containerOccupancy = buildNodeOccupancyRects(
+      nodeGraph.nodes,
+      sizeSources,
+      {
+        excludeNodeIds: new Set(
+          nodeGraph.nodes.filter((n) => !isContainerNode(n)).map((n) => n.id),
+        ),
+      },
+    );
+
+    // 整块格子：placeGridFlow 首格在原点，rawPositions 即相对块原点的偏移；
+    // 尺寸与布局算法同源（同一 resolveEffectiveSizeByNodeId 输入，禁止第二份解析链）。
+    const sizeByNodeId = resolveEffectiveSizeByNodeId(layoutEligibleNodes, sizeSources);
+    const cells: PlacementCell[] = [];
+    for (const node of layoutEligibleNodes) {
+      const raw = rawPositions[node.id];
+      if (!raw) continue;
+      const size = sizeByNodeId[node.id] ?? DEFAULT_NODE_SIZE;
+      cells.push({ dx: raw.x, dy: raw.y, width: size.width, height: size.height });
+    }
+
+    // 整块求位：以整理前锚点为首选位环形搜索（步距 = snapGrid，候选位保持网格节奏）。
+    // 无容器冲突时 ring 0 即命中 → 块原点 = 整理前锚点（锚点保持精确成立，消除 CLI 路径
+    // 整块甩到画布原点的问题）；冲突时落到最近可行位（按环序确定性搜索）。
+    const snapGrid = normalizeSnapGrid(normalizedSettings.snapGrid);
+    const blockOrigin = searchFreeBlockPosition({
+      occupancy: containerOccupancy,
+      anchor: beforeAnchor,
+      cells,
+      stepX: snapGrid[0],
+      stepY: snapGrid[1],
+      target: null,
+    });
+    // 无界目标搜索不返回 null（超限在其内部抛断言）；此处仅类型兜底，理论不可达。
+    const resolvedBlockOrigin = blockOrigin ?? beforeAnchor;
+    if (
+      resolvedBlockOrigin.x !== beforeAnchor.x ||
+      resolvedBlockOrigin.y !== beforeAnchor.y
+    ) {
+      console.debug('[autoLayout] free-node block displaced to avoid container occupancy', {
+        beforeAnchor,
+        blockOrigin: resolvedBlockOrigin,
+        containers: containerOccupancy.length,
+      });
+    }
+
+    const positions: Record<string, NodePosition> = {};
+    for (const [nodeId, pos] of Object.entries(rawPositions)) {
+      positions[nodeId] = {
+        x: pos.x + resolvedBlockOrigin.x,
+        y: pos.y + resolvedBlockOrigin.y,
+      };
     }
 
     let touched = 0;
@@ -222,7 +293,8 @@ export const createCanvasLayoutActions = (
       get().saveToHistory();
     }
 
-    return { ...layoutResult, changedCount: touched };
+    // 返回值携带补偿后的最终坐标（消费方只读 changedCount，positions 语义保持真实最终位）。
+    return { ...layoutResult, positions, changedCount: touched };
   };
 
   return {

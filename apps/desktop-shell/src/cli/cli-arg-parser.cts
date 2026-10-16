@@ -21,12 +21,13 @@ export const CLI_USAGE_TEXT = `iart — 驱动 IARTStudio 的命令行入口（�
   iart asset list [--query K] [--media-type image|video|audio] [--model M] [--limit N] [--offset O]
   iart asset get <assetId> --project P
   iart canvas nodes list --project P
-  iart canvas group create --name N --members id1,id2 --project P
+  iart canvas group list --project P
+  iart canvas group create --name N [--members id1,id2] --project P
   iart canvas group dissolve --group <组节点id> --project P
   iart canvas node move --node <节点id> --x N --y N --project P
   iart canvas node delete --nodes id1,id2 [--yes] --project P
   iart canvas layout --scope all|group:<id> [--columns N] [--order id1,id2] --project P
-  iart generate --prompt T --model M [--count N] [--ref id1,id2] [--arg k=v,k2=v2] [--request-id ID] [--wait] --project P
+  iart generate --prompt T --model M [--count N] [--ref id1,id2] [--arg k=v,k2=v2] [--group 组名] [--request-id ID] [--wait] --project P
   iart task list --project P [--status submitting|generating|polling|downloading|succeeded|failed|cancelled] [--since ISO时间] [--request-id ID]
   iart task get <taskId> | task cancel <taskId> | task wait <taskId>
   iart batch get <batchId> --project P
@@ -118,6 +119,7 @@ const COMMAND_SPECS = new Map<string, CommandSpec>([
   ["asset list", { command: "asset.list", positionals: [] }],
   ["asset get", { command: "asset.get", positionals: ["asset_id"] }],
   ["canvas nodes list", { command: "canvas.nodes.list", positionals: [] }],
+  ["canvas group list", { command: "canvas.group.list", positionals: [] }],
   ["canvas group create", { command: "canvas.group.create", positionals: [] }],
   ["canvas group dissolve", { command: "canvas.group.dissolve", positionals: [] }],
   ["canvas node move", { command: "canvas.node.move", positionals: [] }],
@@ -369,12 +371,16 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
     case "canvas.nodes.list":
       draft = { command: "canvas.nodes.list", project: requireScalar("project", "--project") };
       break;
+    case "canvas.group.list":
+      draft = { command: "canvas.group.list", project: requireScalar("project", "--project") };
+      break;
     case "canvas.group.create":
+      // --members 可选（spec §5.3 / CLI-044 空组建组）：缺省视为空成员清单。
       draft = {
         command: "canvas.group.create",
         project: requireScalar("project", "--project"),
         name: requireScalar("name", "--name"),
-        members: requireStringList("members", "--members"),
+        members: optionalStringList("members") ?? [],
       };
       break;
     case "canvas.group.dissolve":
@@ -425,6 +431,7 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
       const argRaw = listValues.get("arg");
       const arg = argRaw === undefined ? undefined : argRaw.flatMap((item) => parseKvList(item));
       const clientRequestId = scalarValues.get("client_request_id");
+      const group = scalarValues.get("group");
       draft = {
         command: "generate",
         project: requireScalar("project", "--project"),
@@ -435,6 +442,7 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
         ...(arg !== undefined ? { arg } : {}),
         ...(booleanFlags.has("wait") ? { wait: true } : {}),
         ...(clientRequestId !== undefined ? { client_request_id: clientRequestId } : {}),
+        ...(group !== undefined ? { group } : {}),
       };
       break;
     }

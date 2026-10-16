@@ -399,8 +399,9 @@ describe("生成档案读取接缝（真实存储 + 真实读取链 + 真实执�
     });
   });
 
-  it("命令表共 23 条且含 batch.get（契约命令表守卫）", () => {
-    expect(CLI_COMMANDS.length).toBe(23);
+  it("命令表共 24 条且含 batch.get 与 canvas.group.list（契约命令表守卫）", () => {
+    expect(CLI_COMMANDS.length).toBe(24);
+    expect(CLI_COMMANDS).toContain("canvas.group.list");
     expect(CLI_COMMANDS).toContain("batch.get");
   });
 });

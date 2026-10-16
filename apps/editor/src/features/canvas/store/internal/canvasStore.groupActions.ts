@@ -7,8 +7,8 @@
  * 语义口径以 `docs/runtime/画布节点组.md` 为准。
  */
 
-import { computeAutoLayout } from '../../layout/autoLayout';
 import { applyLayoutInputOrder } from '../../layout/layoutPrimitives';
+import { computeContainerArrangedPositions } from '../../layout/containerArrangement';
 import { normalizeNodeGraphSettings } from '../../types/nodeGraph';
 import type { GraphNode, GroupNodeData, NodePosition } from '../../types/node';
 import {
@@ -75,10 +75,13 @@ export const createCanvasGroupActions = (
   | 'moveNodesBetweenGroups'
   | 'autoLayoutContainer'
 > => ({
-  createGroup: (nodeIds, position) => {
+  createGroup: (nodeIds, position, options) => {
     const { nodeGraph } = get();
     if (!nodeGraph) return null;
-    if (nodeIds.length === 0) return null;
+    // 空成员清单默认拒绝；仅 options.allowEmpty（CLI 空组建组，spec CLI-044）放行——
+    // 位置必须由调用方给出（无成员无法派生包围盒），缺省兜底零坐标。
+    const allowEmpty = options?.allowEmpty === true;
+    if (nodeIds.length === 0 && !allowEmpty) return null;
 
     // 校验：候选成员不能是组节点（组不得成为任何容器的成员），且排除已是容器成员的节点
     //（单一归属）；Agent 容器可成为组的成员（AG-CN-001），候选过滤由 filterAddCandidates 同口径把关。
@@ -90,7 +93,7 @@ export const createCanvasGroupActions = (
       if (typeof node.groupId === 'string' && node.groupId.length > 0) continue;
       candidateNodes.push(node);
     }
-    if (candidateNodes.length === 0) return null;
+    if (candidateNodes.length === 0 && !allowEmpty) return null;
 
     const groupPosition = position ?? computeMembersBBoxTopLeft(candidateNodes, { x: 0, y: 0 });
     const groupId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
@@ -407,29 +410,18 @@ export const createCanvasGroupActions = (
       columns: options ? options.columns : undefined,
     };
 
-    // 整理前成员包围盒左上角作为锚点（spec：容器内整理保持容器位置不变）
-    const beforeAnchor = computeMembersBBoxTopLeft(members, { x: 0, y: 0 });
-
-    const layoutResult = await computeAutoLayout(members, layoutOptions);
-    const rawPositions = layoutResult.positions;
-    if (Object.keys(rawPositions).length === 0) {
-      return { ...layoutResult, changedCount: 0 };
+    // 整理前成员包围盒左上角作为锚点（spec：容器内整理保持容器位置不变）；
+    // 布局计算与锚点补偿走共享实现（与批次收口重排同源，layout/containerArrangement.ts）。
+    const arrangedPositions = await computeContainerArrangedPositions({
+      members,
+      sizeSources,
+      columns: layoutOptions.columns,
+      snapGrid: layoutOptions.snapGrid,
+    });
+    if (arrangedPositions === null) {
+      return { positions: {}, changedCount: 0 };
     }
-
-    // 锚点保持：算出算法输出后的包围盒左上角，补偿平移使整理后锚点 = 整理前锚点
-    const afterAnchor = computeMembersBBoxTopLeft(
-      members.map((m) => {
-        const np = rawPositions[m.id];
-        return np ? { ...m, position: np } : m;
-      }),
-      { x: 0, y: 0 },
-    );
-    const dx = beforeAnchor.x - afterAnchor.x;
-    const dy = beforeAnchor.y - afterAnchor.y;
-    const positions: Record<string, NodePosition> = {};
-    for (const [id, pos] of Object.entries(rawPositions)) {
-      positions[id] = { x: pos.x + dx, y: pos.y + dy };
-    }
+    const positions = arrangedPositions;
 
     let touched = 0;
     const touchedNodeIds: string[] = [];
@@ -470,6 +462,6 @@ export const createCanvasGroupActions = (
       get().saveToHistory();
     }
 
-    return { ...layoutResult, changedCount: touched };
+    return { positions, changedCount: touched };
   },
 });

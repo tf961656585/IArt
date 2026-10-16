@@ -171,7 +171,7 @@ describe("cli-proxy-dispatcher 代理分发端（spec §6.3）", () => {
         command: "generate",
         request_id: sentPayload.request_id,
         batch_id: "b1",
-        tasks: [{ task_id: "t-1", task_index: 0 }],
+        tasks: [{ task_id: "t-1", task_index: 0, node_id: null, group_id: null }],
       });
       expect(debugSpy).toHaveBeenCalledWith(
         expect.stringContaining("无配对挂起命令"),

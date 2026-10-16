@@ -66,7 +66,6 @@ import {
   CliProxyCommandSchema,
 } from '@iart/contracts';
 import type {
-  CliErrorCode,
   CliProxyCommand,
   CliProxyCommandError,
   CliProxyCommandResponse,
@@ -80,41 +79,19 @@ import {
   isContainerNode,
   isGroupMember,
 } from '@/features/canvas/services/groupMembership';
+import {
+  buildErrorResponse,
+  readBackendRejectionDetail,
+  readRecordStringField,
+} from './cliProxyErrorResponses';
 import { expandRemovalWithCompanions } from '@/features/canvas/services/nodeCompanion/nodeCompanionManager';
 import {
   buildProgrammaticIntentFromCliParams,
   submitGenerationBatchFromIntent,
 } from '@/features/promptdock/programmaticSubmission';
+import { createBirthGroup } from '@/features/promptdock/projection/taskProjectionService';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
 import type { NodeGraph } from '@/features/canvas/types';
-
-// ---------------------------------------------------------------------------
-// 错误响应构造（spec §9：message 面向使用 CLI 的开发者，用户视角业务语言，不暴露内部术语）
-// ---------------------------------------------------------------------------
-
-const buildErrorResponse = (
-  commandName: CliProxyCommand['command'],
-  requestId: string,
-  code: CliErrorCode,
-  message: string,
-): CliProxyCommandError => ({
-  command: commandName,
-  request_id: requestId,
-  error: { code, message },
-});
-
-/** 从 unknown 记录读取一个字符串字段（不命中返回 null）。 */
-const readRecordStringField = (value: unknown, key: string): string | null => {
-  if (typeof value !== 'object' || value === null) return null;
-  const field: unknown = Reflect.get(value, key);
-  return typeof field === 'string' && field.length > 0 ? field : null;
-};
-
-/** 把 HTTP 错误体（{code, message}）里的 Backend 理由取出，缺失时回退到 transport 消息。 */
-const readBackendRejectionDetail = (body: unknown, fallback: string): string => {
-  const message = readRecordStringField(body, 'message');
-  return message ?? fallback;
-};
 
 // ---------------------------------------------------------------------------
 // 串行执行队列
@@ -185,6 +162,27 @@ const executeGroupCreate = (
 
   // 成员去重保序：同一 id 重复出现按一个成员处理
   const memberIds = [...new Set(command.members)];
+
+  // 空组建组（spec CLI-044，仅 CLI 侧放开；界面多选入口保持 ≥2 语义）：复用出生组自动建组
+  // 实现——视口安全区防重叠块搜索定位（零坐标兜底）+ 空组建组（allowEmpty 专用通道）+ 命名。
+  if (memberIds.length === 0) {
+    const emptyGroupId = createBirthGroup(command.name);
+    if (emptyGroupId === null) {
+      console.debug('[cliProxyReceiver] empty group create failed', { request_id: requestId });
+      return buildErrorResponse(
+        'canvas.group.create',
+        requestId,
+        'internal_error',
+        '无法创建节点组，请稍后重试。',
+      );
+    }
+    return {
+      command: 'canvas.group.create',
+      request_id: requestId,
+      group_node_id: emptyGroupId,
+    };
+  }
+
   const nodeById = new Map(nodeGraph.nodes.map((node) => [node.id, node] as const));
 
   // 映射层前置校验（createGroup 对非法成员是静默过滤，CLI 面必须显式拒绝而不是假成功）
@@ -755,6 +753,8 @@ const executeGenerate = async (
     wait: command.wait,
     // 受理幂等键原样透传（spec §5.4 受理幂等键 / CLI-033）：未携带为 undefined。
     client_request_id: command.client_request_id,
+    // 出生组组名原样透传（spec CLI-043）：组名解析与出生入组在共享核心完成。
+    ...(command.group !== undefined ? { group: command.group } : {}),
   });
   try {
     const outcome = await submitGenerationBatchFromIntent(intent);

@@ -126,6 +126,11 @@ const loadRealSkillStoreIpcHandlers = (): void => {
         showItemInFolder: shellShowItemInFolder,
         openExternal: vi.fn(async () => true),
       },
+      net: {
+        // skill 下载经 IPC 层注入 net.fetch 搭 default session（代理治理 PROXY-003）；
+        // 假 electron 把 net.fetch 映射到 Node 全局 fetch，请求仍打到本机 bundle 服务。
+        fetch: (input: string | URL, init?: RequestInit) => fetch(input, init),
+      },
     },
   });
   try {

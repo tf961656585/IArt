@@ -105,6 +105,16 @@ const readTaskFailureReason = (task: {
     : `，失败原因：${truncated}`;
 };
 
+/**
+ * 任务画布投影身份的人读后缀（spec §5.4 / CLI-046）：node_id/group_id 非空时随行展示，
+ * null（无投影或项目已关闭）缺省不展示——不伪造。
+ */
+const renderTaskCanvasIdentitySuffix = (identity: { node_id: string | null; group_id: string | null }): string => {
+  if (identity.node_id === null && identity.group_id === null) return "";
+  const groupNote = identity.group_id !== null ? `，所属组 ${identity.group_id}` : "";
+  return `，画布节点 ${identity.node_id ?? "未知"}${groupNote}`;
+};
+
 const safeJsonParse = (text: string): unknown => {
   try {
     return JSON.parse(text) as unknown;
@@ -271,6 +281,13 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
       const lines = response.nodes.map((node) => `- ${node.node_id}（${node.node_type}）`);
       return [`画布节点共 ${response.nodes.length} 个：`, ...lines].join("\n");
     }
+    case "canvas.group.list": {
+      const lines = response.groups.map((group) => {
+        const nameNote = group.name.length > 0 ? `，名称 ${group.name}` : "";
+        return `- ${group.group_node_id}（${group.type === "group" ? "节点组" : "Agent 容器"}，成员 ${group.member_count} 个${nameNote}）`;
+      });
+      return [`画布组/容器共 ${response.groups.length} 个：`, ...lines].join("\n");
+    }
     case "canvas.group.create":
       return `组已创建：${response.group_node_id}`;
     case "canvas.group.dissolve":
@@ -292,7 +309,8 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
         return `生成已受理${idempotencyNote}：批次 ${response.batch_id}，任务 ${taskIds}`;
       }
       const lines = response.task_results.map(
-        (result) => `- ${result.task.taskId}：${result.task.status}，产物 ${result.assets.length} 个${readTaskFailureReason(result.task)}`,
+        (result) =>
+          `- ${result.task.taskId}：${result.task.status}，产物 ${result.assets.length} 个${readTaskFailureReason(result.task)}${renderTaskCanvasIdentitySuffix(result)}`,
       );
       const replayNote =
         response.replayed === true ? `（幂等键命中既有批次，未重复创建）` : "";
@@ -304,12 +322,12 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
     }
     case "task.get": {
       const generationNote = response.generation !== undefined ? "；附生成档案（generation 字段，--json 查看）" : "";
-      return `任务 ${response.task.taskId}：${response.task.status}${readTaskFailureReason(response.task)}${generationNote}`;
+      return `任务 ${response.task.taskId}：${response.task.status}${readTaskFailureReason(response.task)}${renderTaskCanvasIdentitySuffix(response)}${generationNote}`;
     }
     case "task.cancel":
       return `取消已受理：${response.task_id}`;
     case "task.wait":
-      return `任务 ${response.task_result.task.taskId}：${response.task_result.task.status}，产物 ${response.task_result.assets.length} 个${readTaskFailureReason(response.task_result.task)}`;
+      return `任务 ${response.task_result.task.taskId}：${response.task_result.task.status}，产物 ${response.task_result.assets.length} 个${readTaskFailureReason(response.task_result.task)}${renderTaskCanvasIdentitySuffix(response.task_result)}`;
     case "batch.get":
       return `生成档案（批次 ${response.generation.batch_id}）：模型 ${response.generation.model_id}，参考 ${response.generation.references.length} 个，任务 ${response.generation.task_ids.length} 个；提示词全文与完整内容用 --json 查看`;
     case "app.status": {

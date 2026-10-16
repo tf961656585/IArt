@@ -19,6 +19,7 @@ import type {
   AssetNodeData,
   GraphNode,
   NodePosition,
+  NodeSize,
   TaskNodeData,
   TaskNodeStatus,
 } from '@/features/canvas/types/node';
@@ -29,8 +30,24 @@ import { logCanvasDebugEvent } from '@/features/canvas/debug/canvasDebug';
 import {
   TASK_BATCH_GAP_X,
   TASK_BATCH_GAP_Y,
+  computeGridCellsForSizes,
   computeTaskBatchPlacement,
+  rectsIntersect,
+  searchFreeBlockPosition,
 } from '@/features/canvas/utils/taskNodePlacement';
+import { computeMediaDisplaySize } from '@/features/canvas/layoutModel/mediaDisplaySizePolicy';
+import { resolveEffectiveSize } from '@/features/canvas/utils/effectiveSize';
+import {
+  buildCanvasSizeSources,
+  buildNodeOccupancyRects,
+} from '@/features/canvas/utils/nodeOccupancy';
+import { GROUP_HEADER_HEIGHT, GROUP_PADDING } from '@/features/canvas/services/groupGeometry';
+import { getGroupMembers, isContainerCollapsed } from '@/features/canvas/services/groupMembership';
+import {
+  noteBatchTaskTerminal,
+  registerBatchAcceptance,
+} from './batchCompletion';
+import { requestCanvasLocateToNode } from '@/features/canvas/services/canvasLocateRequest';
 import {
   convertNotificationOutputs,
   convertRuntimeMediaAssetViewToProjectMediaAsset,
@@ -175,6 +192,35 @@ const buildAssetNodeData = (params: {
 });
 
 /**
+ * 新建资产节点的期望布局尺寸（morph 期网格排布用）。
+ *
+ * 与 Layout Model 同一策略源（computeMediaDisplaySize，spec：画布节点尺寸管理架构.md
+ * 「媒体节点比例一致性」）：image/video 按媒体 meta 等比钳制（长边 ≤ 320），asset chrome
+ * 为 {0,0}（媒体满幅面，chromeConstants.ts）；meta 缺失或 audio 占位壳回落注册表默认尺寸。
+ * 落位期用期望尺寸而非默认尺寸：默认 240×180 小于媒体实宽时，按默认步距排布会让
+ * 相邻产物互相压叠。
+ */
+const expectedAssetLayoutSize = (params: {
+  mediaType: AssetNodeData['mediaType'];
+  media: RuntimeMediaAssetView | null | undefined;
+}): NodeSize => {
+  const fallback = ASSET_NODE_DEFAULT_SIZE;
+  if (params.mediaType !== 'image' && params.mediaType !== 'video') return fallback;
+  const original = params.media?.original;
+  const width = original?.width;
+  const height = original?.height;
+  if (typeof width !== 'number' || typeof height !== 'number' || width <= 0 || height <= 0) {
+    return fallback;
+  }
+  const defaultAspectRatio = params.mediaType === 'image' ? 3 / 2 : 16 / 9;
+  const display = computeMediaDisplaySize(
+    { width, height, aspectRatio: width / height },
+    defaultAspectRatio,
+  );
+  return display ?? fallback;
+};
+
+/**
  * 把一次成功通知/快照中的正式资产输出物化为 AssetNodeData 列表。
  * 返回 null 表示无正式媒体资产（文本输出不物化为资产节点）。
  */
@@ -263,6 +309,12 @@ export const createTaskProjectionsForAcceptance = (params: {
   /** 草稿引用的资产 id（保持引用顺序），用于参考锚定落位 */
   referenceAssetIds?: ReadonlyArray<string>;
   selectCreatedNodes?: boolean | undefined;
+  /**
+   * 出生组节点标识（spec CLI-043，CLI --group 程序化提交）：任务节点创建即写入该组归属
+   * （addNode membership 通道，AG-CT-001 同款机制接口），落位锚点改为组内锚定。缺省
+   * （界面提交 / 未指定 --group）保持视口锚定与自由节点语义。
+   */
+  birthGroupId?: string | undefined;
 }): { ok: true } | { ok: false; reason: string } => {
   const state = useCanvasStore.getState();
   const graph = state.nodeGraph;
@@ -271,8 +323,57 @@ export const createTaskProjectionsForAcceptance = (params: {
   }
 
   const tasks = params.response.tasks;
+  // 批次收口台账登记（batchCompletion.ts）：终态通知链路据此检测「全部任务终态」触发整块重排。
+  registerBatchAcceptance(
+    params.response.batch_id,
+    tasks.map((acceptance) => ({ taskId: acceptance.task_id, taskIndex: acceptance.task_index })),
+  );
+
+  // 出生组锚定（spec CLI-043）：--group 指定时落位锚点改为组内——组内有成员以成员包围盒
+  // 下缘为续排起点（每行 3 网格、批内网格步距与批次一致），空组以组头卡片下缘为起点；参考
+  // 资产右侧锚点被组内锚定覆盖；目标组自身派生包围盒不计为障碍（批次要扩展它），其他容器
+  // 包围盒照常计为障碍（excludeNodeIds 通道）。锚点是块原点首选位，整批落位仍经批次1 的
+  // 安全区→可见区→无界防重叠搜索引擎定位（安全区内离锚点最近的空闲位胜出）。出生组在提交
+  // 期间被删除属防御分支：退回默认视口锚定且不建立成员关系（addNode 不传 membership，机制层
+  // debug 留痕），不因缺锚点丢失投影。
+  let effectiveBirthGroupId: string | null = null;
+  let birthAnchor: NodePosition | undefined;
+  if (params.birthGroupId !== undefined) {
+    const groupNode = graph.nodes.find(
+      (node) => node.id === params.birthGroupId && node.type === 'group',
+    );
+    if (groupNode === undefined) {
+      console.debug('[taskProjection] birth group missing at projection time, fallback placement', {
+        birthGroupId: params.birthGroupId,
+      });
+    } else {
+      effectiveBirthGroupId = groupNode.id;
+      const members = getGroupMembers(graph, groupNode.id);
+      if (members.length > 0) {
+        // 成员包围盒下缘：成员真实有效尺寸（resolveEffectiveSize 主链，与占位/派生同链）。
+        const sizeSources = buildCanvasSizeSources(state);
+        let minX = Number.POSITIVE_INFINITY;
+        let maxY = Number.NEGATIVE_INFINITY;
+        for (const member of members) {
+          if (member.position.x < minX) minX = member.position.x;
+          const bottom = member.position.y + resolveEffectiveSize(member, sizeSources).height;
+          if (bottom > maxY) maxY = bottom;
+        }
+        birthAnchor = Number.isFinite(minX) && Number.isFinite(maxY)
+          ? { x: minX, y: maxY }
+          : undefined;
+      } else {
+        birthAnchor = {
+          x: groupNode.position.x,
+          y: groupNode.position.y + GROUP_HEADER_HEIGHT + GROUP_PADDING.top,
+        };
+      }
+    }
+  }
+
   // 视口锚定落位（spec：PromptDock生成主链.md「终态画布投影」）：
-  // 安全区 → 可见区 → 钳制，可见性优先于防重叠；锚点优先参考资产右侧邻近。
+  // 安全区 → 可见区 → 无界平面，防重叠是硬约束（不存在允许重叠的兜底）；锚点优先参考资产右侧邻近。
+  // 既有节点占位按真实有效尺寸解析，容器按派生包围盒整体占位（nodeOccupancy.ts）。
   const referencePositions = collectReferenceNodePositions(
     graph.nodes,
     params.referenceAssetIds ?? [],
@@ -284,7 +385,10 @@ export const createTaskProjectionsForAcceptance = (params: {
     count: tasks.length,
     nodeSize: TASK_NODE_DEFAULT_SIZE,
     perRow: TASK_PROJECTION_PER_ROW,
-    referencePositions,
+    referencePositions: effectiveBirthGroupId !== null ? [] : referencePositions,
+    sizeSources: buildCanvasSizeSources(state),
+    ...(birthAnchor !== undefined ? { anchorOverride: birthAnchor } : {}),
+    ...(effectiveBirthGroupId !== null ? { excludeNodeIds: new Set([effectiveBirthGroupId]) } : {}),
   });
   logCanvasDebugEvent('taskProjection:batch-placement', {
     mode: placement.mode,
@@ -292,6 +396,7 @@ export const createTaskProjectionsForAcceptance = (params: {
     referenceCount: referencePositions.length,
     taskCount: tasks.length,
     base: placement.base,
+    birthGroupId: effectiveBirthGroupId,
   });
 
   const columnWidth = TASK_NODE_DEFAULT_SIZE.width + TASK_BATCH_GAP_X;
@@ -312,6 +417,9 @@ export const createTaskProjectionsForAcceptance = (params: {
         modelId: params.modelId,
         task: null,
       }),
+      // 创建即入出生组（AG-CT-001 同款机制接口，成员关系与创建同一历史）：目标缺失/资格
+      // 不符时机制层回退自由节点并留痕，此处不重复校验。
+      effectiveBirthGroupId !== null ? { groupId: effectiveBirthGroupId } : undefined,
     );
     if (node) added.push(node.id);
   }
@@ -324,6 +432,34 @@ export const createTaskProjectionsForAcceptance = (params: {
       selectedAnnotationIds: [],
       editingAnnotationId: null,
       pendingAnnotationBinding: null,
+    });
+  }
+
+  // 远处出生可发现：整批矩形与可见区完全不相交（拥挤画布搜索走到远处）时给一条可点击的
+  // 定位提示（sonner toast 既有载体 + 定位请求事件桥接到统一定位抽象，canvasLocateRequest.ts）。
+  const firstAddedNode =
+    added.length > 0
+      ? (useCanvasStore.getState().nodeGraph?.nodes.find((node) => node.id === added[0]) ?? null)
+      : null;
+  if (
+    firstAddedNode !== null &&
+    !rectsIntersect(placement.batchBounds, placement.visibleBounds)
+  ) {
+    logCanvasDebugEvent('taskProjection:batch-placement-offscreen', {
+      batchBounds: placement.batchBounds,
+      visibleBounds: placement.visibleBounds,
+    });
+    toast('生成任务落在了当前视野外', {
+      action: {
+        label: '查看',
+        onClick: () => {
+          requestCanvasLocateToNode({
+            nodeId: firstAddedNode.id,
+            reason: 'task-batch-offscreen-toast',
+          });
+        },
+      },
+      duration: 8000,
     });
   }
 
@@ -459,18 +595,87 @@ const morphSucceededTask = (
   // membership 默认继承任务节点的 groupId（组内任务节点的继任资产保持组员身份，容器
   // 不因替换变空；无组任务节点的继任资产为自由节点），绑定任务节点的注释改绑首个
   // 继任节点，一次替换 = 一条历史（undo 一步回到替换前）。
-  // 额外资产网格步距与提交受理期同口径（TASK_BATCH_GAP_X/Y + 每行 TASK_PROJECTION_PER_ROW），
-  // 锚点为首个资产原位；不用 computeTaskBatchPlacement（受理期的视口锚定语义不适用于继任）。
+  // 首个资产固定原位（cell 0）；同任务追加资产不再无条件按默认尺寸网格步进，改以继任
+  // 原点为锚做防重叠搜索整块落位。格子按媒体期望布局尺寸（与 Layout Model 同一策略源
+  // computeMediaDisplaySize，asset chrome {0,0}）取列最大宽/行最大高——默认 240×180 小于
+  // 媒体实宽时会产出相邻产物互相压叠，按真实期望尺寸排布消除。锚点空闲时与网格口径自然一致。
+  const sizeSources = buildCanvasSizeSources(store);
+  const mediaByAssetId = new Map<string, RuntimeMediaAssetView>();
+  for (const media of mediaAssets) {
+    mediaByAssetId.set(media.assetId, media);
+  }
+  const expectedSizes = placements.map((data) =>
+    expectedAssetLayoutSize({
+      mediaType: data.mediaType,
+      media: mediaByAssetId.get(data.assetId) ?? null,
+    }),
+  );
+  const { cells } = computeGridCellsForSizes(
+    expectedSizes,
+    TASK_PROJECTION_PER_ROW,
+    TASK_BATCH_GAP_X,
+    TASK_BATCH_GAP_Y,
+  );
   const columnWidth = ASSET_NODE_DEFAULT_SIZE.width + TASK_BATCH_GAP_X;
   const rowHeight = ASSET_NODE_DEFAULT_SIZE.height + TASK_BATCH_GAP_Y;
+  // 追加资产（cell 1..n-1）作为可移动块：搜索锚点为追加块的相对网格原点
+  const extraCells = cells.slice(1);
+  let extraBlockOrigin: NodePosition | null = null;
+  if (extraCells.length > 0) {
+    const extraMinDx = Math.min(...extraCells.map((cell) => cell.dx));
+    const extraMinDy = Math.min(...extraCells.map((cell) => cell.dy));
+    // 障碍：画布既有内容真实占位 − 被替换的任务节点（其矩形由 cell 0 继任）＋ cell 0 本身；
+    // 追加资产将继任任务节点的容器成员身份，目标容器自己的派生包围盒不算障碍（容器随成员生长）。
+    const excludeNodeIds = new Set<string>([taskNode.id]);
+    if (typeof taskNode.groupId === 'string' && taskNode.groupId.length > 0) {
+      const container = graph.nodes.find(
+        (node) => node.id === taskNode.groupId && (node.type === 'group' || node.type === 'agent'),
+      );
+      if (container !== undefined && !isContainerCollapsed(container)) {
+        excludeNodeIds.add(container.id);
+      }
+    }
+    const occupancy = buildNodeOccupancyRects(graph.nodes, sizeSources, { excludeNodeIds });
+    const firstCell = cells[0];
+    if (firstCell) {
+      occupancy.push({
+        x: origin.x,
+        y: origin.y,
+        width: firstCell.width,
+        height: firstCell.height,
+      });
+    }
+    const found = searchFreeBlockPosition({
+      occupancy,
+      anchor: { x: origin.x + extraMinDx, y: origin.y + extraMinDy },
+      cells: extraCells.map((cell) => ({
+        ...cell,
+        dx: cell.dx - extraMinDx,
+        dy: cell.dy - extraMinDy,
+      })),
+      stepX: columnWidth,
+      stepY: rowHeight,
+      target: null,
+    });
+    if (found !== null) {
+      extraBlockOrigin = { x: found.x, y: found.y };
+    }
+    // found === null 属防御分支（理论不可达：无界搜索超限已在 search 内抛内部断言）；
+    // 此时 extraBlockOrigin 保持 null，追加资产退回相对网格位（最小退化，不出现在正常路径）。
+  }
+  const extraMinDx = extraCells.length > 0 ? Math.min(...extraCells.map((cell) => cell.dx)) : 0;
+  const extraMinDy = extraCells.length > 0 ? Math.min(...extraCells.map((cell) => cell.dy)) : 0;
+  const extrasBase = extraBlockOrigin ?? { x: origin.x + extraMinDx, y: origin.y + extraMinDy };
   store.replaceNode(
     taskNode.id,
     placements.map((data, i) => {
-      const col = i % TASK_PROJECTION_PER_ROW;
-      const row = Math.floor(i / TASK_PROJECTION_PER_ROW);
+      const cell = cells[i];
+      if (i === 0 || !cell) {
+        return { key: 'asset', position: { x: origin.x, y: origin.y }, data };
+      }
       return {
         key: 'asset',
-        position: { x: origin.x + col * columnWidth, y: origin.y + row * rowHeight },
+        position: { x: extrasBase.x + (cell.dx - extraMinDx), y: extrasBase.y + (cell.dy - extraMinDy) },
         data,
       };
     }),
@@ -542,6 +747,7 @@ const projectAgentDerivedSucceededAssets = (params: {
     nodeSize: ASSET_NODE_DEFAULT_SIZE,
     perRow: TASK_PROJECTION_PER_ROW,
     referencePositions: agentNode ? [agentNode.position] : [],
+    sizeSources: buildCanvasSizeSources(store),
   });
   logCanvasDebugEvent('taskProjection:agent-derived-assets-placement', {
     taskId: params.task.taskId,
@@ -596,6 +802,20 @@ export const applyTaskStateChanged = (notification: TaskStateNotification): void
     notification.outputs,
     notification.mediaAssets,
   );
+  // 批次收口检测（batchCompletion.ts）：终态通知逐个记账，批次全部任务终态时触发一次
+  // 整块重排。挂接在实时通知链路上，不做轮询；agent 派生任务不在批次台账内（上方分支已返回）。
+  const terminalStatus = normalizeTaskStatus(notification.task.status);
+  if (
+    terminalStatus === 'succeeded' ||
+    terminalStatus === 'failed' ||
+    terminalStatus === 'cancelled'
+  ) {
+    noteBatchTaskTerminal({
+      graphId,
+      batchId: notification.task.batchId,
+      taskId: notification.task.taskId,
+    });
+  }
 };
 
 /**
@@ -690,3 +910,5 @@ export type TaskProjectionService = {
   cancelTaskProjection: typeof cancelTaskProjection;
   reconcilePersistedProjections: typeof reconcilePersistedProjections;
 };
+
+export * from './birthGroup';

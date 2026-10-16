@@ -314,7 +314,7 @@ describe("cli-command-executors 画布命令 / 生成提交（代理执行通道
           command: "generate",
           request_id: "r4",
           batch_id: "batch-1",
-          tasks: [{ task_id: "t-1", task_index: 0 }],
+          tasks: [{ task_id: "t-1", task_index: 0, node_id: null, group_id: null }],
         },
       },
     });
@@ -329,7 +329,7 @@ describe("cli-command-executors 画布命令 / 生成提交（代理执行通道
     const parsed = parseResponse(result);
     if (!parsed.ok || parsed.command !== "generate") throw new Error("unexpected");
     expect(parsed.batch_id).toBe("batch-1");
-    expect(parsed.tasks).toEqual([{ task_id: "t-1", task_index: 0 }]);
+    expect(parsed.tasks).toEqual([{ task_id: "t-1", task_index: 0, node_id: null, group_id: null }]);
     expect(parsed.task_results).toEqual([]);
     expect(proxyCalls[0]?.candidate).toMatchObject({
       command: "generate",

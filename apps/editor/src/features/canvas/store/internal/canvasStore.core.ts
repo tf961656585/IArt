@@ -394,7 +394,16 @@ export interface NodeGraphActions {
   dissolveAgentContainer: (nodeId: string) => boolean;
 
   // 组操作
-  createGroup: (nodeIds: string[], position: NodePosition | undefined) => string | null;
+  /**
+   * 建组（成员归属同一历史）。position 缺省按成员包围盒左上角；空成员清单默认拒绝，
+   * 仅 `options.allowEmpty`（CLI 空组建组，spec CLI-044）放行——position 必须由调用方给出
+   * （无成员无法派生包围盒）。
+   */
+  createGroup: (
+    nodeIds: string[],
+    position: NodePosition | undefined,
+    options?: { allowEmpty?: boolean },
+  ) => string | null;
   ungroupNode: (groupId: string) => void;
   renameGroup: (groupId: string, name: string) => void;
   /** 换色：更新组颜色（单条历史）。色值取值域为 groupPalette 调色板。 */

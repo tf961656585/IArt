@@ -52,8 +52,16 @@ const GITHUB_SKILL_BUNDLE_BASE = 'https://raw.githubusercontent.com/tf961656585/
 
 const installerPath = path.join(process.cwd(), 'apps/desktop-shell/dist/skill-store/skill-store-installer.cjs');
 
+// fetchBundle 是 installSkill 的必传注入参数（生产 = net.fetch 搭 default session，
+// 受代理治理约束，spec PROXY-003；fetcher 不属于跨进程契约，故不在 SkillInstallRequest 里）。
+type BundleFetcher = (url: string) => Promise<{
+  ok: boolean;
+  status: number;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}>;
+
 type InstallerModule = {
-  installSkill: (request: SkillInstallRequest) => Promise<SkillInstallResult>;
+  installSkill: (request: SkillInstallRequest, fetchBundle: BundleFetcher) => Promise<SkillInstallResult>;
   getInstalledSkillState: () => { skills: Array<{ skillId: string; version: string; target: string }> };
 };
 
@@ -172,6 +180,11 @@ let upstream: FakeUpstream | null = null;
 
 const installer = cjsRequireAs<InstallerModule>(sharedRequire(installerPath));
 
+// fetchBundle 必传注入参数：接缝测试按 PROXY-003 允许的同形注入 Node 全局 fetch，
+// bundle 由本地假上游同形路径供给。
+const installWithTestFetch = (request: SkillInstallRequest): Promise<SkillInstallResult> =>
+  installer.installSkill(request, (url) => fetch(url));
+
 describe('Skill 目录链接缝（真实 fetchSkillCatalog + 真实契约 parse + 真实 installer 落盘）', () => {
   it('SKILL_CATALOG_URL 与 buildBundleUrl 指向公开仓 skill-catalog 分支（配置事实源钉扎）', () => {
     expect(SKILL_CATALOG_URL).toBe(GITHUB_SKILL_CATALOG_URL);
@@ -220,9 +233,9 @@ describe('Skill 目录链接缝（真实 fetchSkillCatalog + 真实契约 parse 
       expect(bundleUrl).toBe(`${GITHUB_SKILL_BUNDLE_BASE}/${BUNDLE_KEY}`);
 
       // 3. 真实 installer 安装落盘：bundleUrl 用同一 bundleKey 推导的本机同形路径
-      //    （外层挡板口径；sha512 取自目录条目，下载侧流式校验）。
+      //    （外层挡板口径；sha512 取自目录条目，下载侧整包缓冲后校验）。
       const localBundleUrl = new URL(new URL(bundleUrl).pathname, upstream.base).href;
-      const installResult = await installer.installSkill({
+      const installResult = await installWithTestFetch({
         bundleUrl: localBundleUrl,
         sha512: entry.sha512,
         target: 'agents',

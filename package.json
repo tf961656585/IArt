@@ -1,7 +1,7 @@
 {
   "name": "iartstudio-frontend",
   "private": true,
-  "version": "0.6.10",
+  "version": "0.6.11",
   "engines": {
     "node": ">=22.0.0"
   },

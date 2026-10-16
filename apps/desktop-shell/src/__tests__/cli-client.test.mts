@@ -508,6 +508,8 @@ describe("cli-client 人读失败原因与幂等键回执（fetchImpl 注入）"
           errorCode: "PUBLIC_ERROR_DEMO",
           errorMessage: longMessage,
         },
+        node_id: null,
+        group_id: null,
       });
     const result = await client.runCliClient(["task", "get", "task-f-1", "--project", "P"], {
       discoveryFilePath,
@@ -536,6 +538,8 @@ describe("cli-client 人读失败原因与幂等键回执（fetchImpl 注入）"
           updatedAt: 2,
           failure: { code: "UPSTREAM_5XX", userMessage: "服务商暂时不可用，请稍后重试。" },
         },
+        node_id: null,
+        group_id: null,
       });
     const result = await client.runCliClient(["task", "get", "task-f-2", "--project", "P"], {
       discoveryFilePath,
@@ -548,6 +552,8 @@ describe("cli-client 人读失败原因与幂等键回执（fetchImpl 注入）"
         command: "task.get",
         ok: true,
         task: { taskId: "task-ok", status: "succeeded", projectPath: "/tmp/p", createdAt: 1, updatedAt: 2 },
+        node_id: null,
+        group_id: null,
       });
     const okResult = await client.runCliClient(["task", "get", "task-ok", "--project", "P"], {
       discoveryFilePath,
@@ -594,7 +600,7 @@ describe("cli-client 人读失败原因与幂等键回执（fetchImpl 注入）"
         command: "generate",
         ok: true,
         batch_id: "batch-auto-1",
-        tasks: [{ task_id: "task-auto-1", task_index: 0 }],
+        tasks: [{ task_id: "task-auto-1", task_index: 0, node_id: null, group_id: null }],
         replayed: false,
         ...(body.client_request_id !== undefined ? { client_request_id: body.client_request_id } : {}),
         task_results: [],
@@ -622,7 +628,7 @@ describe("cli-client 人读失败原因与幂等键回执（fetchImpl 注入）"
         command: "generate",
         ok: true,
         batch_id: "batch-replay-1",
-        tasks: [{ task_id: "task-replay-1", task_index: 0 }],
+        tasks: [{ task_id: "task-replay-1", task_index: 0, node_id: null, group_id: null }],
         client_request_id: "req-explicit-1",
         replayed: true,
         task_results: [],

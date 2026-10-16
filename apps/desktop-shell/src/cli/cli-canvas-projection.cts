@@ -1,6 +1,6 @@
 import * as path from "node:path";
 
-import type { CliCanvasNodeEntry } from "@iart/contracts";
+import type { CliCanvasGroupSummary, CliCanvasNodeEntry, CliTaskCanvasIdentity } from "@iart/contracts";
 
 /**
  * 持有资产引用的节点类型全集：资产节点与图片/视频/音频素材节点的 data.assetId
@@ -108,3 +108,91 @@ const parseFileKeyFromLocalMediaUrl = (url: string): string | null => {
 };
 
 const joinMediaPath = (projectPath: string, fileKey: string): string => path.join(projectPath, "media", fileKey);
+
+/**
+ * 画布节点载荷 → 组/容器清单条目（spec §5.2 canvas group list / CLI-045）。
+ *
+ * 容器节点全集 = 节点组（type=group）与 Agent 节点（type=agent，含单节点形态的空容器），
+ * 与 Editor 侧 isContainerNode 判定同口径。名称按节点种类取：组 → data.name（未命名为空串）；
+ * Agent 容器 → data.label。member_count 按其余节点载荷的 groupId 归属统计（组节点不持有
+ * groupId、不参与计数；空容器为 0）。
+ *
+ * 纯函数、无 IO：载荷缺 id/type 的残缺条目跳过并留痕（条件跳过必须留痕）。
+ */
+export const projectCanvasGroupSummaries = (payloads: readonly unknown[]): CliCanvasGroupSummary[] => {
+  type ContainerRow = { id: string; name: string; type: "group" | "agent_container" };
+  const containers: ContainerRow[] = [];
+  type MemberRow = { groupId: string };
+  const memberRows: MemberRow[] = [];
+  for (const payload of payloads) {
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) continue;
+    const raw = payload as { id?: unknown; type?: unknown; groupId?: unknown; data?: unknown };
+    const nodeId = typeof raw.id === "string" ? raw.id : "";
+    const nodeType = typeof raw.type === "string" ? raw.type : "";
+    if (nodeId.length === 0 || nodeType.length === 0) {
+      console.debug("[cli-canvas-projection] 组清单：载荷缺 id/type，跳过该节点");
+      continue;
+    }
+    if (nodeType === "group" || nodeType === "agent") {
+      const data =
+        raw.data !== null && typeof raw.data === "object" && !Array.isArray(raw.data)
+          ? (raw.data as { name?: unknown; label?: unknown })
+          : null;
+      const nameField = nodeType === "group" ? data?.name : data?.label;
+      containers.push({
+        id: nodeId,
+        name: typeof nameField === "string" ? nameField : "",
+        type: nodeType === "group" ? "group" : "agent_container",
+      });
+      continue;
+    }
+    if (typeof raw.groupId === "string" && raw.groupId.length > 0) {
+      memberRows.push({ groupId: raw.groupId });
+    }
+  }
+  const memberCountByGroupId = new Map<string, number>();
+  for (const row of memberRows) {
+    memberCountByGroupId.set(row.groupId, (memberCountByGroupId.get(row.groupId) ?? 0) + 1);
+  }
+  return containers.map((container) => ({
+    group_node_id: container.id,
+    name: container.name,
+    type: container.type,
+    member_count: memberCountByGroupId.get(container.id) ?? 0,
+  }));
+};
+
+/**
+ * 画布节点载荷 → task_id → 画布任务投影身份索引（spec §5.4 / CLI-046 join）。
+ *
+ * task 节点载荷（type=task 且 data.taskId 非空）→ { node_id: 节点 id, group_id: 节点
+ * groupId（空缺为 null）}。同一 task_id 出现多个节点属异常持久化：首个命中生效、后续
+ * 跳过并留痕（不伪造、不覆盖）。
+ */
+export const buildTaskCanvasIdentityIndex = (payloads: readonly unknown[]): ReadonlyMap<string, CliTaskCanvasIdentity> => {
+  const index = new Map<string, CliTaskCanvasIdentity>();
+  for (const payload of payloads) {
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) continue;
+    const raw = payload as { id?: unknown; type?: unknown; groupId?: unknown; data?: unknown };
+    const nodeType = typeof raw.type === "string" ? raw.type : "";
+    if (nodeType !== "task") continue;
+    const nodeId = typeof raw.id === "string" ? raw.id : "";
+    const data =
+      raw.data !== null && typeof raw.data === "object" && !Array.isArray(raw.data)
+        ? (raw.data as { taskId?: unknown })
+        : null;
+    const taskId =
+      data !== null && typeof data.taskId === "string" && data.taskId.length > 0 ? data.taskId : null;
+    if (nodeId.length === 0 || taskId === null) {
+      console.debug("[cli-canvas-projection] 任务身份索引：task 载荷缺 id/taskId，跳过该节点");
+      continue;
+    }
+    if (index.has(taskId)) {
+      console.debug("[cli-canvas-projection] 任务身份索引：同一任务标识出现多个节点，保留首个", { taskId });
+      continue;
+    }
+    const groupId = typeof raw.groupId === "string" && raw.groupId.length > 0 ? raw.groupId : null;
+    index.set(taskId, { node_id: nodeId, group_id: groupId });
+  }
+  return index;
+};

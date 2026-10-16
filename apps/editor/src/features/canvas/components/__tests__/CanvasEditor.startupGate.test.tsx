@@ -115,6 +115,10 @@ vi.mock("../../hooks/useCanvasTaskIndexSync", () => ({
   },
 }));
 
+vi.mock("../../hooks/useCanvasLocateRequest", () => ({
+  useCanvasLocateRequestListener: vi.fn(),
+}));
+
 vi.mock("../../hooks/useEditorProjectStateSync", () => ({
   useEditorProjectStateSync: (...args: unknown[]) => {
     mockUseEditorProjectStateSync(...args);

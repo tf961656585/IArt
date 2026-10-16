@@ -366,6 +366,10 @@ export function PromptDock() {
           }
         } else if (failure.kind === 'project-not-ready') {
           toast.error(failure.message);
+        } else if (failure.kind === 'group-name-ambiguous') {
+          toast.error(
+            `画布上有 ${failure.groupIds.length} 个同名组「${failure.groupName}」，无法确定生成任务要放进哪个组。请把其中一些组改成不同组名后再提交。`,
+          );
         } else {
           toast.error(failure.reason);
         }

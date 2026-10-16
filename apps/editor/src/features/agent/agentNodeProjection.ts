@@ -6,13 +6,14 @@
  * 后续 token/complete/error 与项目恢复只更新会话数据，绝不再建节点。
  *
  * 落位遵循 docs/runtime/画布节点定位.md 与既有视口锚定落位口径（与任务节点同源）：
- * 视口安全区 → 可见区 → 钳制；参考资产右侧邻近锚定。
+ * 视口安全区 → 可见区 → 无界平面（防重叠是硬约束）；参考资产右侧邻近锚定。
  */
 
 import type { AgentNodeData, GraphNode, NodePosition } from '@/features/canvas/types/node';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
 import { normalizeViewport } from '@/features/canvas/components/canvas/nodeCanvasConstants';
 import { computeTaskBatchPlacement } from '@/features/canvas/utils/taskNodePlacement';
+import { buildCanvasSizeSources } from '@/features/canvas/utils/nodeOccupancy';
 import { AGENT_NODE_DEFAULT_SIZE } from '@/features/canvas/nodes/agent/agentNodeFactory';
 import type { AssetNodeData } from '@/features/canvas/types/taskNode';
 
@@ -119,6 +120,7 @@ export const createAgentNodeForAcceptance = (params: {
     nodeSize: AGENT_NODE_DEFAULT_SIZE,
     perRow: 1,
     referencePositions,
+    sizeSources: buildCanvasSizeSources(store),
   });
 
   const node = store.addNode('agent', placement.base, { agentSessionId: params.agentSessionId });

@@ -11,13 +11,25 @@ const workspaceRoot = process.cwd();
 const requireDesktop = createRequire(import.meta.url);
 const installerEntry = `${workspaceRoot}/apps/desktop-shell/dist/skill-store/skill-store-installer.cjs`;
 
+// 与实现侧 BundleFetcher 同形（skill-store-installer.cts）。
+type BundleFetcher = (url: string) => Promise<{
+  ok: boolean;
+  status: number;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}>;
+
+type SkillInstallRequestInput = {
+  bundleUrl: string;
+  sha512: string;
+  target: "agents" | "claude";
+  skillId: string;
+};
+
 type InstallerModule = {
-  installSkill: (request: {
-    bundleUrl: string;
-    sha512: string;
-    target: "agents" | "claude";
-    skillId: string;
-  }) => Promise<{ ok: true; installedPath: string } | { ok: false; error: string }>;
+  installSkill: (
+    request: SkillInstallRequestInput,
+    fetchBundle: BundleFetcher,
+  ) => Promise<{ ok: true; installedPath: string } | { ok: false; error: string }>;
   getInstalledSkillState: () => { skills: Array<{ skillId: string; version: string; target: string }> };
   __test_only__: {
     isSafeRelativePath: (p: string) => boolean;
@@ -71,6 +83,11 @@ describe("skill-store-installer (spec docs/hub/skill-store.md)", () => {
   let fakeHome: string;
   let previousHome: string | undefined;
 
+  // fetchBundle 是必传注入参数（生产 = net.fetch 搭 default session，受代理治理约束）；
+  // 测试按 PROXY-003 允许的同形注入，用 Node 全局 fetch 打本地 bundle 服务。
+  const installWithTestFetch = (request: SkillInstallRequestInput) =>
+    installer.installSkill(request, (url) => fetch(url));
+
   beforeEach(() => {
     installer = loadInstaller();
     fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "skill-installer-home-"));
@@ -123,7 +140,7 @@ describe("skill-store-installer (spec docs/hub/skill-store.md)", () => {
       const mock = await startBundleServer(bundleJson);
 
       try {
-        const result = await installer.installSkill({
+        const result = await installWithTestFetch({
           bundleUrl: mock.url,
           sha512: mock.sha512,
           target: "agents",
@@ -160,7 +177,7 @@ describe("skill-store-installer (spec docs/hub/skill-store.md)", () => {
       const mock = await startBundleServer(bundleJson);
 
       try {
-        await installer.installSkill({
+        await installWithTestFetch({
           bundleUrl: mock.url,
           sha512: mock.sha512,
           target: "agents",
@@ -186,7 +203,7 @@ describe("skill-store-installer (spec docs/hub/skill-store.md)", () => {
       const mock = await startBundleServer(bundleJson);
 
       try {
-        const result = await installer.installSkill({
+        const result = await installWithTestFetch({
           bundleUrl: mock.url,
           sha512: "0".repeat(128), // 错误的 sha512
           target: "agents",
@@ -211,7 +228,7 @@ describe("skill-store-installer (spec docs/hub/skill-store.md)", () => {
       const mock = await startBundleServer(bundleJson);
 
       try {
-        const result = await installer.installSkill({
+        const result = await installWithTestFetch({
           bundleUrl: mock.url,
           sha512: mock.sha512,
           target: "agents",
@@ -237,7 +254,7 @@ describe("skill-store-installer (spec docs/hub/skill-store.md)", () => {
       const mock = await startBundleServer(bundleJson);
 
       try {
-        const result = await installer.installSkill({
+        const result = await installWithTestFetch({
           bundleUrl: mock.url,
           sha512: mock.sha512,
           target: "agents",
@@ -259,7 +276,7 @@ describe("skill-store-installer (spec docs/hub/skill-store.md)", () => {
       const mock = await startBundleServer(bundleJson, 500);
 
       try {
-        const result = await installer.installSkill({
+        const result = await installWithTestFetch({
           bundleUrl: mock.url,
           sha512: mock.sha512,
           target: "agents",
@@ -290,13 +307,13 @@ describe("skill-store-installer (spec docs/hub/skill-store.md)", () => {
       const mock2 = await startBundleServer(bundleJson2);
 
       try {
-        await installer.installSkill({
+        await installWithTestFetch({
           bundleUrl: mock1.url,
           sha512: mock1.sha512,
           target: "agents",
           skillId: "gpt-image",
         });
-        await installer.installSkill({
+        await installWithTestFetch({
           bundleUrl: mock2.url,
           sha512: mock2.sha512,
           target: "claude",

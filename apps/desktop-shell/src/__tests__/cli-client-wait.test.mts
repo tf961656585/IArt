@@ -182,8 +182,8 @@ describe("cli-client generate --wait（桩控制服务）", () => {
             ok: true,
             batch_id: "batch-1",
             tasks: [
-              { task_id: "t1", task_index: 0 },
-              { task_id: "t2", task_index: 1 },
+              { task_id: "t1", task_index: 0, node_id: null, group_id: null },
+              { task_id: "t2", task_index: 1, node_id: null, group_id: null },
             ],
             task_results: [],
           });
@@ -191,7 +191,7 @@ describe("cli-client generate --wait（桩控制服务）", () => {
         }
         if (request.command === "task.get") {
           const status = request.task_id === "t1" ? (t1Calls += 1) === 1 ? "generating" : "succeeded" : "failed";
-          respond(res, { command: "task.get", ok: true, task: taskView(request.task_id ?? "", status) });
+          respond(res, { command: "task.get", ok: true, task: taskView(request.task_id ?? "", status), node_id: null, group_id: null });
           return;
         }
         if (request.command === "task.wait") {
@@ -199,13 +199,13 @@ describe("cli-client generate --wait（桩控制服务）", () => {
             respond(res, {
               command: "task.wait",
               ok: true,
-              task_result: { task: taskView("t1", "succeeded"), assets: [{ asset: ASSET, local_file_path: join(tempRoot, "media", "file-a.png") }] },
+              task_result: { task: taskView("t1", "succeeded"), assets: [{ asset: ASSET, local_file_path: join(tempRoot, "media", "file-a.png") }], node_id: null, group_id: null },
             });
           } else {
             respond(res, {
               command: "task.wait",
               ok: true,
-              task_result: { task: { ...taskView("t2", "failed"), errorMessage: "生成失败" }, assets: [] },
+              task_result: { task: { ...taskView("t2", "failed"), errorMessage: "生成失败" }, assets: [], node_id: null, group_id: null },
             });
           }
           return;

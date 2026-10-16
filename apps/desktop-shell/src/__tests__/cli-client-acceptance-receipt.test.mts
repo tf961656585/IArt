@@ -61,8 +61,8 @@ const makeFetchStub = (events: string[]): typeof fetch => {
           ok: true,
           batch_id: "batch-1",
           tasks: [
-            { task_id: "t1", task_index: 0 },
-            { task_id: "t2", task_index: 1 },
+            { task_id: "t1", task_index: 0, node_id: null, group_id: null },
+            { task_id: "t2", task_index: 1, node_id: null, group_id: null },
           ],
           task_results: [],
         };
@@ -77,6 +77,8 @@ const makeFetchStub = (events: string[]): typeof fetch => {
           command: "task.get",
           ok: true,
           task: { taskId, status, projectPath: PROJECT_PATH, createdAt: 1, updatedAt: 2 },
+          node_id: null,
+          group_id: null,
         };
       }
       const taskId = request.task_id ?? "";
@@ -86,6 +88,8 @@ const makeFetchStub = (events: string[]): typeof fetch => {
         task_result: {
           task: { taskId, status: "succeeded", projectPath: PROJECT_PATH, createdAt: 1, updatedAt: 2 },
           assets: [],
+          node_id: null,
+          group_id: null,
         },
       };
     })();

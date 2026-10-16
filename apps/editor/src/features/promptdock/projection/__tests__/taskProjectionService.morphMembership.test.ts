@@ -28,7 +28,7 @@ import { TASK_BATCH_GAP_X, TASK_BATCH_GAP_Y } from '@/features/canvas/utils/task
  * - 任务节点无容器归属时，继任资产节点为自由节点；
  * - 绑定到任务节点的注释改绑首个继任资产节点（不级联删除）；
  * - 选中态不迁移（任务节点随删除清理选中）；
- * - 额外资产落位与提交受理期同一网格步距口径。
+ * - 额外资产以首个资产原位为锚做防重叠搜索落位（格子按媒体期望布局尺寸）。
  *
  * 宿主搭建沿用画布 store 真实实例 + 真实投影服务（不 mock store）：
  * 输入经共享契约 TaskStateNotificationSchema 校验后喂 applyTaskStateChanged。
@@ -212,19 +212,17 @@ describe('成功任务 morph 的替换继任语义（AG-CN-017）', () => {
     const graph = requireGraph();
     expect(getGroupMembers(graph, groupId)).toHaveLength(4);
 
-    // 网格步距与受理期口径一致（TASK_BATCH_GAP_X/Y + 每行 3 个，锚点为首个资产原位）：
-    // asset2 在首行第 3 列、asset4 在第 2 行第 1 列。
-    const stepX = ASSET_NODE_DEFAULT_SIZE.width + TASK_BATCH_GAP_X;
-    const stepY = ASSET_NODE_DEFAULT_SIZE.height + TASK_BATCH_GAP_Y;
+    // 追加资产按网格口径排布（格子按媒体期望布局尺寸取列最大宽/行最大高——夹具媒体
+    // 800×600 → 320×240 大于默认 240×180，步距随真实尺寸放大，消除相邻产物压叠）：
+    // asset2、asset3 在首行右邻且互不压叠，asset4 在第 2 行第 1 列。
     const firstX = assets[0]?.position.x ?? 0;
     const firstY = assets[0]?.position.y ?? 0;
-    expect(assets[1]?.position.x).toBe(firstX + stepX);
-    expect(assets[2]?.position.x).toBe(firstX + stepX * 2);
-    expect(assets[3]?.position.y).toBe(firstY + stepY);
-    // 相邻产物不重叠（间距不小于节点宽）
-    expect((assets[1]?.position.x ?? 0) - (assets[0]?.position.x ?? 0)).toBeGreaterThanOrEqual(
-      ASSET_NODE_DEFAULT_SIZE.width,
-    );
+    expect(assets[1]?.position.x).toBeGreaterThanOrEqual(firstX + ASSET_NODE_DEFAULT_SIZE.width + TASK_BATCH_GAP_X);
+    expect(assets[1]?.position.y).toBe(firstY);
+    expect(assets[2]?.position.x).toBeGreaterThanOrEqual((assets[1]?.position.x ?? 0) + ASSET_NODE_DEFAULT_SIZE.width);
+    expect(assets[2]?.position.y).toBe(firstY);
+    expect(assets[3]?.position.x).toBe(firstX);
+    expect(assets[3]?.position.y).toBeGreaterThanOrEqual(firstY + ASSET_NODE_DEFAULT_SIZE.height + TASK_BATCH_GAP_Y);
   });
 
   // @spec: FTB-006

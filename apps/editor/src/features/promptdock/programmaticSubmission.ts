@@ -3,9 +3,9 @@ import type {
   CliGenerateAcceptance,
   CliGenerateArgEntry,
   CliGenerateParams,
+  CliGenerateTaskIdentity,
   ExecutableCatalogParameterField,
   ProjectMediaAssets,
-  PromptDockBatchTaskAcceptance,
 } from '@iart/contracts';
 import type { TaskSubmitMediaInput } from '@iart/contracts/task-submit-media-input';
 import type { MentionMapEntry } from '@iart/contracts/task-submit-request';
@@ -75,6 +75,12 @@ export type ProgrammaticSubmitIntent = {
    * 画布产生重复任务节点）。
    */
   clientRequestId: string | undefined;
+  /**
+   * 出生组组名（spec CLI-043，CLI `--group`）：提交前置校验阶段按名称解析目标节点组——
+   * 唯一同名组入它、零个受理成功后自动建组、≥2 个同名以 group_name_ambiguous 拒绝
+   * （不发起提交）。界面提交不携带（缺省 undefined）。
+   */
+  groupName?: string | undefined;
 };
 
 /** 共享核心的失败分类（UI 与 CLI 各自映射反馈形态；transport 失败原样抛出不在此收敛）。 */
@@ -95,6 +101,13 @@ export type GenerationSubmissionFailure =
       kind: 'projection-failed';
       /** 任务节点投影创建失败的用户视角原因（受理已成立，画布可见性未达成） */
       reason: string;
+    }
+  | {
+      kind: 'group-name-ambiguous';
+      /** 触发歧义的出生组组名 */
+      groupName: string;
+      /** 同名节点组的节点标识清单（≥2 项） */
+      groupIds: string[];
     };
 
 export type GenerationSubmissionOutcome =
@@ -102,8 +115,8 @@ export type GenerationSubmissionOutcome =
       ok: true;
       /** 受理批次标识 */
       batchId: string;
-      /** 受理的任务身份（task_id + task_index，与提交响应逐条一致） */
-      tasks: PromptDockBatchTaskAcceptance[];
+      /** 受理的任务身份（task_id + task_index + 画布投影身份 node_id/group_id，CLI-046） */
+      tasks: CliGenerateTaskIdentity[];
       /** 幂等重放标志（spec §5.4 受理幂等键）：true = 命中既有批次，未重新受理、未创建投影。 */
       replayed: boolean;
     }
@@ -264,6 +277,27 @@ export const runGenerationBatchSubmission = async (
     };
   }
 
+  // 出生组解析（spec CLI-043，前置校验阶段拦截）：唯一同名节点组入它、零个受理成功后自动建组、
+  // ≥2 个同名以 group_name_ambiguous 拒绝——不提交注定失败的提交（画布零改动、不发起 backend
+  // 提交）。组名匹配只作用于节点组（type=group），Agent 容器不参与。
+  let birthGroupId: string | null = null;
+  let autoCreateBirthGroup = false;
+  if (intent.groupName !== undefined) {
+    const { resolveBirthGroupIdByName } = await import('./projection/taskProjectionService');
+    const resolution = resolveBirthGroupIdByName(intent.groupName);
+    if (resolution.kind === 'ambiguous') {
+      return {
+        ok: false,
+        failure: { kind: 'group-name-ambiguous', groupName: intent.groupName, groupIds: resolution.groupIds },
+      };
+    }
+    if (resolution.kind === 'unique') {
+      birthGroupId = resolution.groupId;
+    } else {
+      autoCreateBirthGroup = true;
+    }
+  }
+
   // 提交正文：预设 token 展开为正文（spec「提交契约边界」）；失效 token 已被前置校验阻断，
   // 此处展开不会走 missing:'throw' 兜底。
   const submitPrompt = resolvePromptDockSubmitPrompt(preflightDraft);
@@ -285,28 +319,73 @@ export const runGenerationBatchSubmission = async (
   // 幂等重放（spec §5.4 受理幂等键）：命中既有批次时任务身份为既有受理结果——投影的创建
   // 触发事实是「全新受理」，重放回执不再触发投影创建（重复创建会在画布产生重复任务节点；
   // 既有投影由画布既有恢复/通知机制持有）。留 debug 痕说明跳过。
+  // 画布投影身份（CLI-046）按 task_id 从画布现值关联既有投影（含 --group 重放：不重复建组，
+  // group_id 取节点当前归属）；投影缺失输出 null，缺省不伪造。
   if (response.replayed === true) {
     console.debug('[programmaticSubmission] idempotent replay hit, skip task projection creation', {
       batchId: response.batch_id,
       clientRequestId: intent.clientRequestId,
     });
-    return { ok: true, batchId: response.batch_id, tasks: response.tasks, replayed: true };
+    const { resolveTaskCanvasIdentities } = await import('./projection/taskProjectionService');
+    const identities = resolveTaskCanvasIdentities(response.tasks.map((task) => task.task_id));
+    return {
+      ok: true,
+      batchId: response.batch_id,
+      tasks: response.tasks.map((task) => ({
+        ...task,
+        node_id: identities.get(task.task_id)?.node_id ?? null,
+        group_id: identities.get(task.task_id)?.group_id ?? null,
+      })),
+      replayed: true,
+    };
+  }
+
+  // 出生组自动建组（CLI-043 零匹配分支）：受理成功后、投影创建前——提交传输层失败不留垃圾
+  // 空组（此时才建组）；建组失败按 projection-failed 处置（受理已成立，画布可见性未达成）。
+  if (autoCreateBirthGroup && intent.groupName !== undefined) {
+    const { createBirthGroup } = await import('./projection/taskProjectionService');
+    const created = createBirthGroup(intent.groupName);
+    if (created === null) {
+      return {
+        ok: false,
+        failure: {
+          kind: 'projection-failed',
+          reason: `生成已受理，但未能创建出生组「${intent.groupName}」，请重新打开项目查看任务。`,
+        },
+      };
+    }
+    birthGroupId = created;
   }
 
   // 受理回执是任务节点投影的唯一创建触发事实（spec 固定任务数批次提交与投影语义）；
   // 与界面提交同一函数，不另建补投影旁路。
-  const { createTaskProjectionsForAcceptance } = await import('./projection/taskProjectionService');
+  const { createTaskProjectionsForAcceptance, resolveTaskCanvasIdentities } = await import(
+    './projection/taskProjectionService'
+  );
   const createResult = createTaskProjectionsForAcceptance({
     nodeGraphId: useCanvasStore.getState().nodeGraph?.id,
     response,
     modelId: entry.model_id,
     referenceAssetIds: references.map((reference) => reference.assetId),
     selectCreatedNodes: options.selectCreatedNodes,
+    ...(birthGroupId !== null ? { birthGroupId } : {}),
   });
   if (!createResult.ok) {
     return { ok: false, failure: { kind: 'projection-failed', reason: createResult.reason } };
   }
-  return { ok: true, batchId: response.batch_id, tasks: response.tasks, replayed: false };
+  // 画布投影身份回填（CLI-046）：投影创建后按 task_id 从画布现值解析 node_id/group_id，
+  // 受理回执与终态输出同源（投影缺失输出 null，缺省不伪造）。
+  const identities = resolveTaskCanvasIdentities(response.tasks.map((task) => task.task_id));
+  return {
+    ok: true,
+    batchId: response.batch_id,
+    tasks: response.tasks.map((task) => ({
+      ...task,
+      node_id: identities.get(task.task_id)?.node_id ?? null,
+      group_id: identities.get(task.task_id)?.group_id ?? null,
+    })),
+    replayed: false,
+  };
 };
 
 // ---------------------------------------------------------------------------
@@ -320,7 +399,7 @@ export type CliProgrammaticSubmitOutcome =
 
 /**
  * CLI generate 命令参数 → 程序化提交意图（count 缺省 1；`wait` 的轮询归本地控制服务侧，
- * 不进画布窗口执行的意图）。
+ * 不进画布窗口执行的意图；`group` 出生组组名透传，spec CLI-043）。
  */
 export const buildProgrammaticIntentFromCliParams = (
   params: CliGenerateParams,
@@ -332,6 +411,7 @@ export const buildProgrammaticIntentFromCliParams = (
   count: params.count ?? 1,
   promptPresetSnapshots: undefined,
   clientRequestId: params.client_request_id,
+  groupName: params.group,
 });
 
 /** CLI `--arg k=v` 条目 → 参数记录：同名键后者覆盖（重复键留 debug 痕，条件跳过必须留痕）。 */
@@ -521,6 +601,14 @@ export const submitGenerationBatchFromIntent = async (
       }
       case 'project-not-ready':
         return { ok: false, error: { code: 'project_not_open', message: outcome.failure.message } };
+      case 'group-name-ambiguous':
+        return {
+          ok: false,
+          error: {
+            code: 'group_name_ambiguous',
+            message: `画布上有 ${outcome.failure.groupIds.length} 个同名节点组「${outcome.failure.groupName}」，无法确定生成任务要放进哪个组。请改用唯一的组名，或先用 canvas group list 核对现有组后再提交。`,
+          },
+        };
       case 'projection-failed':
         return { ok: false, error: { code: 'internal_error', message: outcome.failure.reason } };
     }

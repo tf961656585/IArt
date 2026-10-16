@@ -8,6 +8,7 @@ import { NodeCanvas } from "./canvas/NodeCanvas";
 import { CanvasToolbar } from "./toolbar/CanvasToolbar";
 import { CanvasPreparationScreen } from "./CanvasPreparationScreen";
 import { useAutoSave, useCanvasHotkeys } from "../hooks";
+import { useCanvasLocateRequestListener } from "../hooks/useCanvasLocateRequest";
 import { useCloseProtocol } from "../hooks/useCloseProtocol";
 import { SaveCharacterDialog, CharacterLibraryDialog } from "./character";
 import { useCanvasPreparationController } from "./canvas/useCanvasPreparationController";
@@ -20,6 +21,8 @@ function CanvasRuntimeEffects() {
   useAutoSave();
   useCanvasHotkeys();
   useCloseProtocol();
+  // 模块侧定位请求端点（远处出生的任务批次 toast「查看」动作经此转调统一定位抽象）
+  useCanvasLocateRequestListener();
   return null;
 }
 

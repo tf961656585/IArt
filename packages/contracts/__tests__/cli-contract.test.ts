@@ -121,6 +121,7 @@ const requestSamples: Record<CliCommandName, Record<string, unknown>> = {
   'asset.list': { project: PROJECT },
   'asset.get': { project: PROJECT, asset_id: 'asset_1' },
   'canvas.nodes.list': { project: PROJECT },
+  'canvas.group.list': { project: PROJECT },
   'canvas.group.create': { project: PROJECT, name: '角色组', members: ['node_1'] },
   'canvas.group.dissolve': { project: PROJECT, group: 'group_1' },
   'canvas.node.move': { project: PROJECT, node: 'node_1', x: -120, y: 240.5 },
@@ -152,6 +153,12 @@ const successSamples: Record<CliCommandName, Record<string, unknown>> = {
   'asset.list': { assets: [{ asset_id: 'asset_1', media_type: 'image', source_summary: 'task_1' }] },
   'asset.get': { asset: mediaAsset(), local_file_path: '/tmp/media/asset_1.png', generation: generationArchive() },
   'canvas.nodes.list': { nodes: [canvasNode()] },
+  'canvas.group.list': {
+    groups: [
+      { group_node_id: 'group_1', name: '角色组', type: 'group', member_count: 2 },
+      { group_node_id: 'agent_1', name: '助理', type: 'agent_container', member_count: 0 },
+    ],
+  },
   'canvas.group.create': { group_node_id: 'group_1' },
   'canvas.group.dissolve': { dissolved: true, group_node_id: 'group_1', member_ids: ['node_1', 'node_2'] },
   'canvas.node.move': { node_id: 'node_1', position: { x: -120, y: 240.5 }, moved_node_ids: ['node_1'] },
@@ -159,17 +166,19 @@ const successSamples: Record<CliCommandName, Record<string, unknown>> = {
   'canvas.layout': { positions: { node_1: { x: 10, y: 20 } } },
   generate: {
     batch_id: 'batch_1',
-    tasks: [{ task_id: 'task_1', task_index: 0 }],
+    tasks: [{ task_id: 'task_1', task_index: 0, node_id: 'node_t1', group_id: 'group_1' }],
     task_results: [],
   },
   'task.list': { tasks: [taskView()] },
-  'task.get': { task: taskView(), generation: generationArchive() },
+  'task.get': { task: taskView(), node_id: 'node_t1', group_id: 'group_1', generation: generationArchive() },
   'batch.get': { generation: generationArchive() },
   'task.cancel': { accepted: true, task_id: 'task_1', cancelled_at: ISO },
   'task.wait': {
     task_result: {
       task: taskView(),
       assets: [{ asset: mediaAsset(), local_file_path: '/tmp/media/asset_1.png' }],
+      node_id: 'node_t1',
+      group_id: 'group_1',
     },
   },
   'app.status': {
@@ -181,7 +190,7 @@ const successSamples: Record<CliCommandName, Record<string, unknown>> = {
 };
 
 describe('CLI 错误码枚举（spec §9）', () => {
-  it('与 spec §9 表格一一对应（16 个，语义顺序一致）', () => {
+  it('与 spec §9 表格一一对应（17 个，语义顺序一致）', () => {
     expect([...CLI_ERROR_CODES]).toEqual([
       'not_running',
       'auth_failed',
@@ -193,6 +202,7 @@ describe('CLI 错误码枚举（spec §9）', () => {
       'batch_not_found',
       'node_not_found',
       'group_not_found',
+      'group_name_ambiguous',
       'invalid_reference',
       'model_not_available',
       'task_not_found',
@@ -210,9 +220,9 @@ describe('CLI 错误码枚举（spec §9）', () => {
 });
 
 describe('CLI 命令请求判别联合（spec §5）', () => {
-  it('命令清单共 23 条且判别值唯一', () => {
-    expect(CLI_COMMANDS).toHaveLength(23);
-    expect(new Set(CLI_COMMANDS).size).toBe(23);
+  it('命令清单共 24 条且判别值唯一', () => {
+    expect(CLI_COMMANDS).toHaveLength(24);
+    expect(new Set(CLI_COMMANDS).size).toBe(24);
     expect(() => CliCommandNameSchema.parse('project.list')).not.toThrow();
   });
 
@@ -258,10 +268,9 @@ describe('CLI 命令请求判别联合（spec §5）', () => {
       // generate：prompt / model 必填
       { command: 'generate', project: PROJECT, model: 'model-a' },
       { command: 'generate', project: PROJECT, prompt: 'x' },
-      // canvas.group.create：name + members（≥1）
+      // canvas.group.create：name 必填；members 字段必填但允许空数组（CLI-044 空组建组）
       { command: 'canvas.group.create', project: PROJECT, members: ['node_1'] },
       { command: 'canvas.group.create', project: PROJECT, name: 'g' },
-      { command: 'canvas.group.create', project: PROJECT, name: 'g', members: [] },
       // canvas.group.dissolve：目标组标识必填（spec §5.3 / CLI-027）
       { command: 'canvas.group.dissolve', project: PROJECT },
       // canvas.node.move：node / x / y 必填（spec §5.3 / CLI-028）
@@ -356,27 +365,38 @@ describe('CLI 命令响应判别联合（spec §5 统一信封）', () => {
     ).toBe(false);
   });
 
-  it('generate --wait 样例：逐任务终态与产物资产（spec §5.4 / CLI-009）', () => {
+  it('generate --wait 样例：逐任务终态与产物资产（spec §5.4 / CLI-009 / CLI-046）', () => {
     const body = {
       command: 'generate',
       ok: true,
       batch_id: 'batch_1',
       tasks: [
-        { task_id: 'task_1', task_index: 0 },
-        { task_id: 'task_2', task_index: 1 },
+        { task_id: 'task_1', task_index: 0, node_id: 'node_t1', group_id: 'group_1' },
+        { task_id: 'task_2', task_index: 1, node_id: 'node_t2', group_id: 'group_1' },
       ],
       task_results: [
         {
           task: taskView(),
           assets: [{ asset: mediaAsset(), local_file_path: '/tmp/media/asset_1.png' }],
+          node_id: 'node_t1',
+          group_id: 'group_1',
         },
         {
           task: { ...taskView(), taskId: 'task_2', status: 'failed' },
           assets: [],
+          node_id: 'node_t2',
+          group_id: 'group_1',
         },
       ],
     };
     expect(CliCommandResponseSchema.safeParse(body).success).toBe(true);
+    // 画布投影身份 null 合法（无投影/项目已关闭，缺省不伪造，CLI-046）
+    expect(
+      CliCommandResponseSchema.safeParse({
+        ...body,
+        task_results: [{ task: taskView(), assets: [], node_id: null, group_id: null }],
+      }).success,
+    ).toBe(true);
   });
 });
 
@@ -425,8 +445,12 @@ describe('代理执行通道命令契约（spec §6.3）', () => {
 
   it('request_id 必填、参数与命令面同形、误判别值被拒绝', () => {
     expect(CliProxyCommandSchema.safeParse({ command: 'canvas.group.create', name: 'g', members: ['n'] }).success).toBe(false);
+    // members 空数组合法（CLI-044 空组建组）；request_id 缺失仍被拒绝
     expect(
       CliProxyCommandSchema.safeParse({ command: 'canvas.group.create', request_id: 'r', name: 'g', members: [] }).success,
+    ).toBe(true);
+    expect(
+      CliProxyCommandSchema.safeParse({ command: 'canvas.group.create', name: 'g', members: [] }).success,
     ).toBe(false);
     expect(CliProxyCommandSchema.safeParse({ command: 'canvas.nodes.list', request_id: 'r' }).success).toBe(false);
     // generate：代理命令不带 project（项目上下文由画布窗口承载），prompt/model 必填
@@ -461,7 +485,15 @@ describe('代理执行通道命令契约（spec §6.3）', () => {
         cancelled_at: ISO,
       }).success,
     ).toBe(true);
-    // generate 受理结果与 B 命令面同形状（批次标识 + 任务身份列表，无 task_results）。
+    // generate 受理结果与 B 命令面同形状（批次标识 + 任务身份列表，无 task_results；CLI-046 投影身份）。
+    expect(
+      CliProxyCommandResultSchema.safeParse({
+        command: 'generate',
+        request_id: 'req_4',
+        batch_id: 'batch_1',
+        tasks: [{ task_id: 'task_1', task_index: 0, node_id: 'node_t1', group_id: null }],
+      }).success,
+    ).toBe(true);
     expect(
       CliProxyCommandResultSchema.safeParse({
         command: 'generate',
@@ -469,7 +501,8 @@ describe('代理执行通道命令契约（spec §6.3）', () => {
         batch_id: 'batch_1',
         tasks: [{ task_id: 'task_1', task_index: 0 }],
       }).success,
-    ).toBe(true);
+    ).toBe(false);
+    // 原子受理恒 ≥1：空任务列表被拒绝。
     expect(
       CliProxyCommandResultSchema.safeParse({
         command: 'generate',
