@@ -20,6 +20,7 @@ export const CLI_USAGE_TEXT = `iart — 驱动 IARTStudio 的命令行入口（�
   iart model list        iart model get <model_id>
   iart asset list [--query K] [--media-type image|video|audio] [--model M] [--limit N] [--offset O]
   iart asset get <assetId> --project P
+  iart asset import --file <路径> [--file <路径> ...] --project P
   iart canvas nodes list --project P
   iart canvas group list --project P
   iart canvas group create --name N [--members id1,id2] --project P
@@ -61,7 +62,7 @@ const failure = (message: string): CliArgParseResult => ({ ok: false, reason: "u
 /** 参数解析用户可见错误（退出码 2 语义），由 parseCliArgs 统一捕获转 failure。 */
 class CliArgError extends Error {}
 
-type FlagKind = "string" | "number" | "numberAny" | "boolean" | "stringList" | "kvList" | "scope";
+type FlagKind = "string" | "number" | "numberAny" | "boolean" | "stringList" | "pathList" | "kvList" | "scope";
 
 interface FlagSpec {
   /** 契约 params 字段名（snake_case）——CLI flag → 契约字段的显式映射。 */
@@ -84,6 +85,9 @@ const FLAG_SPECS = new Map<string, FlagSpec>([
   ["--ref", { field: "ref", kind: "stringList" }],
   ["--arg", { field: "arg", kind: "kvList" }],
   ["--members", { field: "members", kind: "stringList" }],
+  // --file 是文件路径列表（spec §5.3 / CLI-047）：完整路径可合法含逗号，按 pathList
+  // 语义每次累积一项、不拆分（区别于 --members/--ref 的逗号拆分语义）。
+  ["--file", { field: "file", kind: "pathList" }],
   ["--group", { field: "group", kind: "string" }],
   ["--node", { field: "node", kind: "string" }],
   ["--nodes", { field: "nodes", kind: "stringList" }],
@@ -118,6 +122,7 @@ const COMMAND_SPECS = new Map<string, CommandSpec>([
   ["model get", { command: "model.get", positionals: ["model_id"] }],
   ["asset list", { command: "asset.list", positionals: [] }],
   ["asset get", { command: "asset.get", positionals: ["asset_id"] }],
+  ["asset import", { command: "asset.import", positionals: [] }],
   ["canvas nodes list", { command: "canvas.nodes.list", positionals: [] }],
   ["canvas group list", { command: "canvas.group.list", positionals: [] }],
   ["canvas group create", { command: "canvas.group.create", positionals: [] }],
@@ -265,11 +270,12 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
         scalarValues.set(flagSpec.field, value);
         continue;
       }
-      // 列表 flag：重复出现累积，值按逗号拆分
+      // 列表 flag：重复出现累积；stringList 按逗号拆分，pathList/kvList 保留原值
       const accumulated = listValues.get(flagSpec.field) ?? [];
       if (flagSpec.kind === "stringList") {
         accumulated.push(...splitList(value));
       } else {
+        // pathList：整项原样累积（路径可含逗号）；kvList：k=v 对整项原样累积
         accumulated.push(value);
       }
       listValues.set(flagSpec.field, accumulated);
@@ -295,6 +301,14 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
   };
   const requireStringList = (field: string, flagName: string): string[] => {
     const items = optionalStringList(field);
+    if (items === undefined || items.length === 0) {
+      throw new CliArgError(`缺少必填参数 ${flagName}（至少一项）`);
+    }
+    return items;
+  };
+  /** 未拆分列表取值（pathList 语义：完整路径可含逗号，不做任何拆分）。 */
+  const requireRawStringList = (field: string, flagName: string): string[] => {
+    const items = listValues.get(field);
     if (items === undefined || items.length === 0) {
       throw new CliArgError(`缺少必填参数 ${flagName}（至少一项）`);
     }
@@ -366,6 +380,15 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
         command: "asset.get",
         project: requireScalar("project", "--project"),
         asset_id: requirePositional(0, "asset_id"),
+      };
+      break;
+    case "asset.import":
+      // 本地媒体文件导入（spec §5.3 / CLI-047）：--file 每次一个完整路径、可重复累积，
+      // 不按逗号拆分；文件存在性与媒体类型校验由画布窗口侧前置完成（主进程不预检）。
+      draft = {
+        command: "asset.import",
+        project: requireScalar("project", "--project"),
+        file: requireRawStringList("file", "--file"),
       };
       break;
     case "canvas.nodes.list":

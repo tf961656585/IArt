@@ -1,16 +1,14 @@
 // @vitest-environment node
-// @spec: CLI-005, CLI-007, CLI-008, CLI-010, CLI-012, CLI-014, CLI-020, CLI-021, CLI-027, CLI-030
+// @spec: CLI-005, CLI-007, CLI-008, CLI-010, CLI-012, CLI-014, CLI-020, CLI-021, CLI-027, CLI-030, CLI-047
 //
 // CLI 与本地 Agent 集成 · 主链接缝测试（spec docs/integrations/CLI与本地Agent集成.md
 // §4 架构 / §6 通道契约 / §10 边界条件）。
 //
 // 使命：在没有真实 Electron 运行时的前提下，把「CLI 客户端 → 本地控制服务 → 执行器 →
-// 代理执行通道 → 画布窗口接收器 → 程序化提交」主链首尾真实跑通一遍。两端都是真实实现：
-// - CLI 客户端 / 控制服务 / 执行器 / 代理分发器：desktop-shell 编译产物 dist/cli/*.cjs
-//   （经 createRequire 加载；源码 .cts 的内部 import 指向 .cjs 构建产物，无法直接 import 源码，
-//   与 apps/desktop-shell/src/__tests__/cli-*.test.mts 同口径）；
-// - Editor 接收器 / 程序化提交 / canvasStore / promptDockStore / runtimeStore：apps/editor 源码
-//   经 vitest `@` alias 直接 import（node 环境可用，已探针核实）。
+// 代理执行通道 → 画布窗口接收器 → 程序化提交 / 素材导入」主链首尾真实跑通一遍。
+//
+// 共享台架（真实两端加载、假传输层直通、临时数据根 fixture、执行器依赖注入面）承载在
+// ./cli.seam.harness.ts（max-lines 行数预算拆分）；本文件只保留各链路的断言组织。
 //
 // 只在最外层挡掉真实边界（假替身清单）：
 // - Electron 窗口传输层（webContents.send / ipcMain.on）：假传输层直通——捕获分发器发出的
@@ -19,25 +17,34 @@
 // - promptDockApi HTTP 边界（submitGenerationBatch / cancelTask）：vi.mock，受理响应按
 //   PromptDockBatchSubmitResponseSchema 字段构造并当场 parse（真实响应喂消费端同一份契约
 //   schema 的合法形态：字段从 schema 产生、边界 parse 为真）；
+// - 缩略图生成 HTTP/WS 边界（链路 E 导入完成后的 fire-and-forget 修复，非本链路断言面）：
+//   vi.mock 挡掉；
 // - 主进程存储服务与 recent-projects 注册表：临时目录 fixture + 假存储适配（创建链重名守卫
-//   属存储服务职责，此处按其契约抛 PROJECT_NAME_CONFLICT）。
+//   属存储服务职责，此处按其契约抛 PROJECT_NAME_CONFLICT）；链路 E 另以假 storage IPC 桥承载
+//   storage:read-file-bytes / storage:import-local-media / storage:upsert-media-asset。
 //
 // 输入从真实链路源头产生：建组成员 id 经真实 canvasStore.addNode action 创建后从 store 读回，
 // 不手工捏造 id 直塞断言层。
 
 import * as fs from 'node:fs';
-import { createRequire } from 'node:module';
-import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  CliCommandResponseSchema,
+  CliProxyCommandResponseSchema,
+  CliProxyCommandSchema,
   PromptDockBatchSubmitResponseSchema,
   TaskCancelAcceptedResponseSchema,
-  type CliCommandResponse,
-  type CliProxyCommandResponse,
+  type MediaAsset,
 } from '@iart/contracts';
+import type {
+  StorageImportLocalMediaParams,
+  StorageImportLocalMediaResult,
+  StorageReadFileBytesParams,
+  StorageReadFileBytesResult,
+  StorageUpsertMediaAssetParams,
+  StorageUpsertMediaAssetResult,
+} from '@iart/contracts/editor-storage-contract';
 
 // promptDockApi 是 Editor 侧的 HTTP 边界（submitGenerationBatch / cancelTask）：本接缝在这条
 // 边界上用替身承载「真实形状的受理/取消响应」，其余（前置校验、受理回执投影、画布 action）
@@ -49,415 +56,63 @@ vi.mock('@/client/api/promptDockApi', () => ({
   submitGenerationBatch: vi.fn(),
 }));
 
+// 缩略图生成是远端媒体加工边界（真实部署下经 Backend 媒体管线 / 本地 ffmpeg），且调用发生在
+// 导入写盘登记完成之后（scheduleImportedMediaThumbnailRepair 的 fire-and-forget 修复），
+// 不属本接缝断言面；jsdom/node 测试环境无真实加工链路，用替身挡掉（消除条件：媒体加工改为
+// 可注入上游后移除本替身）。
+// guard-seam-mock-exempt: 外部媒体加工边界替身——导入主链两端真实，仅缩略图修复请求短路
+vi.mock('@/client/api/imageThumbnail', () => ({
+  __esModule: true,
+  createImageThumbnail: vi.fn(),
+}));
+// guard-seam-mock-exempt: 外部媒体加工边界替身——导入主链两端真实，仅缩略图修复请求短路
+vi.mock('@/client/api/videoThumbnail', () => ({
+  __esModule: true,
+  createVideoThumbnail: vi.fn(),
+}));
+
 import { cancelTask, submitGenerationBatch } from '@/client/api/promptDockApi';
-import { useRuntimeStore } from '@/client/store/runtimeStore';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
-import { createNodeGraph } from '@/features/canvas/types/nodeGraph';
-import type { TaskNodeData } from '@/features/canvas/types/node';
-import { handleCliProxyPayload } from '@/features/canvas/services/cliProxyReceiver';
 import { usePromptDockStore } from '@/features/promptdock/promptDockStore';
-
-// ---------------------------------------------------------------------------
-// desktop-shell 侧真实实现（dist 编译产物）
-// ---------------------------------------------------------------------------
-
-const workspaceRoot = process.cwd();
-const requireDesktop = createRequire(import.meta.url);
-const clientEntry = `${workspaceRoot}/apps/desktop-shell/dist/cli/cli-client.cjs`;
-const serviceEntry = `${workspaceRoot}/apps/desktop-shell/dist/cli/cli-control-service.cjs`;
-const dispatcherEntry = `${workspaceRoot}/apps/desktop-shell/dist/cli/cli-proxy-dispatcher.cjs`;
-
-type CliClientRunResult = { exitCode: number; stdout: string; stderr: string };
-type ClientModule = {
-  runCliClient: (
-    argv: readonly string[],
-    deps?: { discoveryFilePath?: string; fetchImpl?: typeof fetch; pollIntervalMs?: number },
-  ) => Promise<CliClientRunResult>;
-};
-type ServiceHandle = {
-  port: number;
-  discoveryFilePath: string;
-  stop: () => Promise<void>;
-  getCommandLog: () => readonly unknown[];
-};
-type ServiceModule = {
-  startCliControlService: (options: Record<string, unknown>) => Promise<ServiceHandle>;
-};
-type ProxyDispatchOutcome =
-  | { ok: true; response: CliProxyCommandResponse }
-  | { ok: false; reason: 'no_window' | 'invalid_command' | 'duplicate_request_id'; detail: string };
-type DispatcherModule = {
-  createCliProxyDispatcher: (deps: {
-    getWindow: (projectPath: string) => {
-      sendCommand: (payload: unknown) => void;
-      onClosed: (listener: () => void) => void;
-    } | null;
-    newRequestId?: () => string;
-  }) => {
-    dispatch: (
-      projectPath: string,
-      candidate: Record<string, unknown>,
-    ) => Promise<ProxyDispatchOutcome>;
-    consumeResponsePayload: (payload: unknown) => void;
-  };
-};
-
-const loadClientModule = (): ClientModule => requireDesktop(clientEntry) as ClientModule;
-const loadServiceModule = (): ServiceModule => requireDesktop(serviceEntry) as ServiceModule;
-const loadDispatcherModule = (): DispatcherModule =>
-  requireDesktop(dispatcherEntry) as DispatcherModule;
-
-// ---------------------------------------------------------------------------
-// 假 Electron 传输层（webContents.send / ipcMain.on 的替身，含断链注入点）
-// ---------------------------------------------------------------------------
-
-type TransportMode = 'pass' | 'drop' | 'wrong_request_id';
-
-type ProxyWiring = {
-  /** 真实分发器（desktop-shell dist 产物）。 */
-  dispatcher: ReturnType<DispatcherModule['createCliProxyDispatcher']>;
-  /** 主进程 → 画布窗口方向捕获的命令载荷（webContents.send 的替身捕获）。 */
-  capturedRequests: unknown[];
-  /** 画布窗口 → 主进程方向捕获的响应载荷（sendCliProxyResponse 的替身捕获）。 */
-  capturedResponses: unknown[];
-  setMode: (mode: TransportMode) => void;
-};
-
-const createProxyWiring = (isOpenProject: (projectPath: string) => boolean): ProxyWiring => {
-  const capturedRequests: unknown[] = [];
-  const capturedResponses: unknown[] = [];
-  let mode: TransportMode = 'pass';
-  const dispatcherModule = loadDispatcherModule();
-  const dispatcher = dispatcherModule.createCliProxyDispatcher({
-    getWindow: (projectPath) => {
-      if (!isOpenProject(projectPath)) return null;
-      return {
-        // 假 webContents.send：捕获载荷 → 直通喂给真实 Editor 接收器
-        sendCommand: (payload) => {
-          capturedRequests.push(payload);
-          void handleCliProxyPayload(payload, (response) => {
-            capturedResponses.push(response);
-            if (mode === 'drop') return; // 断链注入点 1：响应不回注主进程
-            const outbound =
-              mode === 'wrong_request_id'
-                ? // 断链注入点 2：request_id 改错（配对失败）
-                  { ...response, request_id: 'seam-wrong-request-id' }
-                : response;
-            // 假 ipcMain.on(CLI_PROXY_RESPONSE_CHANNEL)：响应回注真实分发器配对
-            dispatcher.consumeResponsePayload(outbound);
-          });
-        },
-        onClosed: () => undefined,
-      };
-    },
-  });
-  return { dispatcher, capturedRequests, capturedResponses, setMode: (next) => (mode = next) };
-};
-
-// ---------------------------------------------------------------------------
-// 临时数据根：recent-projects 注册表 fixture + 项目目录
-// ---------------------------------------------------------------------------
-
-interface FixtureEntry {
-  nodeGraphId: string;
-  name: string;
-  path: string;
-  createdAt: number;
-  savedAt: number;
-  lastOpenedAt?: number | null;
-}
-
-const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-seam-'));
-const registryFixturePath = path.join(tempRoot, 'recent-projects.json');
-const projectsRoot = path.join(tempRoot, 'projects');
-const openProjectDir = path.join(projectsRoot, 'opened-project');
-const closedProjectDir = path.join(projectsRoot, 'closed-project');
-const OPEN_PROJECT_NAME = '接缝打开项目';
-const CLOSED_PROJECT_NAME = '接缝关闭项目';
-const baseRegistryEntries = (): FixtureEntry[] => [
-  {
-    nodeGraphId: 'ng-seam-open',
-    name: OPEN_PROJECT_NAME,
-    path: openProjectDir,
-    createdAt: 1,
-    savedAt: 2,
-    lastOpenedAt: 1700000000000,
-  },
-  {
-    nodeGraphId: 'ng-seam-closed',
-    name: CLOSED_PROJECT_NAME,
-    path: closedProjectDir,
-    createdAt: 3,
-    savedAt: 4,
-    lastOpenedAt: null,
-  },
-];
-
-const writeRegistryFixture = (entries: FixtureEntry[]): void => {
-  fs.writeFileSync(registryFixturePath, JSON.stringify(entries, null, 2), 'utf-8');
-};
-const readRegistryFixture = (): FixtureEntry[] =>
-  JSON.parse(fs.readFileSync(registryFixturePath, 'utf-8')) as FixtureEntry[];
-
-/**
- * 项目「已打开」状态（executor 的 hasOpenWindow 与分发器 getWindow 共用）。
- * app status（链路 D）扩展：多项目并存集合、查询时点焦点与画布加载态。
- */
-const seamState: {
-  openWindowProjectPath: string | null;
-  extraOpenProjectPaths: string[];
-  canvasLoading: boolean;
-  focusedProjectPath: string | null;
-} = {
-  openWindowProjectPath: null,
-  extraOpenProjectPaths: [],
-  canvasLoading: false,
-  focusedProjectPath: null,
-};
-
-// ---------------------------------------------------------------------------
-// 执行器依赖（数据源与执行后端注入面）
-// ---------------------------------------------------------------------------
-
-const buildExecutorDeps = (proxyWiring: ProxyWiring): Record<string, unknown> => ({
-  // 注册表数据源：临时 recent-projects.json fixture（真实文件 IO 往返）
-  readProjects: () => readRegistryFixture(),
-  windows: {
-    openOrFocus: async () => ({ ok: true as const }),
-    hasOpenWindow: (projectPath: string) => seamState.openWindowProjectPath === projectPath,
-    closeByProjectPath: () => {
-      seamState.openWindowProjectPath = null;
-      return true;
-    },
-    // app status 数据源（CLI-020/021）：枚举已打开项目快照；焦点与加载态按查询时点由
-    // seamState 承载（真实 BrowserWindow.isFocused/isLoading 的替身事实源）。
-    listOpenEditorProjects: () => {
-      const paths = [seamState.openWindowProjectPath, ...seamState.extraOpenProjectPaths].filter(
-        (candidate): candidate is string => candidate !== null,
-      );
-      return paths.map((projectPath) => ({
-        projectPath,
-        focused: seamState.focusedProjectPath === projectPath,
-        canvasLoading: seamState.canvasLoading,
-      }));
-    },
-  },
-  // 运行域转发端点：本接缝三条链路都不触达（有窗取消走代理通道；status/wait 不在范围），
-  // 注入恒失败并留痕，若被意外触达会在断言中显形。
-  forwarder: {
-    getJson: async (pathname: string) => ({
-      ok: false as const,
-      reason: 'network_error',
-      detail: `seam: forwarder not wired (${pathname})`,
-    }),
-    postJson: async (pathname: string, body: unknown) => {
-      console.debug('[cli-seam] forwarder.postJson unexpectedly called', { pathname, body });
-      return {
-        ok: false as const,
-        reason: 'network_error',
-        detail: `seam: forwarder not wired (${pathname})`,
-      };
-    },
-  },
-  storage: {
-    // 既有创建链的重名守卫契约：目标位置已存在同名项目目录时抛 PROJECT_NAME_CONFLICT
-    // （守卫实现属主进程存储服务，单层归其测试；本接缝验证 CLI 面的错误映射与目录不变性）。
-    createProject: (params: { parentDir: string; name: string }) => {
-      const target = path.join(params.parentDir, params.name);
-      if (fs.existsSync(target)) {
-        throw new Error('PROJECT_NAME_CONFLICT');
-      }
-      fs.mkdirSync(target);
-      const entries = readRegistryFixture();
-      entries.unshift({
-        nodeGraphId: `ng-${Date.now()}`,
-        name: params.name,
-        path: target,
-        createdAt: Date.now(),
-        savedAt: Date.now(),
-        lastOpenedAt: null,
-      });
-      writeRegistryFixture(entries);
-      return { projectPath: target };
-    },
-    deleteProject: (params: { projectPath: string }) => {
-      writeRegistryFixture(readRegistryFixture().filter((entry) => entry.path !== params.projectPath));
-    },
-    touchProjectOpenedAt: (projectPath: string, openedAt: number) => {
-      const entries = readRegistryFixture();
-      const entry = entries.find((candidate) => candidate.path === projectPath);
-      if (entry) entry.lastOpenedAt = openedAt;
-      writeRegistryFixture(entries);
-    },
-    readMediaAssets: () => [],
-    readMediaAssetById: () => null,
-    readAssetTaskIndex: () => new Map<string, string>(),
-    readTaskOutputAssets: () => [],
-    readCanvasNodePayloads: () => [],
-  },
-  proxy: {
-    dispatch: (projectPath: string, candidate: Record<string, unknown>) =>
-      proxyWiring.dispatcher.dispatch(projectPath, candidate),
-  },
-  pollIntervalMs: 10,
-});
-
-// ---------------------------------------------------------------------------
-// 生命周期与种床
-// ---------------------------------------------------------------------------
-
-let service: ServiceHandle;
-let client: ClientModule;
-let sharedWiring: ProxyWiring;
-
-const runCli = (argv: readonly string[]): Promise<CliClientRunResult> =>
-  client.runCliClient(argv, {
-    discoveryFilePath: service.discoveryFilePath,
-    pollIntervalMs: 10,
-  });
-
-/** CLI --json 成功输出 = 完整 CliCommandResponse，逐条过契约 schema（CLI-014 客户端侧断言口径）。 */
-const parseCliResponse = (result: CliClientRunResult): CliCommandResponse => {
-  // JSON.parse 按 TS lib 返回 any：先显式收窄为 unknown，形状由下方契约 schema parse 验证
-  //（仓库类型纪律：JSON.parse 结果不经断言直接使用会静默放行非法形状）。
-  const raw: unknown = JSON.parse(result.stdout);
-  const parsed = CliCommandResponseSchema.parse(raw);
-  expect(parsed).toEqual(raw);
-  return parsed;
-};
-
-/**
- * CLI --json 失败输出形状（沿 apps/desktop-shell/src/__tests__/cli-client.test.mts 口径）：
- * { ok:false, error:{code,message} }（不带 command 字段）。完整 CliCommandResponse 的两端
- * schema 校验由真实链路内嵌承载：服务端出站 safeParse（非法即 500 兜底）+ 客户端响应
- * safeParse（非法即退出码 2）——错误码能出现在 stdout 即已穿过两层真实契约校验。
- */
-const parseCliFailure = (result: CliClientRunResult): { code: string; message: string } => {
-  const body = JSON.parse(result.stdout) as { ok: boolean; error: { code: string; message: string } };
-  expect(body.ok).toBe(false);
-  return body.error;
-};
+import {
+  CLOSED_PROJECT_NAME,
+  OPEN_PROJECT_NAME,
+  closedProjectDir,
+  createMemberNodeViaStoreAction,
+  createProxyWiring,
+  findTaskNodeData,
+  getWiring,
+  groupNodes,
+  openProjectDir,
+  parseCliFailure,
+  parseCliResponse,
+  projectsRoot,
+  readRegistryFixture,
+  resetSeamForTest,
+  runCli,
+  seamState,
+  settleWithin,
+  sleep,
+  startCliSeamService,
+  stopCliSeamService,
+  tempRoot,
+} from './cli.seam.harness';
 
 const cancelTaskMock = vi.mocked(cancelTask);
 const submitGenerationBatchMock = vi.mocked(submitGenerationBatch);
 
-const createTestGraph = () =>
-  createNodeGraph({
-    name: 'cli-seam',
-    description: undefined,
-    tags: undefined,
-    category: undefined,
-  });
-
-const resetStores = async (): Promise<void> => {
-  useCanvasStore.setState((state) => {
-    state.nodeGraph = null;
-    state.mediaAssets = {};
-    state.selectedNodeIds = [];
-    state.selectedAnnotationIds = [];
-    state.history = [];
-    state.historyIndex = -1;
-    state.historyBatchActive = false;
-    state.deferredHistoryBaseline = null;
-  });
-  await useCanvasStore.getState().loadNodeGraph(createTestGraph());
-  useCanvasStore.setState((state) => {
-    state.ui.canvasContainerSize = { width: 1440, height: 900 };
-  });
-  usePromptDockStore.setState({
-    form: 'generate',
-    catalog: [],
-    catalogLoaded: true,
-    submitting: false,
-    preflightIssues: null,
-    draft: {
-      modelId: null,
-      modelVersion: null,
-      prompt: '',
-      arguments: {},
-      references: [],
-      promptPresetSnapshots: undefined,
-      taskCount: 1,
-    },
-  });
-  useRuntimeStore.setState({
-    backendBaseUrl: 'http://127.0.0.1:51999',
-    projectPath: openProjectDir,
-  });
-};
-
-/** 真实链路源头造成员节点：经真实 addNode action 创建，id 从 store 读回。 */
-const createMemberNodeViaStoreAction = (x: number, y: number): string => {
-  const created = useCanvasStore.getState().addNode('asset', { x, y }, undefined, undefined);
-  if (created === null) throw new Error('addNode failed to create asset node');
-  const graph = useCanvasStore.getState().nodeGraph;
-  const node = graph?.nodes.find((candidate) => candidate.id === created.id);
-  if (!node) throw new Error('created node missing from store');
-  return node.id;
-};
-
-const groupNodes = () =>
-  (useCanvasStore.getState().nodeGraph?.nodes ?? []).filter((node) => node.type === 'group');
-
-const findTaskNodeData = (taskId: string): TaskNodeData | null => {
-  const node = (useCanvasStore.getState().nodeGraph?.nodes ?? []).find(
-    (candidate) => candidate.type === 'task' && (candidate.data as TaskNodeData).taskId === taskId,
-  );
-  return node ? (node.data as TaskNodeData) : null;
-};
-
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-
-/** 有限等待观察分发器是否收口：断链时 pending 永不 resolve（内部通信不设超时，测试用有限等待观察）。 */
-const settleWithin = async (
-  promise: Promise<unknown>,
-  ms: number,
-): Promise<'settled' | 'pending'> =>
-  Promise.race([
-    promise.then(
-      () => 'settled' as const,
-      () => 'settled' as const,
-    ),
-    sleep(ms).then(() => 'pending' as const),
-  ]);
-
 beforeAll(async () => {
-  fs.mkdirSync(openProjectDir, { recursive: true });
-  fs.mkdirSync(closedProjectDir, { recursive: true });
-  writeRegistryFixture(baseRegistryEntries());
-
-  client = loadClientModule();
-  // 开窗判据含多项目并存集合（链路 D）：主开窗项目 + extraOpenProjectPaths
-  sharedWiring = createProxyWiring(
-    (projectPath) =>
-      seamState.openWindowProjectPath === projectPath || seamState.extraOpenProjectPaths.includes(projectPath),
-  );
-  const serviceModule = loadServiceModule();
-  service = await serviceModule.startCliControlService({
-    port: 0,
-    discoveryFilePath: path.join(tempRoot, 'cli-discovery.json'),
-    version: 'seam-test',
-    executorDeps: buildExecutorDeps(sharedWiring),
-  });
+  await startCliSeamService();
 });
 
 afterAll(async () => {
-  await service.stop();
-  fs.rmSync(tempRoot, { recursive: true, force: true });
+  await stopCliSeamService();
 });
 
 beforeEach(async () => {
-  writeRegistryFixture(baseRegistryEntries());
-  seamState.openWindowProjectPath = openProjectDir;
-  seamState.extraOpenProjectPaths = [];
-  seamState.canvasLoading = false;
-  seamState.focusedProjectPath = openProjectDir;
   cancelTaskMock.mockReset();
   submitGenerationBatchMock.mockReset();
-  await resetStores();
+  await resetSeamForTest();
 });
 
 // ---------------------------------------------------------------------------
@@ -572,7 +227,7 @@ describe('链路 B：画布命令 / 任务取消全链', () => {
   it('canvas group create 全链：真实 store 建成员 → CLI → 控制服务 → 分发器 → 接收器建组 → 响应回 CLI（CLI-010 主链）', async () => {
     const memberA = createMemberNodeViaStoreAction(10, 10);
     const memberB = createMemberNodeViaStoreAction(300, 10);
-    const requestsBefore = sharedWiring.capturedRequests.length;
+    const requestsBefore = getWiring().capturedRequests.length;
 
     const result = await runCli([
       'canvas',
@@ -593,7 +248,7 @@ describe('链路 B：画布命令 / 任务取消全链', () => {
       throw new Error(`expected canvas.group.create success response, got ${result.stdout}`);
     }
     // 分发器真实发出了命令载荷（主进程 → 画布窗口腿）
-    expect(sharedWiring.capturedRequests.length).toBe(requestsBefore + 1);
+    expect(getWiring().capturedRequests.length).toBe(requestsBefore + 1);
     // 新组 id 即真实 store 中创建的组节点 id；成员归属指向新组
     const graph = useCanvasStore.getState().nodeGraph;
     const groupNode = graph?.nodes.find((candidate) => candidate.id === response.group_node_id);
@@ -719,7 +374,7 @@ describe('链路 B：画布命令 / 任务取消全链', () => {
 
   it('画布命令项目未打开守卫：CLI 收到 project_not_open，画布无任何写入、代理通道未被触达（CLI-007 主链）', async () => {
     const nodesBefore = useCanvasStore.getState().nodeGraph?.nodes.length ?? 0;
-    const requestsBefore = sharedWiring.capturedRequests.length;
+    const requestsBefore = getWiring().capturedRequests.length;
 
     const result = await runCli([
       'canvas',
@@ -740,7 +395,7 @@ describe('链路 B：画布命令 / 任务取消全链', () => {
     // 编辑域存储无任何写入、命令未进入代理执行通道
     expect(useCanvasStore.getState().nodeGraph?.nodes.length).toBe(nodesBefore);
     expect(groupNodes()).toHaveLength(0);
-    expect(sharedWiring.capturedRequests.length).toBe(requestsBefore);
+    expect(getWiring().capturedRequests.length).toBe(requestsBefore);
   });
 });
 
@@ -883,7 +538,7 @@ describe('链路 D：app status 应用状态感知（CLI-020/CLI-021 主链）',
       pendingAnnotationBinding: null,
     });
     const storeBefore = useCanvasStore.getState();
-    const requestsBefore = sharedWiring.capturedRequests.length;
+    const requestsBefore = getWiring().capturedRequests.length;
 
     const result = await runCli(['app', 'status', '--json']);
 
@@ -902,8 +557,8 @@ describe('链路 D：app status 应用状态感知（CLI-020/CLI-021 主链）',
     });
     expect(entry).toMatchObject({ name: OPEN_PROJECT_NAME, focused: true });
     // 代理只读命令真实发出（主进程 → 画布窗口腿）
-    expect(sharedWiring.capturedRequests.length).toBe(requestsBefore + 1);
-    expect(sharedWiring.capturedRequests.at(-1)).toMatchObject({ command: 'canvas.selection.get' });
+    expect(getWiring().capturedRequests.length).toBe(requestsBefore + 1);
+    expect(getWiring().capturedRequests.at(-1)).toMatchObject({ command: 'canvas.selection.get' });
     // 只读不写：历史与画布结构不变（不进撤销栈、不产生任何写入，spec §6.3 只读查询条款）
     expect(useCanvasStore.getState().history.length).toBe(storeBefore.history.length);
     expect(useCanvasStore.getState().historyIndex).toBe(storeBefore.historyIndex);
@@ -951,7 +606,7 @@ describe('链路 D：app status 应用状态感知（CLI-020/CLI-021 主链）',
   it('无项目打开 → 空集合且命令成功，不触达代理通道（CLI-020）', async () => {
     seamState.openWindowProjectPath = null;
     seamState.extraOpenProjectPaths = [];
-    const requestsBefore = sharedWiring.capturedRequests.length;
+    const requestsBefore = getWiring().capturedRequests.length;
 
     const result = await runCli(['app', 'status', '--json']);
 
@@ -961,13 +616,13 @@ describe('链路 D：app status 应用状态感知（CLI-020/CLI-021 主链）',
       throw new Error(`expected app.status success response, got ${result.stdout}`);
     }
     expect(response.opened_projects).toEqual([]);
-    expect(sharedWiring.capturedRequests.length).toBe(requestsBefore);
+    expect(getWiring().capturedRequests.length).toBe(requestsBefore);
   });
 
   it('画布未就绪两形态 → 选中态 null 且命令成功（CLI-021）：页面加载中不分发查询；nodeGraph 未载入由接收器回 null', async () => {
     // 形态 1：画布页面仍在加载（主进程侧 isLoading）→ 不向该窗口分发查询，选中态 null
     seamState.canvasLoading = true;
-    const requestsBefore = sharedWiring.capturedRequests.length;
+    const requestsBefore = getWiring().capturedRequests.length;
     const loadingResult = await runCli(['app', 'status', '--json']);
     expect(loadingResult.exitCode).toBe(0);
     const loadingResponse = parseCliResponse(loadingResult);
@@ -976,7 +631,7 @@ describe('链路 D：app status 应用状态感知（CLI-020/CLI-021 主链）',
     }
     expect(loadingResponse.opened_projects).toHaveLength(1);
     expect(loadingResponse.opened_projects[0]?.selection).toBeNull();
-    expect(sharedWiring.capturedRequests.length).toBe(requestsBefore);
+    expect(getWiring().capturedRequests.length).toBe(requestsBefore);
 
     // 形态 2：页面已加载完但画布数据未就绪（nodeGraph null）→ 查询分发到接收器，原路返回 selection null
     seamState.canvasLoading = false;
@@ -993,7 +648,314 @@ describe('链路 D：app status 应用状态感知（CLI-020/CLI-021 主链）',
     }
     expect(notReadyResponse.opened_projects).toHaveLength(1);
     expect(notReadyResponse.opened_projects[0]?.selection).toBeNull();
-    expect(sharedWiring.capturedRequests.length).toBe(requestsBefore + 1);
-    expect(sharedWiring.capturedRequests.at(-1)).toMatchObject({ command: 'canvas.selection.get' });
+    expect(getWiring().capturedRequests.length).toBe(requestsBefore + 1);
+    expect(getWiring().capturedRequests.at(-1)).toMatchObject({ command: 'canvas.selection.get' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 链路 E：asset import 素材导入全链（CLI-047）
+// ---------------------------------------------------------------------------
+
+// 假 storage IPC 桥（Electron 桥边界替身，沿 cliProxyReceiver.assetImport.test.ts 惯例）：
+// 真实链路里 storage:* 通道由 preload 暴露、Main 存储服务实现；本接缝只提供按契约构造的
+// 响应。挂/卸时机：共享 beforeEach 的 resetStores（loadNodeGraph）依赖 window.electron
+// 缺席判定非 Hub 运行时、不拉启动设置，故本 describe 在用例级挂桥、afterEach 卸桥
+// （内层 afterEach 先于下一用例的共享 beforeEach 执行）。
+// 另：图片尺寸测量用的 Image 是 node 环境缺失的浏览器原语（真实窗口由浏览器提供），
+// 按界面语义替身；缩略图生成的远端边界已由文件级 vi.mock 挡掉。
+
+type ReadFileBytesInvoke = (args: StorageReadFileBytesParams) => Promise<StorageReadFileBytesResult>;
+type ImportLocalMediaInvoke = (args: StorageImportLocalMediaParams) => Promise<StorageImportLocalMediaResult>;
+type UpsertMediaAssetInvoke = (args: StorageUpsertMediaAssetParams) => Promise<StorageUpsertMediaAssetResult>;
+
+const readFileBytesMock = vi.fn<ReadFileBytesInvoke>();
+const importLocalMediaMock = vi.fn<ImportLocalMediaInvoke>();
+const upsertMediaAssetMock = vi.fn<UpsertMediaAssetInvoke>();
+
+/** 真实可解析的 1x1 PNG 字节（存储边界返回什么，导入链就原样消费什么）。 */
+const SEAM_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const SEAM_PNG_BYTES = Buffer.from(SEAM_PNG_BASE64, 'base64').length;
+
+/** 挂载假 storage IPC 桥 + 浏览器 Image 原语替身（见上方时机说明）。 */
+const installFakeStorageBridge = (): void => {
+  vi.stubGlobal('window', {
+    electron: {
+      storage: {
+        'storage:read-file-bytes': (args: StorageReadFileBytesParams) => readFileBytesMock(args),
+        'storage:import-local-media': (args: StorageImportLocalMediaParams) => importLocalMediaMock(args),
+        'storage:upsert-media-asset': (args: StorageUpsertMediaAssetParams) => upsertMediaAssetMock(args),
+      },
+    },
+  });
+  vi.stubGlobal(
+    'Image',
+    class SeamMeasurementImage {
+      naturalWidth = 800;
+      naturalHeight = 600;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    },
+  );
+};
+
+/** 存储侧资产登记结果（形状对齐 MediaAsset 契约，字段语义同 schema）。 */
+const buildStoredMediaAsset = (overrides: {
+  id: string;
+  mediaType: MediaAsset['mediaType'];
+  url: string;
+  width?: number | null;
+  height?: number | null;
+}): MediaAsset => ({
+  id: overrides.id,
+  mediaType: overrides.mediaType,
+  original: {
+    url: overrides.url,
+    projectRef: null,
+    fileKey: overrides.url.startsWith('local-media://') ? overrides.url.slice('local-media://'.length) : null,
+    sourceUrl: null,
+    sourceFileName: null,
+    mimeType:
+      overrides.mediaType === 'image' ? 'image/png' : overrides.mediaType === 'audio' ? 'audio/mpeg' : 'video/mp4',
+    sizeBytes: SEAM_PNG_BYTES,
+    width: overrides.width ?? null,
+    height: overrides.height ?? null,
+    durationMs: null,
+    fps: null,
+  },
+  thumbnail: {
+    url: null,
+    mimeType: null,
+    width: null,
+    height: null,
+    status: 'missing',
+    generatedAt: null,
+    error: null,
+  },
+  lifecycle: { createdAt: 1, updatedAt: 1 },
+});
+
+describe('链路 E：asset import 素材导入全链（CLI-047）', () => {
+  beforeEach(() => {
+    readFileBytesMock.mockReset();
+    importLocalMediaMock.mockReset();
+    upsertMediaAssetMock.mockReset();
+    installFakeStorageBridge();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('asset import 全链：CLI → 控制服务 → 执行器 → 分发器 → 接收器真实执行 → 既有导入链写盘登记 → 图片素材节点落图 → 响应回 CLI（CLI-047 主链）', async () => {
+    const photoPath = path.join(tempRoot, '导入源', 'cli-photo.png');
+    readFileBytesMock.mockResolvedValue({ dataBase64: SEAM_PNG_BASE64, sizeBytes: SEAM_PNG_BYTES });
+    importLocalMediaMock.mockResolvedValue({
+      url: 'local-media://image/cli-photo.png',
+      fileName: 'cli-photo.png',
+      isNew: true,
+      sizeBytes: SEAM_PNG_BYTES,
+    });
+    upsertMediaAssetMock.mockResolvedValue({
+      assetId: 'asset_seam_import_1',
+      asset: buildStoredMediaAsset({
+        id: 'asset_seam_import_1',
+        mediaType: 'image',
+        url: 'local-media://image/cli-photo.png',
+        width: 800,
+        height: 600,
+      }),
+    });
+    const requestsBefore = getWiring().capturedRequests.length;
+    const responsesBefore = getWiring().capturedResponses.length;
+    const nodesBefore = useCanvasStore.getState().nodeGraph?.nodes.length ?? 0;
+
+    const result = await runCli([
+      'asset', 'import',
+      '--project', OPEN_PROJECT_NAME,
+      '--file', photoPath,
+      '--json',
+    ]);
+
+    // B 命令面：CLI --json 成功响应 = 完整 CliCommandResponse，逐条过契约 schema
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    const response = parseCliResponse(result);
+    if (!response.ok || response.command !== 'asset.import') {
+      throw new Error(`expected asset.import success response, got ${result.stdout}`);
+    }
+    expect(response.imported).toHaveLength(1);
+    const entry = response.imported[0];
+    if (entry === undefined) throw new Error('expected one imported entry');
+    expect(entry).toMatchObject({
+      file_name: 'cli-photo.png',
+      asset_id: 'asset_seam_import_1',
+      media_type: 'image',
+    });
+
+    // C 代理面（主进程 → 画布窗口腿）：分发器真实发出的命令载荷过 CliProxyCommandSchema
+    expect(getWiring().capturedRequests.length).toBe(requestsBefore + 1);
+    const command = CliProxyCommandSchema.parse(getWiring().capturedRequests.at(-1));
+    if (command.command !== 'asset.import') {
+      throw new Error(`expected asset.import proxy command, got ${JSON.stringify(command)}`);
+    }
+    expect(command.file).toEqual([photoPath]);
+    // C 代理面（画布窗口 → 主进程腿）：接收器真实产出的响应载荷独立过 CliProxyCommandResponseSchema
+    //（接收器发送前已自校验；此处再喂消费者同一份契约 schema，防形状漂移），imported 与 B 面一致
+    expect(getWiring().capturedResponses.length).toBe(responsesBefore + 1);
+    const proxyResponse = CliProxyCommandResponseSchema.parse(getWiring().capturedResponses.at(-1));
+    expect(proxyResponse).toMatchObject({ command: 'asset.import', request_id: command.request_id });
+    if (!('imported' in proxyResponse)) throw new Error('expected proxy asset.import result payload');
+    expect(proxyResponse.imported).toEqual(response.imported);
+
+    // 画布产物：素材节点经真实 addNode 落图（类型 + 资产标识 + 持久化 URL，与界面拖入同一 data 形状）
+    const graph = useCanvasStore.getState().nodeGraph;
+    expect(graph?.nodes.length).toBe(nodesBefore + 1);
+    const node = graph?.nodes.find((candidate) => candidate.id === entry.node_id);
+    expect(node?.type).toBe('imageInput');
+    expect(node?.data).toMatchObject({
+      assetId: 'asset_seam_import_1',
+      imageUrl: 'local-media://image/cli-photo.png',
+      valueSource: 'upload',
+    });
+
+    // storage 边界载荷：读字节 → 写盘登记（原始文件名 + MIME）→ 资产登记（图片尺寸对齐界面语义）
+    expect(readFileBytesMock).toHaveBeenCalledTimes(1);
+    expect(readFileBytesMock).toHaveBeenCalledWith({ filePath: photoPath });
+    expect(importLocalMediaMock).toHaveBeenCalledWith({
+      projectPath: openProjectDir,
+      fileDataBase64: SEAM_PNG_BASE64,
+      mimeType: 'image/png',
+      originalFileName: 'cli-photo.png',
+    });
+    const upsertCall = upsertMediaAssetMock.mock.calls[0]?.[0];
+    expect(upsertCall?.projectPath).toBe(openProjectDir);
+    expect(upsertCall?.params).toMatchObject({
+      mediaType: 'image',
+      url: 'local-media://image/cli-photo.png',
+      sourceFileName: 'cli-photo.png',
+      width: 800,
+      height: 600,
+    });
+
+    // 整批导入合批（与界面导入同机制）：合批位已复位，一步撤销移除导入节点
+    expect(useCanvasStore.getState().historyBatchActive).toBe(false);
+    useCanvasStore.getState().undo();
+    expect(
+      useCanvasStore.getState().nodeGraph?.nodes.find((candidate) => candidate.id === entry.node_id),
+    ).toBeUndefined();
+  });
+
+  it('asset import --file 可重复且路径不按逗号拆分（pathList）：批量逐文件建对应类型素材节点、整批排成一块、一步撤销（CLI-047 参数面 + 批量链）', async () => {
+    // 带逗号路径：pathList 语义整项原样累积——若被当 stringList 拆分会立刻断链（读字节未命中）
+    const imagePath = path.join(tempRoot, '导入源,备份', 'cli-photo,副本.png');
+    const audioPath = path.join(tempRoot, '导入源', 'cli-voice.mp3');
+    readFileBytesMock.mockImplementation(async (args) => {
+      if (args.filePath === imagePath) return { dataBase64: SEAM_PNG_BASE64, sizeBytes: SEAM_PNG_BYTES };
+      if (args.filePath === audioPath) return { dataBase64: 'BwgJ', sizeBytes: 3 };
+      throw new Error(`unexpected path: ${args.filePath}`);
+    });
+    importLocalMediaMock.mockImplementation(async (args) => ({
+      url: `local-media://${args.originalFileName}`,
+      fileName: args.originalFileName,
+      isNew: true,
+      sizeBytes: 3,
+    }));
+    upsertMediaAssetMock.mockImplementation(async (args) => ({
+      assetId: `asset_seam_${args.params.mediaType}`,
+      asset: buildStoredMediaAsset({
+        id: `asset_seam_${args.params.mediaType}`,
+        mediaType: args.params.mediaType,
+        url: args.params.url,
+      }),
+    }));
+
+    const result = await runCli([
+      'asset', 'import',
+      '--project', OPEN_PROJECT_NAME,
+      '--file', imagePath,
+      '--file', audioPath,
+      '--json',
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    const response = parseCliResponse(result);
+    if (!response.ok || response.command !== 'asset.import') {
+      throw new Error(`expected asset.import success response, got ${result.stdout}`);
+    }
+    // 按输入顺序逐文件回传：文件名含逗号原样保留（未被拆分），媒体类型按扩展名判定
+    expect(response.imported.map((entry) => [entry.file_name, entry.media_type])).toEqual([
+      ['cli-photo,副本.png', 'image'],
+      ['cli-voice.mp3', 'audio'],
+    ]);
+    const command = CliProxyCommandSchema.parse(getWiring().capturedRequests.at(-1));
+    if (command.command !== 'asset.import') {
+      throw new Error(`expected asset.import proxy command, got ${JSON.stringify(command)}`);
+    }
+    expect(command.file).toEqual([imagePath, audioPath]);
+
+    // 节点类型一一对应；同批排成一块（同行 y 相同、横向步进）
+    const graph = useCanvasStore.getState().nodeGraph;
+    const nodes = response.imported.map((entry) =>
+      graph?.nodes.find((candidate) => candidate.id === entry.node_id),
+    );
+    expect(nodes.map((node) => node?.type)).toEqual(['imageInput', 'audioInput']);
+    const positions = nodes.map((node) => node?.position);
+    expect(positions[0]?.y).toBe(positions[1]?.y);
+    expect(positions[1]?.x ?? 0).toBeGreaterThan(positions[0]?.x ?? 0);
+
+    // 整批一条撤销：一次 undo 移除全部导入节点（合批语义）
+    useCanvasStore.getState().undo();
+    for (const entry of response.imported) {
+      expect(
+        useCanvasStore.getState().nodeGraph?.nodes.find((candidate) => candidate.id === entry.node_id),
+      ).toBeUndefined();
+    }
+  });
+
+  it('asset import 文件不可读：画布侧前置校验 file_not_found 一路透传到 CLI 响应、点名文件，零写盘零建节点（CLI-047 错误链）', async () => {
+    const readablePath = path.join(tempRoot, '导入源', 'cli-photo.png');
+    const missingPath = path.join(tempRoot, '导入源', 'missing-photo.png');
+    readFileBytesMock.mockImplementation(async (args) => {
+      if (args.filePath === readablePath) return { dataBase64: SEAM_PNG_BASE64, sizeBytes: SEAM_PNG_BYTES };
+      throw new Error(`ENOENT: no such file or directory, open '${args.filePath}'`);
+    });
+    const responsesBefore = getWiring().capturedResponses.length;
+    const nodesBefore = useCanvasStore.getState().nodeGraph?.nodes.length ?? 0;
+    const historyBefore = useCanvasStore.getState().history.length;
+
+    const result = await runCli([
+      'asset', 'import',
+      '--project', OPEN_PROJECT_NAME,
+      '--file', readablePath,
+      '--file', missingPath,
+      '--json',
+    ]);
+
+    // CLI 面：退出码 1 + file_not_found，message 点名不可读文件（错误源自画布侧前置校验、原样透传）
+    expect(result.exitCode).toBe(1);
+    const error = parseCliFailure(result);
+    expect(error.code).toBe('file_not_found');
+    expect(error.message).toContain(missingPath);
+    // C 代理面：接收器真实产出的响应载荷同为 file_not_found（同一响应独立过契约 schema）
+    expect(getWiring().capturedResponses.length).toBe(responsesBefore + 1);
+    const proxyResponse = CliProxyCommandResponseSchema.parse(getWiring().capturedResponses.at(-1));
+    expect(proxyResponse).toMatchObject({ command: 'asset.import', error: { code: 'file_not_found' } });
+    if (!('error' in proxyResponse)) throw new Error('expected proxy asset.import error payload');
+    expect(proxyResponse.error.message).toContain(missingPath);
+
+    // 前置校验原子性（零副作用）：可读文件先被读过（整批校验先于任何写入），第二件失败即整体拒绝，
+    // 不发生任何写盘/登记/建节点/入历史
+    expect(readFileBytesMock).toHaveBeenCalledTimes(2);
+    expect(importLocalMediaMock).not.toHaveBeenCalled();
+    expect(upsertMediaAssetMock).not.toHaveBeenCalled();
+    expect(useCanvasStore.getState().nodeGraph?.nodes.length).toBe(nodesBefore);
+    expect(useCanvasStore.getState().history.length).toBe(historyBefore);
+    expect(useCanvasStore.getState().historyBatchActive).toBe(false);
   });
 });

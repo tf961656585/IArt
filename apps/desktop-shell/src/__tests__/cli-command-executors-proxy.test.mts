@@ -341,6 +341,99 @@ describe("cli-command-executors 画布命令 / 生成提交（代理执行通道
   });
 });
 
+// @spec: CLI-047
+describe("cli-command-executors asset.import（素材导入，代理执行通道）", () => {
+  it("项目未打开 → project_not_open（CLI-007），不触达代理通道", async () => {
+    const { registry, proxyCalls } = buildRegistry({ windowOpen: false });
+    const result = await runExecutor(registry, "asset.import", {
+      command: "asset.import",
+      project: "demo",
+      file: ["/tmp/a.png"],
+    });
+    expect(parseResponse(result)).toMatchObject({ ok: false, error: { code: "project_not_open" } });
+    expect(proxyCalls).toHaveLength(0);
+    expect(result.errorCode).toBe("project_not_open");
+  });
+
+  it("有窗口 → --file 路径清单原样进代理候选，导入结果（imported）直通", async () => {
+    const { registry, proxyCalls } = buildRegistry({
+      windowOpen: true,
+      dispatchOutcome: {
+        ok: true,
+        response: {
+          command: "asset.import",
+          request_id: "r-ai-1",
+          imported: [
+            { file_name: "a.png", asset_id: "asset-1", node_id: "node-1", media_type: "image" },
+            { file_name: "b.mp4", asset_id: "asset-2", node_id: "node-2", media_type: "video" },
+          ],
+        },
+      },
+    });
+    const result = await runExecutor(registry, "asset.import", {
+      command: "asset.import",
+      project: "demo",
+      file: ["/tmp/a.png", "/tmp/b.mp4"],
+    });
+    const parsed = parseResponse(result);
+    if (!parsed.ok || parsed.command !== "asset.import") throw new Error("unexpected");
+    expect(parsed.imported).toEqual([
+      { file_name: "a.png", asset_id: "asset-1", node_id: "node-1", media_type: "image" },
+      { file_name: "b.mp4", asset_id: "asset-2", node_id: "node-2", media_type: "video" },
+    ]);
+    expect(result.errorCode).toBeNull();
+    expect(proxyCalls).toHaveLength(1);
+    expect(proxyCalls[0]).toMatchObject({
+      projectPath: PROJECT_PATH,
+      candidate: { command: "asset.import", file: ["/tmp/a.png", "/tmp/b.mp4"] },
+    });
+  });
+
+  it("画布窗口侧前置校验错误（file_not_found / unsupported_file_type）错误码与 message 原样透传", async () => {
+    const cases = [
+      { code: "file_not_found", message: "找不到文件：/tmp/ghost.png" },
+      { code: "unsupported_file_type", message: "不支持的文件类型：/tmp/readme.txt" },
+    ] as const;
+    for (const entry of cases) {
+      const { registry } = buildRegistry({
+        windowOpen: true,
+        dispatchOutcome: {
+          ok: true,
+          response: {
+            command: "asset.import",
+            request_id: `r-ai-err-${entry.code}`,
+            error: { code: entry.code, message: entry.message },
+          },
+        },
+      });
+      const result = await runExecutor(registry, "asset.import", {
+        command: "asset.import",
+        project: "demo",
+        file: ["/tmp/ghost.png"],
+      });
+      expect(parseResponse(result)).toMatchObject({
+        ok: false,
+        error: { code: entry.code, message: entry.message },
+      });
+      expect(result.errorCode).toBe(entry.code);
+    }
+  });
+
+  it("竞态：守卫后窗口被关闭（dispatch no_window）→ project_not_open", async () => {
+    const { registry } = buildRegistry({
+      windowOpen: true,
+      dispatchOutcome: { ok: false, reason: "no_window", detail: "画布窗口已关闭" },
+    });
+    const result = await runExecutor(registry, "asset.import", {
+      command: "asset.import",
+      project: "demo",
+      file: ["/tmp/a.png"],
+    });
+    expect(parseResponse(result)).toMatchObject({ ok: false, error: { code: "project_not_open" } });
+    expect(result.errorCode).toBe("project_not_open");
+  });
+});
+
 describe("cli-command-executors task.cancel 两形态（CLI-012）", () => {
   it("项目已打开 → 代理通道（用户取消链），不触达运行域端点", async () => {
     const { registry, proxyCalls, postCalls } = buildRegistry({

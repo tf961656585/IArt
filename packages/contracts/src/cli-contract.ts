@@ -13,6 +13,7 @@ import {
   CliCanvasSelectionSchema,
   CliTaskCanvasIdentitySchema,
 } from './cli-canvas-contract';
+import { CliAssetImportParamsSchema, CliAssetImportResultSchema } from './cli-asset-import-contract';
 
 /**
  * CLI 与本地 Agent 集成契约（contracts 层）—— `iart` 命令面、代理执行通道与设置页状态 DTO 的
@@ -64,7 +65,8 @@ export type { CliErrorCode, CliError } from './cli-error-code';
 
 /**
  * 命令名清单：`iart <名词> <动作>` 的线上一面，顺序对齐 spec §5.1–§5.5（batch.get 归 §5.2 只读查询）。
- * 共 24 条：项目生命周期 6 + 只读查询 9 + 画布命令 5 + 生成与任务 3 + 应用状态感知 1。
+ * 共 25 条：项目生命周期 6 + 只读查询 9 + 画布命令 6（asset.import 入口在资产域、执行归画布命令
+ * 通道与撤销语义）+ 生成与任务 3 + 应用状态感知 1。
  */
 export const CLI_COMMANDS = [
   'project.list',
@@ -79,6 +81,7 @@ export const CLI_COMMANDS = [
   'asset.get',
   'canvas.nodes.list',
   'canvas.group.list',
+  'asset.import',
   'canvas.group.create',
   'canvas.group.dissolve',
   'canvas.node.move',
@@ -290,6 +293,13 @@ export const CliCommandRequestSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('canvas.group.list'), project: ProjectParamSchema }).strict(),
   z
     .object({
+      command: z.literal('asset.import'),
+      project: ProjectParamSchema,
+      ...CliAssetImportParamsSchema.shape,
+    })
+    .strict(),
+  z
+    .object({
       command: z.literal('canvas.group.create'),
       project: ProjectParamSchema,
       ...CliCanvasGroupCreateParamsSchema.shape,
@@ -452,6 +462,19 @@ export type {
   CliCanvasSelection,
 } from './cli-canvas-contract';
 
+// 素材导入 DTO（asset import：参数 / 产物条目 / 结果）承载在 cli-asset-import-contract.ts
+// （行数预算拆分，先例同上）；此处 import 供判别变体组合复用，并 re-export 保持单一取用面。
+export {
+  CliAssetImportParamsSchema,
+  CliImportedAssetEntrySchema,
+  CliAssetImportResultSchema,
+} from './cli-asset-import-contract';
+export type {
+  CliAssetImportParams,
+  CliImportedAssetEntry,
+  CliAssetImportResult,
+} from './cli-asset-import-contract';
+
 /**
  * app.status 的单个已打开项目条目（spec §5.5/CLI-020：名称、路径、查询时点焦点）。
  * 每项目至多一项（每项目至多一个画布窗口）；选中态为 null 表示画布尚未就绪（CLI-021，命令不失败）。
@@ -571,6 +594,14 @@ export const CliCommandSuccessResponseSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('canvas.nodes.list'), ok: z.literal(true), nodes: z.array(CliCanvasNodeEntrySchema) }).strict(),
   // 组/容器清单（spec §5.2 / CLI-045）：存储只读投影。
   z.object({ command: z.literal('canvas.group.list'), ok: z.literal(true), groups: z.array(CliCanvasGroupSummarySchema) }).strict(),
+  // 素材导入（CLI-047）：结果与代理执行通道共享同一形状（CliAssetImportResultSchema，不复制字段）。
+  z
+    .object({
+      command: z.literal('asset.import'),
+      ok: z.literal(true),
+      ...CliAssetImportResultSchema.shape,
+    })
+    .strict(),
   z.object({ command: z.literal('canvas.group.create'), ok: z.literal(true), group_node_id: z.string().min(1) }).strict(),
   /** 解散结果：目标容器标识 + 受影响成员列表（成员保留画布原位，归属解除）。 */
   z
@@ -662,6 +693,7 @@ export const CliCommandErrorResponseSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('asset.get'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.nodes.list'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.group.list'), ok: z.literal(false), error: CliErrorSchema }).strict(),
+  z.object({ command: z.literal('asset.import'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.group.create'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.group.dissolve'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.node.move'), ok: z.literal(false), error: CliErrorSchema }).strict(),
@@ -691,6 +723,15 @@ export type CliCommandResponse = z.infer<typeof CliCommandResponseSchema>;
 // 参数形状与 B 命令面共用共享参数 schema（不复制）；画布窗口无响应时命令挂起，通道不设超时。
 
 export const CliProxyCommandSchema = z.discriminatedUnion('command', [
+  z
+    .object({
+      command: z.literal('asset.import'),
+      request_id: z.string().min(1),
+      // 参数与 B 命令面共享同一 schema（CliAssetImportParamsSchema，不复制字段）；
+      // 执行经画布窗口内既有导入链路（与界面导入同一机制，进撤销栈）。
+      ...CliAssetImportParamsSchema.shape,
+    })
+    .strict(),
   z
     .object({
       command: z.literal('canvas.group.create'),
@@ -754,6 +795,14 @@ export const CliProxyCommandSchema = z.discriminatedUnion('command', [
 export type CliProxyCommand = z.infer<typeof CliProxyCommandSchema>;
 
 export const CliProxyCommandResultSchema = z.discriminatedUnion('command', [
+  z
+    .object({
+      command: z.literal('asset.import'),
+      request_id: z.string().min(1),
+      // 结果与 B 命令面共享同一形状（CliAssetImportResultSchema，不复制字段）。
+      ...CliAssetImportResultSchema.shape,
+    })
+    .strict(),
   z
     .object({
       command: z.literal('canvas.group.create'),
@@ -830,6 +879,14 @@ export const CliProxyCommandResultSchema = z.discriminatedUnion('command', [
 export type CliProxyCommandResult = z.infer<typeof CliProxyCommandResultSchema>;
 
 export const CliProxyCommandErrorSchema = z.discriminatedUnion('command', [
+  z
+    .object({
+      command: z.literal('asset.import'),
+      request_id: z.string().min(1),
+      /** 前置校验不通过（文件不存在/不可读/类型不支持）或画布侧拦截时携带定位信息。 */
+      error: CliErrorSchema,
+    })
+    .strict(),
   z
     .object({
       command: z.literal('canvas.group.create'),

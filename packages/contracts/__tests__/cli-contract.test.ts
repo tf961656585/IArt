@@ -122,6 +122,7 @@ const requestSamples: Record<CliCommandName, Record<string, unknown>> = {
   'asset.get': { project: PROJECT, asset_id: 'asset_1' },
   'canvas.nodes.list': { project: PROJECT },
   'canvas.group.list': { project: PROJECT },
+  'asset.import': { project: PROJECT, file: ['/tmp/media/a.png', '/tmp/media/b.mp4'] },
   'canvas.group.create': { project: PROJECT, name: '角色组', members: ['node_1'] },
   'canvas.group.dissolve': { project: PROJECT, group: 'group_1' },
   'canvas.node.move': { project: PROJECT, node: 'node_1', x: -120, y: 240.5 },
@@ -159,6 +160,12 @@ const successSamples: Record<CliCommandName, Record<string, unknown>> = {
       { group_node_id: 'agent_1', name: '助理', type: 'agent_container', member_count: 0 },
     ],
   },
+  'asset.import': {
+    imported: [
+      { file_name: 'a.png', asset_id: 'asset_1', node_id: 'node_1', media_type: 'image' },
+      { file_name: 'b.mp4', asset_id: 'asset_2', node_id: 'node_2', media_type: 'video' },
+    ],
+  },
   'canvas.group.create': { group_node_id: 'group_1' },
   'canvas.group.dissolve': { dissolved: true, group_node_id: 'group_1', member_ids: ['node_1', 'node_2'] },
   'canvas.node.move': { node_id: 'node_1', position: { x: -120, y: 240.5 }, moved_node_ids: ['node_1'] },
@@ -190,7 +197,7 @@ const successSamples: Record<CliCommandName, Record<string, unknown>> = {
 };
 
 describe('CLI 错误码枚举（spec §9）', () => {
-  it('与 spec §9 表格一一对应（17 个，语义顺序一致）', () => {
+  it('与 spec §9 表格一一对应（19 个，语义顺序一致）', () => {
     expect([...CLI_ERROR_CODES]).toEqual([
       'not_running',
       'auth_failed',
@@ -199,6 +206,8 @@ describe('CLI 错误码枚举（spec §9）', () => {
       'project_name_conflict',
       'project_not_open',
       'asset_not_found',
+      'file_not_found',
+      'unsupported_file_type',
       'batch_not_found',
       'node_not_found',
       'group_not_found',
@@ -220,9 +229,9 @@ describe('CLI 错误码枚举（spec §9）', () => {
 });
 
 describe('CLI 命令请求判别联合（spec §5）', () => {
-  it('命令清单共 24 条且判别值唯一', () => {
-    expect(CLI_COMMANDS).toHaveLength(24);
-    expect(new Set(CLI_COMMANDS).size).toBe(24);
+  it('命令清单共 25 条且判别值唯一', () => {
+    expect(CLI_COMMANDS).toHaveLength(25);
+    expect(new Set(CLI_COMMANDS).size).toBe(25);
     expect(() => CliCommandNameSchema.parse('project.list')).not.toThrow();
   });
 
@@ -402,6 +411,14 @@ describe('CLI 命令响应判别联合（spec §5 统一信封）', () => {
 
 describe('代理执行通道命令契约（spec §6.3）', () => {
   it('五类命令的合法样例 parse 通过', () => {
+    // 素材导入（CLI-047）：file 为路径列表（至少一个），参数与 B 命令面同形。
+    expect(
+      CliProxyCommandSchema.safeParse({
+        command: 'asset.import',
+        request_id: 'req_0',
+        file: ['/tmp/media/a.png'],
+      }).success,
+    ).toBe(true);
     expect(
       CliProxyCommandSchema.safeParse({
         command: 'canvas.group.create',

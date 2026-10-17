@@ -448,6 +448,41 @@ describe("parseCliArgs（参数名 → 契约字段映射表）", () => {
     expect(bare.request).toEqual({ command: "canvas.layout", project: "P", scope: "all" });
   });
 
+  it("asset import：--file 重复累积为数组且含逗号路径不拆分；缺 --file/--project 报错", () => {
+    const parsed = parser.parseCliArgs([
+      "asset",
+      "import",
+      "--project",
+      "P",
+      "--file",
+      "/tmp/a.png",
+      "--file",
+      "/tmp/b,c.mp4",
+    ]);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("unreachable");
+    expect(parsed.request).toEqual({
+      command: "asset.import",
+      project: "P",
+      // 路径可合法含逗号：--file 是 pathList 语义（整项累积），不做逗号拆分
+      file: ["/tmp/a.png", "/tmp/b,c.mp4"],
+    });
+
+    // 内联 = 形态（--file=<路径>、--project=P）
+    const inline = parser.parseCliArgs(["asset", "import", "--project=P", "--file=/tmp/x=y.png"]);
+    expect(inline.ok).toBe(true);
+    if (!inline.ok) throw new Error("unreachable");
+    expect(inline.request).toEqual({ command: "asset.import", project: "P", file: ["/tmp/x=y.png"] });
+
+    const missingFile = parser.parseCliArgs(["asset", "import", "--project", "P"]);
+    expect(missingFile.ok).toBe(false);
+    if (missingFile.ok) throw new Error("unreachable");
+    expect(missingFile.message).toContain("--file");
+    const missingProject = parser.parseCliArgs(["asset", "import", "--file", "/tmp/a.png"]);
+    expect(missingProject.ok).toBe(false);
+    expect(parser.CLI_USAGE_TEXT).toContain("iart asset import");
+  });
+
   it("布尔 flag 与带值参数区分：--wait=x 报错、缺值报错、未知参数报错", () => {
     const boolWithValue = parser.parseCliArgs(["generate", "--wait=x"]);
     expect(boolWithValue.ok).toBe(false);
@@ -642,5 +677,69 @@ describe("cli-client 人读失败原因与幂等键回执（fetchImpl 注入）"
     expect(requestBodies[0]).toMatchObject({ client_request_id: "req-explicit-1" });
     expect(result.stdout).toContain("req-explicit-1");
     expect(result.stdout).toContain("未重复创建");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// asset import 人读渲染（fetchImpl 注入固定响应）
+// ---------------------------------------------------------------------------
+
+// @spec: CLI-047
+describe("cli-client 人读渲染 asset import（fetchImpl 注入）", () => {
+  const client = loadClientModule();
+  const tempRoot = join(tmpdir(), `cli-client-import-${process.pid}`);
+  const discoveryFilePath = join(tempRoot, "cli-runtime.json");
+
+  beforeAll(() => {
+    mkdirSync(tempRoot, { recursive: true });
+    writeDiscoveryFile(discoveryFilePath, {
+      port: 59999,
+      token: "unused-injected-fetch",
+      pid: process.pid,
+      version: "test-1.0.0",
+      startedAt: new Date().toISOString(),
+    });
+  });
+
+  const jsonResponse = (payload: unknown): Response =>
+    new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
+
+  it("人读：逐文件输出文件名/媒体类型/资产标识/节点标识，不倾倒原始 JSON", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      jsonResponse({
+        command: "asset.import",
+        ok: true,
+        imported: [
+          { file_name: "a.png", asset_id: "asset-1", node_id: "node-1", media_type: "image" },
+          { file_name: "b.mp4", asset_id: "asset-2", node_id: "node-2", media_type: "video" },
+        ],
+      });
+    const result = await client.runCliClient(
+      ["asset", "import", "--project", "P", "--file", "/tmp/a.png", "--file", "/tmp/b.mp4"],
+      { discoveryFilePath, fetchImpl },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("已导入 2 个文件");
+    expect(result.stdout).toContain("a.png（image）：资产 asset-1，画布节点 node-1");
+    expect(result.stdout).toContain("b.mp4（video）：资产 asset-2，画布节点 node-2");
+    // 人读输出不是 JSON dump
+    expect(result.stdout).not.toContain('"file_name"');
+    expect(result.stdout).not.toContain("[{");
+  });
+
+  it("人读：画布窗口侧前置校验错误（file_not_found）原样透传，退出码 1", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      jsonResponse({
+        command: "asset.import",
+        ok: false,
+        error: { code: "file_not_found", message: "找不到文件：/tmp/ghost.png" },
+      });
+    const result = await client.runCliClient(
+      ["asset", "import", "--project", "P", "--file", "/tmp/ghost.png"],
+      { discoveryFilePath, fetchImpl },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("找不到文件：/tmp/ghost.png");
   });
 });

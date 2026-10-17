@@ -13,6 +13,7 @@
  * - 每条命令的执行结果（成功/错误码）留 debug 日志，与主进程侧按请求标识对账（spec §11）。
  *
  * 映射口径：
+ * - `asset.import` → 既有导入链（前置校验原子性 → 写盘登记 → 素材节点落图 → 整批一条撤销；复用边界见 cliAssetImport.ts）。
  * - `canvas.group.create` → `createGroup`（组语义 docs/runtime/画布节点组.md）：
  *   成员不存在 → `node_not_found`；成员含组节点 → `command_rejected`（组不得入组，AG-CN-001；
  *   createGroup 对非法成员按静默过滤处理，映射层在此显式拒绝，避免静默丢成员的假成功）。
@@ -92,6 +93,7 @@ import {
 import { createBirthGroup } from '@/features/promptdock/projection/taskProjectionService';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
 import type { NodeGraph } from '@/features/canvas/types';
+import { executeAssetImport } from './cliAssetImport';
 
 // ---------------------------------------------------------------------------
 // 串行执行队列
@@ -831,6 +833,9 @@ export const executeCliProxyCommand = async (
   command: CliProxyCommand,
 ): Promise<CliProxyCommandResponse> => {
   switch (command.command) {
+    // asset.import → 既有导入链（映射与复用边界见 cliAssetImport.ts 文件头注）
+    case 'asset.import':
+      return executeAssetImport(command);
     case 'canvas.group.create':
       return executeGroupCreate(command);
     case 'canvas.group.dissolve':
@@ -918,6 +923,7 @@ export const handleCliProxyPayload = (
       issues: parsed.error.issues.length,
     });
     const commandName =
+      rawCommand === 'asset.import' ||
       rawCommand === 'canvas.group.create' ||
       rawCommand === 'canvas.group.dissolve' ||
       rawCommand === 'canvas.node.move' ||

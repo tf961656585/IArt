@@ -277,6 +277,12 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
       const generationNote = response.generation !== undefined ? "；附生成档案（generation 字段，--json 查看）" : "";
       return `资产 ${response.asset.assetId}：本地文件 ${response.local_file_path}${equivalentNote}${generationNote}`;
     }
+    case "asset.import": {
+      const lines = response.imported.map(
+        (entry) => `- ${entry.file_name}（${entry.media_type}）：资产 ${entry.asset_id}，画布节点 ${entry.node_id}`,
+      );
+      return [`已导入 ${response.imported.length} 个文件：`, ...lines].join("\n");
+    }
     case "canvas.nodes.list": {
       const lines = response.nodes.map((node) => `- ${node.node_id}（${node.node_type}）`);
       return [`画布节点共 ${response.nodes.length} 个：`, ...lines].join("\n");

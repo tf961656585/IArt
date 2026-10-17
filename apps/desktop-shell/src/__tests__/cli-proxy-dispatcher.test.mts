@@ -89,6 +89,52 @@ describe("cli-proxy-dispatcher 代理分发端（spec §6.3）", () => {
     expect(response.group_node_id).toBe("group-1");
   });
 
+  it("asset.import 经同一通道放行：候选文件清单原样下发，结果与错误变体均按 request_id 配对", async () => {
+    const win = makeFakeWindow();
+    const dispatcher = makeHarness({ window: win });
+
+    // 结果变体：合入 request_id 后下发，imported 原路返回
+    const pending = dispatcher.dispatch("/tmp/project-a", {
+      command: "asset.import",
+      file: ["/tmp/a.png", "/tmp/b,c.mp4"],
+    });
+    expect(win.sent).toHaveLength(1);
+    const sentCommand = CliProxyCommandSchema.parse(win.sent[0]);
+    if (sentCommand.command !== "asset.import") throw new Error("unexpected command variant");
+    expect(sentCommand.file).toEqual(["/tmp/a.png", "/tmp/b,c.mp4"]);
+    dispatcher.consumeResponsePayload({
+      command: "asset.import",
+      request_id: sentCommand.request_id,
+      imported: [{ file_name: "a.png", asset_id: "asset-1", node_id: "node-1", media_type: "image" }],
+    });
+    const outcome = await pending;
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("unexpected failure");
+    const response = CliProxyCommandResponseSchema.parse(outcome.response);
+    if (!("imported" in response)) throw new Error("unexpected response variant");
+    expect(response.imported).toEqual([
+      { file_name: "a.png", asset_id: "asset-1", node_id: "node-1", media_type: "image" },
+    ]);
+
+    // 错误变体：画布窗口侧前置校验错误（file_not_found）经契约校验后配对（不丢弃）
+    const errorPending = dispatcher.dispatch("/tmp/project-a", {
+      command: "asset.import",
+      file: ["/tmp/ghost.png"],
+    });
+    const errorSentCommand = CliProxyCommandSchema.parse(win.sent[1]);
+    dispatcher.consumeResponsePayload({
+      command: "asset.import",
+      request_id: errorSentCommand.request_id,
+      error: { code: "file_not_found", message: "找不到文件：/tmp/ghost.png" },
+    });
+    const errorOutcome = await errorPending;
+    expect(errorOutcome.ok).toBe(true);
+    if (!errorOutcome.ok) throw new Error("unexpected failure");
+    const errorResponse = CliProxyCommandResponseSchema.parse(errorOutcome.response);
+    if (!("error" in errorResponse)) throw new Error("unexpected response variant");
+    expect(errorResponse.error.code).toBe("file_not_found");
+  });
+
   it("request_id 不匹配的响应丢弃并 debug 留痕，pending 继续等待配对响应", async () => {
     const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     try {

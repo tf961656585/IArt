@@ -480,7 +480,7 @@ const mapPreflightIssueToCliError = (
     case 'reference-unavailable':
       return {
         code: 'invalid_reference',
-        message: `引用的素材 ${field} 不存在或已被删除，请检查引用素材标识后重试。`,
+        message: `引用的素材 ${field} 不存在或已被删除；如需引用本地文件，需先在画布中导入它（CLI 不提供导入），再用 asset list 查询素材标识后重试。`,
       };
     case 'incompatible-reference':
       return {

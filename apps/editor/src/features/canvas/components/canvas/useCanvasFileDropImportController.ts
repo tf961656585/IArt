@@ -5,68 +5,9 @@ import { useCallback, type DragEvent } from 'react';
 import type { DynamicRecord } from '@/client/utils/typeGuards';
 import { toast } from 'sonner';
 import { importLocalFile } from '../../services/localMediaImport';
+import { resolveMediaKindFromFile } from '../../utils/mediaFileKind';
 import { useCanvasStore } from '../../store/canvasStore';
 import type { NodePosition } from '../../types';
-
-const IMAGE_FILE_EXTENSIONS = new Set([
-  '.png',
-  '.jpg',
-  '.jpeg',
-  '.webp',
-  '.gif',
-  '.bmp',
-  '.avif',
-  '.tif',
-  '.tiff',
-  '.svg',
-]);
-
-const AUDIO_FILE_EXTENSIONS = new Set([
-  '.mp3',
-  '.wav',
-  '.m4a',
-  '.aac',
-  '.flac',
-  '.ogg',
-  '.opus',
-]);
-
-const VIDEO_FILE_EXTENSIONS = new Set([
-  '.mp4',
-  '.mov',
-  '.m4v',
-  '.mkv',
-  '.avi',
-  '.wmv',
-  '.flv',
-  '.mpeg',
-  '.mpg',
-  '.ts',
-  '.m2ts',
-  '.3gp',
-]);
-
-const getFileExtension = (name: string | null | undefined): string => {
-  const normalized = (name ?? '').trim().toLowerCase();
-  if (!normalized) return '';
-  const dotIndex = normalized.lastIndexOf('.');
-  if (dotIndex <= 0 || dotIndex === normalized.length - 1) return '';
-  return normalized.slice(dotIndex);
-};
-
-const guessDroppedFileKind = (file: File): 'image' | 'audio' | 'video' | null => {
-  const mimeType = (file.type || '').toLowerCase();
-  if (mimeType.startsWith('image/')) return 'image';
-  if (mimeType.startsWith('audio/')) return 'audio';
-  if (mimeType.startsWith('video/')) return 'video';
-
-  const ext = getFileExtension(file.name);
-  if (ext && IMAGE_FILE_EXTENSIONS.has(ext)) return 'image';
-  if (ext && AUDIO_FILE_EXTENSIONS.has(ext)) return 'audio';
-  if (ext && VIDEO_FILE_EXTENSIONS.has(ext)) return 'video';
-
-  return null;
-};
 
 async function getAudioDurationFromFile(file: File): Promise<number> {
   if (!file || typeof document === 'undefined') return 0;
@@ -169,7 +110,7 @@ export const useCanvasFileDropImportController = (
           const dropOffset = 40;
 
           for (const [index, file] of droppedFiles.entries()) {
-            const kind = guessDroppedFileKind(file);
+            const kind = resolveMediaKindFromFile(file);
             if (!kind) {
               toast.error(`${file.name || '这个文件'} 放不到画布上，请换成图片、视频或音频`);
               continue;

@@ -241,6 +241,10 @@ const proxyOutcomeToResult = (
     return errorResult(command, response.error.code, response.error.message);
   }
   switch (response.command) {
+    case "asset.import":
+      // 导入结果直通（产物条目列表：文件名/资产标识/节点标识/媒体类型）；文件存在性与类型
+      // 校验在画布窗口侧前置完成，错误经 error 分支原样透传（spec §5.3 / CLI-047）。
+      return okResult(command, { imported: response.imported });
     case "canvas.group.create":
       return okResult(command, { group_node_id: response.group_node_id });
     case "canvas.group.dissolve":
@@ -743,6 +747,21 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
   });
 
   // ── 画布命令 / 生成提交（§4.2/§5.3/§5.4：代理执行通道 → 画布窗口，要求项目已打开） ──
+
+  registry.set("asset.import", async (request) => {
+    if (request.command !== "asset.import") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
+    const resolution = resolveProjectOrFail(request, deps);
+    if (!resolution.ok) return resolution.result;
+    const guard = guardProjectOpenOrFail(request.command, resolution.project.path, deps);
+    if (guard !== null) return guard;
+    // --file 路径清单原样进代理候选；文件存在性/媒体类型校验不在主进程做（spec §5.3 / CLI-047），
+    // 由画布窗口侧前置校验产生 file_not_found / unsupported_file_type，经 error 分支透传。
+    const outcome = await deps.proxy.dispatch(resolution.project.path, {
+      command: "asset.import",
+      file: request.file,
+    });
+    return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
+  });
 
   registry.set("canvas.group.create", async (request) => {
     if (request.command !== "canvas.group.create") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");

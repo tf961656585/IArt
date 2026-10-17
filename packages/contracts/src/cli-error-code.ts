@@ -20,6 +20,8 @@ export const CLI_ERROR_CODES = [
   'project_name_conflict',
   'project_not_open',
   'asset_not_found',
+  'file_not_found',
+  'unsupported_file_type',
   'batch_not_found',
   'node_not_found',
   'group_not_found',

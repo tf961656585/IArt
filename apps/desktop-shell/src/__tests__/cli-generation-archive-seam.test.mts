@@ -399,10 +399,11 @@ describe("生成档案读取接缝（真实存储 + 真实读取链 + 真实执�
     });
   });
 
-  it("命令表共 24 条且含 batch.get 与 canvas.group.list（契约命令表守卫）", () => {
-    expect(CLI_COMMANDS.length).toBe(24);
+  it("命令表共 25 条且含 batch.get / canvas.group.list / asset.import（契约命令表守卫）", () => {
+    expect(CLI_COMMANDS.length).toBe(25);
     expect(CLI_COMMANDS).toContain("canvas.group.list");
     expect(CLI_COMMANDS).toContain("batch.get");
+    expect(CLI_COMMANDS).toContain("asset.import");
   });
 });
 

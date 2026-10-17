@@ -14,7 +14,8 @@ description: |
 
 > **版本门槛**：本 skill 描述的命令面与行为需要 **IARTStudio 0.6.3 或更高**（CLI 以轻量纯
 > Node 进程运行；受理幂等键、任务过滤与人读失败原因、生成档案读取、`--version`、`--group`
-> 出生组、组清单与空组建组、画布投影身份以及产物落位自动排布均随该版本提供）。旧版本软件的
+> 出生组、组清单与空组建组、画布投影身份、产物落位自动排布以及本地文件导入
+> （`asset import`）均随该版本提供）。旧版本软件的
 > `iart` 可能表现不同（启动慢、偶发无输出崩溃、控制台中文乱码、`batch get` 报「无法识别的命令」）；
 > 遇到这类旧行为时请用户把应用升级到最新版本，并重启一次应用——应用启动时会自动把
 > 命令入口修正到新形态，无需手动重新注册。
@@ -35,6 +36,12 @@ description: |
 
 关键区别：iart 的生成产物是「画布上的任务节点 + 项目资产」，不是散落的文件；
 应用没开就做不了任何画布操作。
+
+**本地媒体文件（图片/视频/音频）先导入再引用**：用
+`iart asset import --file <绝对路径> [--file ...] --project P` 把本地文件导入项目——
+每个文件成为一个画布素材节点并产生素材标识，之后用 `--ref <素材标识>` 引用提交生成
+（导入响应返回的 `asset_id` 直接可用；也可事后 `asset list` 查询）。`--ref` 不接受文件路径。
+用户在界面上拖文件入画布与本命令等价（同一导入链）；文件类型限图片/视频/音频。
 
 ---
 
@@ -88,6 +95,7 @@ description: |
 
 | 命令 | 说明 |
 |---|---|
+| `iart asset import --file <路径> [--file ...] --project P` | 导入本地媒体文件（图片/视频/音频）：每个文件成为画布素材节点 + 项目资产，整批一个撤销步骤（界面可一步撤销）；返回每项的 `file_name`/`asset_id`/`node_id`/`media_type`。任一文件不存在/读不出（`file_not_found`）或类型不支持（`unsupported_file_type`）则**整批拒绝**、零副作用。路径用绝对路径；`--file` 可重复（值原样传入，不拆逗号） |
 | `iart canvas group create --name N [--members id1,id2] --project P` | 建组。带 `--members`：建组并纳入成员（逗号分隔，可重复传参累积），成员已属其他组则改归属到新组；不带 `--members`：建**空组**（先规划分组、稍后让生成任务出生其内的标准动作，组框自动在画布空白处落位）；返回 `group_node_id` |
 | `iart canvas group dissolve --group <容器id> --project P` | 解散容器（组或 Agent 容器）：组解散删除组节点、成员保留画布原位且归属解除；Agent 容器解散解除成员关系、头节点保留回落单节点形态、会话保留。**不提供连删**（连删是界面显式危险动作）。返回 `group_node_id` 与解散前 `member_ids`；目标不存在 `group_not_found`、目标非容器或 Agent 无成员 `command_rejected` |
 | `iart canvas node move --node <id> --x N --y N --project P` | 移动单个节点到目标画布坐标（可负、可小数）。**容器节点不能直接移动**（组位置由成员派生，移动一律成员级，指定容器 `command_rejected`）；返回 `node_id`、最终 `position` 与实际位移的 `moved_node_ids` |
@@ -104,7 +112,7 @@ description: |
 
 `generate` 细节：
 - `--count` 缺省 1，范围 1–10。
-- `--ref` 引用**已存在**的资产（id 来源：`asset list`（可 `--query` 按文件名/提示词搜）、`canvas nodes list` 的 `asset_id`，或用户从画布右键菜单「复制素材 ID」贴给你的 id；同一内容出现多个 id 时任一等效，`asset get` 的 `equivalent_asset_ids` 可核对）。
+- `--ref` 引用**已存在**的资产（id 来源：`asset list`（可 `--query` 按文件名/提示词搜）、`canvas nodes list` 的 `asset_id`，或用户从画布右键菜单「复制素材 ID」贴给你的 id；同一内容出现多个 id 时任一等效，`asset get` 的 `equivalent_asset_ids` 可核对）。**本地文件路径不是合法输入**——本地文件需先由用户在画布中导入成为素材才能引用（CLI 不提供导入，见 §1）。
 - `--arg` 的参数名与取值域以 `model get` 的 `parameter_schema` 为准，**不要猜**。
 - `--request-id` 受理幂等键（batch 级）：不传时 CLI 自动生成 uuid 并在受理回执回显；**重提时复用同一 request_id 即幂等**——命中已受理批次会原样返回既有批次与任务身份（`replayed: true`），不重复出图。
 - `--group <组名>` 出生组：唯一同名组 → 本批任务出生其内（组内按任务号网格续排）；没有同名组 → 受理成功后自动建组再出生；多个同名组 → 报 `group_name_ambiguous` 且不提交。指定后落位锚点改为组内续排（不再以参考资产旁为锚）。**先规划分组、再提交生成**的标准工作流见 R2。不指定时行为不变（`group_id` 为 null）。
@@ -182,7 +190,9 @@ iart task list --request-id <回执里的幂等键> --project P --json
 | `asset_not_found` / `node_not_found` / `group_not_found` | 引用的资产/节点/组不存在 | 用对应 list 命令核对 id |
 | `batch_not_found` | 批次标识不存在 | `task get` 从任务的 `generation`/`batchId` 核对批次号 |
 | `group_name_ambiguous` | `--group` 组名命中多个同名节点组 | `canvas group list --json` 核对现有组，改用唯一组名后重试 |
-| `invalid_reference` | 引用资产不可用或与模型不兼容 | 核对资产与模型输入要求 |
+| `invalid_reference` | 引用资产不可用或与模型不兼容 | 核对资产与模型输入要求；若手里是本地文件路径，先用 `asset import` 导入拿素材标识（路径不能直接引用） |
+| `file_not_found` | `asset import` 的源文件不存在或读不出来 | 核对路径（绝对路径）；确认文件可被应用进程读到 |
+| `unsupported_file_type` | `asset import` 的源文件不是图片/视频/音频 | 换成受支持的媒体文件 |
 | `model_not_available` | 模型不在可执行目录或不可执行 | 读失败原因码：缺部署/凭证等问题引导用户到设置页「服务商」分区配置 |
 | `task_not_found` | 任务标识不存在 | `task list` 核对 id |
 | `wait_timeout` | `--timeout` 到期 | 任务仍在跑：去掉 `--timeout` 重等，或改用 `task get` 轮询 |
@@ -219,6 +229,18 @@ iart generate --prompt "<提示词>" --model <model_id> --wait --json --project 
 # 用 generation 与产物 local_file_path 回答「生成了什么、怎么生成的」；
 # 仅当档案信息不足以回答用户（如要看画面细节）才用 local_file_path 打开成品图核对
 ```
+
+### R1.5 用本地图片作为参考图（i2i）
+
+```bash
+# 1) 导入本地文件（可多个）——成为素材节点并产生素材标识
+iart asset import --file /absolute/path/ref.png --project <路径或名称> --json
+# 2) 用返回的 asset_id 作为参考提交生成
+iart generate --prompt "<提示词>" --model <model_id> --ref <asset_id> --wait --json --project <路径或名称>
+```
+
+- 路径用绝对路径；多个文件重复传 `--file`（整批一次导入、一个撤销步骤）。
+- 导入是画布写操作，要求项目已打开；导入的素材节点会出现在画布上、可见可撤销。
 
 ### R2 画布组织方法论（先规划分组，再提交生成）
 
@@ -270,9 +292,13 @@ iart task cancel <taskId> --project <路径或名称>
 接手一个已有项目时，先建立「这次生成做了什么」的事实，再谈看图——生成信息结构化、可引用、
 省上下文，成品图只是它的视觉投影。按手里已有的线索路由：
 
-- **手里有图**（一个资产 id 或本地文件路径）→ 直接 `iart asset get <assetId> --project P --json`：
+- **手里有图**（一个资产 id）→ 直接 `iart asset get <assetId> --project P --json`：
   详情里的 `generation` 就是这张图的来历（提示词全文、参数、参考资产、所属批次与任务），
   `local_file_path` 同时给你文件本体。
+- **手里有本地文件路径（还不是素材标识）** → 两条路：①文件尚未进项目 → 直接
+  `iart asset import --file <路径> --project P --json` 导入，拿返回的素材标识；
+  ②怀疑它已在项目里 → `iart asset list --query <文件名> --project P --json` 搜
+  （导入素材按原始文件名可命中）。**不要把文件路径当 assetId 传给任何命令**——路径不是标识。
 - **手里有批次号** → 直接 `iart batch get <batchId> --project P --json` 读档案：一次提交的
   完整意图与任务成员全在里面。
 - **手里只有任务 id** → `iart task get <taskId> --project P --json`：响应里的 `generation`
@@ -295,6 +321,9 @@ iart task cancel <taskId> --project <路径或名称>
 - **不直读数据文件**：不要用 sqlite3/文件读取翻 `project.sqlite`、recent-projects.json 等
   项目数据文件来替代命令面——数据形状无契约、版本会漂移，且绕过应用可能读到未落盘的中间态；
   查任何事实都走上面的命令。
+- **本地文件先导入再引用**：`--ref` / `asset get` 都不接受文件路径；拿到本地文件路径要用于
+  生成时，先 `iart asset import --file <路径>` 拿到 `asset_id`，再 `--ref <asset_id>`。
+  不要把文件路径直接传给 `--ref`（会得到 `invalid_reference`）。
 - **画布不是输出垃圾场**：批量生成前想清楚数量与必要性；命令排队执行、用户手工操作优先，
   不要与用户抢画布。
 - **应用未运行时不绕路**：不要直连应用内部接口或发明替代实现；`not_running` 就引导启动应用。
