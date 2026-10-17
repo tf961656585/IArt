@@ -4,18 +4,18 @@
     {
       "id": "gpt-image",
       "name": "GPT Image",
-      "version": "2.0.1",
+      "version": "2.0.2",
       "description": "使用本软件已保存的 Provider 配置，离线调用当前激活的 gpt-image-2 部署完成文生图与图生图。",
-      "bundleKey": "skills/bundles/gpt-image-2.0.1.json",
-      "sha512": "4907da5b6fc54184835bdb3862e23fe5807e8d4a61c58db30a2f445daaca05080dda6413263c68c33b27ebdcf28bf581d9386fc427b0e800bc02e95a3a658ad2"
+      "bundleKey": "skills/bundles/gpt-image-2.0.2.json",
+      "sha512": "fb57c4664042c6b3e4ca54450f4ea217ac88d4ca6b1e461c82a48dbb5464714157d2794f6ab0a952b0cab9713a8bb409c6423f58a7215ed1bfd062411b59a9e9"
     },
     {
       "id": "iart-cli",
       "name": "IARTStudio CLI",
-      "version": "1.9.2",
-      "description": "通过 iart 命令行驱动正在运行的 IARTStudio 桌面应用：感知打开项目与画布选中、打开/创建项目、提交生成（受理幂等键防重复出图、--group 指定出生组）并把产物落进画布、读生成档案拿提示词全文与提交意图（batch get / asset get / task get 内联 generation）、建组/空组建组/组清单/解散/移动/删除节点与按序整理布局、先规划分组再提交生成的画布组织方法论、过滤查询与等待生成任务（失败原因可读、画布投影身份可查）。",
-      "bundleKey": "skills/bundles/iart-cli-1.9.2.json",
-      "sha512": "d6eb5732598f6440293d16d0c17c0ae010ed50f0477b0d468be68172dfc08cef360bab026ae8598c89510ea4131f5cb45128a6ce1052586f164c1286e8ae4eb5"
+      "version": "1.10.0",
+      "description": "通过 iart 命令行驱动正在运行的 IARTStudio 桌面应用：感知打开项目与画布选中、打开/创建项目、导入本地媒体文件（asset import，整批一个撤销步骤）、提交生成（受理幂等键防重复出图、--group 指定出生组）并把产物落进画布、读生成档案拿提示词全文与提交意图（batch get / asset get / task get 内联 generation）、建组/空组建组/组清单/解散/移动/删除节点与按序整理布局、先规划分组再提交生成的画布组织方法论、过滤查询与等待生成任务（失败原因可读、画布投影身份可查）。",
+      "bundleKey": "skills/bundles/iart-cli-1.10.0.json",
+      "sha512": "dbf36a7eaf7080e3abdc3f66fd6f96fac8c20c826d6efd7541655eaf3710d78d55985471b3a4115de7ca161ee91c9bab28d5f5d484e6af0d172afb70a866baa1"
     }
   ]
 }
