@@ -362,6 +362,8 @@ export const createElectronUpdaterController = ({
       await autoUpdater.checkForUpdates();
       return command({ status: "success", state: store.state });
     } catch (error) {
+      // 节流按检查尝试计：失败同样占用窗口，避免连续失败期间无节流反复请求 feed
+      lastCheckAt = Date.now();
       const message = handleUpdateError(error, latestVersion);
       return command({ status: "failed", error: { message }, state: store.state });
     }

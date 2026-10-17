@@ -11,7 +11,7 @@ import { SkillCard } from '../SkillCard';
  * 点击把 (skill, target) 交给上层动作，路径解析归主进程。
  *
  * 目标行集合（内置 + 自定义）由 props 传入（useSkills 的 targetRows），
- * 卡片只读展示，不承载管理入口（管理在「管理安装目标」弹层）。
+ * 卡片只读展示，不承载管理入口（管理在「管理自定义 Agent 目录」弹层）。
  */
 
 const skill: SkillCatalogEntry = {

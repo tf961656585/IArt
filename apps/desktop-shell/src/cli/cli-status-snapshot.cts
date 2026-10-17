@@ -1,5 +1,6 @@
-import { CliStatusDtoSchema, type CliCommandLogEntry, type CliStatusDto } from "@iart/contracts";
+import { CliStatusDtoSchema, type CliCommandLogEntry, type CliEntryStatusDetail, type CliStatusDto } from "@iart/contracts";
 import { readDiscoveryFile } from "./cli-discovery.cjs";
+import type { CliEntryStatusResult } from "./cli-entry-registration.cjs";
 
 /**
  * 设置页「命令行工具」状态快照构建（spec docs/integrations/CLI与本地Agent集成.md §8 / CLI-013
@@ -17,6 +18,20 @@ export const CLI_RECENT_COMMANDS_MAX = 20;
 export const isDiscoveryFileValid = (discoveryFilePath: string): boolean =>
   readDiscoveryFile(discoveryFilePath) !== null;
 
+/**
+ * 入口注册模块状态 → 契约详情投影（spec §8 五态）：平台不支持按 unsupported 态承载
+ * （entryPath/legacyEntryPath 为 null）。
+ */
+export const toCliEntryStatusDetail = (status: CliEntryStatusResult): CliEntryStatusDetail =>
+  status.supported
+    ? {
+        state: status.state,
+        entryPath: status.entryPath,
+        legacyEntryPath: status.legacyEntryPath,
+        pathSetupRequired: status.pathSetupRequired,
+      }
+    : { state: "unsupported", entryPath: null, legacyEntryPath: null, pathSetupRequired: false };
+
 export interface CliStatusSnapshotInput {
   /** 本地控制服务句柄是否存活（应用运行期为 true，will-quit 停止后为 false）。 */
   serviceRunning: boolean;
@@ -24,8 +39,8 @@ export interface CliStatusSnapshotInput {
   port: number | null;
   /** 发现文件路径（服务存活取句柄携带路径，未运行取默认定位）。 */
   discoveryFilePath: string;
-  /** 命令入口注册状态；平台不支持一键注册为 null（语义见契约注释）。 */
-  entryRegistered: boolean | null;
+  /** 命令入口注册状态详情（spec §8 五态；投影入口 toCliEntryStatusDetail）。 */
+  entry: CliEntryStatusDetail;
   /** 命令日志全量（内存环形）；此处截取最近 20 条。 */
   commandLog: readonly CliCommandLogEntry[];
 }
@@ -39,6 +54,6 @@ export const buildCliStatusDto = (input: CliStatusSnapshotInput): CliStatusDto =
     serviceRunning: input.serviceRunning,
     port: input.port,
     discoveryFileValid: isDiscoveryFileValid(input.discoveryFilePath),
-    entryRegistered: input.entryRegistered,
+    entry: input.entry,
     recentCommands: input.commandLog.slice(-CLI_RECENT_COMMANDS_MAX),
   });

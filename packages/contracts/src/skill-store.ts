@@ -273,9 +273,10 @@ export type CustomSkillInstallTarget = z.infer<typeof CustomSkillInstallTargetSc
 
 /**
  * 自定义目标管理操作的错误码。
- *   - invalid-request：请求非法（schema 不过或业务入参不合法，如 name 空白、dir 非绝对路径）。
- *   - duplicate-dir：目录与既有目标（内置或自定义）目录相同。
- *   - nested-dir：目录与既有目标目录互为祖先/后代。
+ *   - invalid-request：请求非法（schema 不过或业务入参不合法，如 name 空白、dir 非绝对
+ *     （含 `~` 展开后）路径、目标路径已存在但不是目录）。
+ *   - duplicate-dir：目录与既有目标（内置或自定义）目录相同。update 时排除目标自身。
+ *   - nested-dir：目录与既有目标目录互为祖先/后代。update 时排除目标自身。
  *   - reserved-dir：目录落在 app 自有数据目录（dev 与 prod 两个变体）之内或就是它。
  *   - not-found：按 id 未找到自定义目标（内置 id 传入 update/remove 同样按 not-found）。
  *   - unknown-target：install/reveal 执行时目标 id 解析不到（内置与注册表均未命中）。
@@ -314,10 +315,16 @@ export const SkillAddCustomTargetRequestSchema = z
 
 export type SkillAddCustomTargetRequest = z.infer<typeof SkillAddCustomTargetRequestSchema>;
 
+/**
+ * update 为全量提交：name 与 skillsDir 都必填（编辑自定义目标的名称与目录，不存在
+ * 局部更新请求）。目录合法性（`~` 展开、绝对路径、重复/嵌套/reserved 防呆）由主进程
+ * 重跑 add 的整套校验裁定，schema 只约束形状。
+ */
 export const SkillUpdateCustomTargetRequestSchema = z
   .object({
     id: SkillInstallTargetIdSchema,
     name: z.string(),
+    skillsDir: z.string(),
   })
   .strict();
 

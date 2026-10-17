@@ -15,8 +15,9 @@ import {
  * 全局更新 banner + 更新弹窗（App 顶层常驻，等价 vanilla 的 updateBanner / updateModal）。
  * - 挂载时 initialize：订阅事件 + 恢复状态快照 + 应用版本 + 日志信息；
  *   快照为 available 且用户未忽略过弹窗时自动展示弹窗（等价 vanilla initialize → showUpdateModal）。
- * - banner 展示条件：available / downloading / downloaded / error，且未点击「稍后」；
- *   available / downloaded / error 事件到达时重置忽略标记（等价 vanilla 事件处理）。
+ * - banner 展示条件：available / downloading / downloaded / 已获准就地展示的 error，且未点击「稍后」；
+ *   失败不主动唤起横幅（资格规则在 useAppUpdate 的 applyState 统一收口）；
+ *   available / downloaded 事件到达时重置忽略标记（正向信号；error 不重置）。
  * - 弹窗关闭仅标记忽略，不再自动重开（等价 vanilla updateModalDismissed 不重置）。
  */
 export function UpdateBanner() {

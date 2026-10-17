@@ -3,11 +3,14 @@
 //
 // 命令入口注册模块测试（spec docs/integrations/CLI与本地Agent集成.md §3/§8）：
 // shim 以 ELECTRON_RUN_AS_NODE=1 启动轻量入口脚本（不注入 --cli；macOS 单 sh 形态；Windows
-// 双形态——无扩展名 iart 服务 POSIX 风格 shell、iart.cmd 服务 cmd/PowerShell）、写入目标
-// 目录可注入（临时目录）、幂等三态（created/overwritten/noop）、多形态聚合（注册/状态/卸除）、
-// 卸除与自愈仅动本应用 shim（不碰同名他物）、状态三态查询、启动自愈分桶语义（CLI-031）、
-// 注册前入口资源探测（CLI-037——shim 指向的入口脚本必须真实存在且是常规文件，缺位拦截
-// 注册并指引重启自愈/重装）。入口脚本路径以真实临时文件承载（探测按真实 fs stat）。
+// 双形态——无扩展名 iart 服务 POSIX 风格 shell、iart.cmd 服务 cmd/PowerShell）、目标候选
+// 目录可注入（临时目录；macOS 落点候选探测/已存 shim 落点稳定/全不可用转手动指引）、幂等
+// 三态（created/overwritten/noop）、多形态聚合（注册/状态/卸除）、卸除与遗留清理仅动本应用
+// shim（不碰同名他物）、状态五态查询（registered/missing/stale/foreign + legacyEntryPath
+// 遮蔽提示 + pathSetupRequired）、启动自愈分桶语义（CLI-031，macOS 候选面纳入）、失败消息
+// 分类（权限类手动指引 / 非权限类重试出路）、注册前入口资源探测（CLI-037——shim 指向的
+// 入口脚本必须真实存在且是常规文件，缺位拦截注册并指引重启自愈/重装）。入口脚本路径以
+// 真实临时文件承载（探测按真实 fs stat）。
 import { createRequire } from "node:module";
 import { mkdtempSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,7 +28,13 @@ type UnregisterResult =
   | { ok: true; entryPath: string; removed: boolean; reason: "removed" | "absent" | "foreign_content" }
   | { ok: false; entryPath: string; message: string };
 type StatusResult =
-  | { supported: true; entryPath: string; registered: boolean; state: "registered" | "missing" | "modified" }
+  | {
+      supported: true;
+      entryPath: string;
+      state: "registered" | "missing" | "stale" | "foreign";
+      legacyEntryPath: string | null;
+      pathSetupRequired: boolean;
+    }
   | { supported: false };
 type HealResult =
   | {
@@ -39,11 +48,12 @@ type HealResult =
 
 type RegistrationModule = {
   createCliEntryRegistration: (options: {
-    targetDir: string;
+    targetDirs: readonly string[];
     appExecPath: string;
     cliEntryScriptPath?: string;
     platform?: string;
     probeEntryResource?: () => Promise<boolean>;
+    defaultSearchDirs?: readonly string[];
   }) => {
     registerEntry: () => Promise<RegisterResult>;
     unregisterEntry: () => Promise<UnregisterResult>;
@@ -69,13 +79,18 @@ const makeRegistration = (options: {
   cliEntryScriptPath?: string;
   appExecPath?: string;
   probeEntryResource?: () => Promise<boolean>;
+  /** 附加候选目录（旧入口/遗留清理/落点稳定用例）；缺省单候选。 */
+  extraTargetDirs?: readonly string[];
+  /** PATH 引导判据注入；缺省走平台内置（临时目录不在其中 → pathSetupRequired=true）。 */
+  defaultSearchDirs?: readonly string[];
 }) =>
   loadRegistrationModule().createCliEntryRegistration({
-    targetDir: options.targetDir,
+    targetDirs: [options.targetDir, ...(options.extraTargetDirs ?? [])],
     appExecPath: options.appExecPath ?? APP_EXEC,
     cliEntryScriptPath: options.cliEntryScriptPath ?? cliEntryScriptFile,
     platform: options.platform,
     probeEntryResource: options.probeEntryResource,
+    defaultSearchDirs: options.defaultSearchDirs,
   });
 
 let tempRoot = "";
@@ -138,23 +153,38 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
     expect(readFileSync(entryPath, "utf8")).toContain("ELECTRON_RUN_AS_NODE=1 exec ");
   });
 
-  it("状态查询三态：registered / missing / modified", async () => {
+  it("状态查询五态：missing / registered / foreign（同名他物）", async () => {
     const targetDir = join(tempRoot, "status-bin");
     const registration = makeRegistration({ targetDir, platform: "darwin" });
 
     const missing = await registration.getEntryStatus();
-    expect(missing).toMatchObject({ supported: true, registered: false, state: "missing" });
+    expect(missing).toMatchObject({ supported: true, state: "missing", legacyEntryPath: null });
 
     await registration.registerEntry();
     const registered = await registration.getEntryStatus();
-    expect(registered).toMatchObject({ supported: true, registered: true, state: "registered" });
+    expect(registered).toMatchObject({ supported: true, state: "registered" });
 
     writeFileSync(join(targetDir, "iart"), "echo something-else\n", { encoding: "utf8" });
-    const modified = await registration.getEntryStatus();
-    expect(modified).toMatchObject({ supported: true, registered: false, state: "modified" });
+    const foreign = await registration.getEntryStatus();
+    expect(foreign).toMatchObject({ supported: true, state: "foreign" });
   });
 
-  it("卸除：仅删内容匹配本应用 shim 的入口；同名他物保留；未注册时幂等成功", async () => {
+  it("状态查询五态：stale（本应用过期模板/指向已失效位置）与注册覆盖自愈", async () => {
+    const targetDir = join(tempRoot, "status-stale-bin");
+    mkdirSync(targetDir, { recursive: true });
+    // 过期模板引用应用可执行文件（0.6.5 --cli 形态）→ stale；指向旧位置的旧 shim 同理
+    writeFileSync(join(targetDir, "iart"), `#!/bin/sh\nunset ELECTRON_RUN_AS_NODE\nexec "${APP_EXEC}" --cli "$@"\n`, {
+      encoding: "utf8",
+    });
+    const registration = makeRegistration({ targetDir, platform: "darwin" });
+    expect(await registration.getEntryStatus()).toMatchObject({ supported: true, state: "stale" });
+
+    const result = await registration.registerEntry();
+    expect(result).toMatchObject({ ok: true, action: "overwritten" });
+    expect(await registration.getEntryStatus()).toMatchObject({ supported: true, state: "registered" });
+  });
+
+  it("卸除：删本应用 shim（含过期模板）；同名他物保留；未注册时幂等成功", async () => {
     const targetDir = join(tempRoot, "unregister-bin");
     const registration = makeRegistration({ targetDir, platform: "darwin" });
 
@@ -164,6 +194,14 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
     await registration.registerEntry();
     const removed = await registration.unregisterEntry();
     expect(removed).toMatchObject({ ok: true, removed: true, reason: "removed" });
+    expect(existsSync(join(targetDir, "iart"))).toBe(false);
+
+    // 过期模板（本应用 shim）→ 一并删除（卸除后终端不再可达）
+    writeFileSync(join(targetDir, "iart"), `#!/bin/sh\nunset ELECTRON_RUN_AS_NODE\nexec "${APP_EXEC}" --cli "$@"\n`, {
+      encoding: "utf8",
+    });
+    const staleRemoved = await registration.unregisterEntry();
+    expect(staleRemoved).toMatchObject({ ok: true, removed: true, reason: "removed" });
     expect(existsSync(join(targetDir, "iart"))).toBe(false);
 
     // 同名他物：内容不匹配本 shim → 保留不动
@@ -206,7 +244,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
     );
 
     const status = await registration.getEntryStatus();
-    expect(status).toMatchObject({ supported: true, registered: true, state: "registered" });
+    expect(status).toMatchObject({ supported: true, state: "registered" });
     const unregistered = await registration.unregisterEntry();
     expect(unregistered).toMatchObject({ ok: true, removed: true, reason: "removed" });
     expect(existsSync(shPath)).toBe(false);
@@ -264,8 +302,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
     });
     expect(await registration.getEntryStatus()).toMatchObject({
       supported: true,
-      registered: false,
-      state: "modified",
+      state: "stale",
     });
 
     const result = await registration.registerEntry();
@@ -278,12 +315,11 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
     );
     expect(await registration.getEntryStatus()).toMatchObject({
       supported: true,
-      registered: true,
       state: "registered",
     });
   });
 
-  it("Windows 状态聚合：双全等 registered、双缺失 missing、缺件或单侧内容不符 modified", async () => {
+  it("Windows 状态聚合：双全等 registered、双缺失 missing、任一他物 foreign、缺件 stale", async () => {
     const appExec = "C:\\Apps\\IARTStudio\\IARTStudio.exe";
     const entryScript = "C:\\Apps\\IARTStudio\\resources\\cli\\cli-node-entry.cjs";
     const cmdContent = `@set "ELECTRON_RUN_AS_NODE=1"\r\n@"${appExec}" "${entryScript}" %*\r\n`;
@@ -295,7 +331,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
       appExecPath: appExec,
       cliEntryScriptPath: entryScript,
     });
-    expect(await bothMissing.getEntryStatus()).toMatchObject({ supported: true, registered: false, state: "missing" });
+    expect(await bothMissing.getEntryStatus()).toMatchObject({ supported: true, state: "missing" });
 
     const bothOurs = makeRegistration({
       targetDir: join(tempRoot, "win-status-ours"),
@@ -305,7 +341,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
       probeEntryResource: probeAlwaysOk,
     });
     await bothOurs.registerEntry();
-    expect(await bothOurs.getEntryStatus()).toMatchObject({ supported: true, registered: true, state: "registered" });
+    expect(await bothOurs.getEntryStatus()).toMatchObject({ supported: true, state: "registered" });
 
     const mixedDir = join(tempRoot, "win-status-mixed");
     mkdirSync(mixedDir, { recursive: true });
@@ -317,7 +353,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
       appExecPath: appExec,
       cliEntryScriptPath: entryScript,
     });
-    expect(await mixed.getEntryStatus()).toMatchObject({ supported: true, registered: false, state: "modified" });
+    expect(await mixed.getEntryStatus()).toMatchObject({ supported: true, state: "foreign" });
 
     const shOnlyDir = join(tempRoot, "win-status-sh-only");
     mkdirSync(shOnlyDir, { recursive: true });
@@ -328,7 +364,7 @@ describe("cli-entry-registration 命令入口注册（CLI-016）", () => {
       appExecPath: appExec,
       cliEntryScriptPath: entryScript,
     });
-    expect(await shOnly.getEntryStatus()).toMatchObject({ supported: true, registered: false, state: "modified" });
+    expect(await shOnly.getEntryStatus()).toMatchObject({ supported: true, state: "stale" });
   });
 
   it("Windows 卸除聚合：双 ours 全删 removed；cmd 为他物保留报 foreign_content；双缺失幂等 absent", async () => {
@@ -477,20 +513,41 @@ describe("shim 自动自愈（CLI-031）", () => {
     expect(existsSync(join(targetDir, "iart.cmd"))).toBe(false);
   });
 
-  it("非 Windows 平台：自愈范围外，空桶 noop（macOS 自愈走设置页重注册）", async () => {
-    const targetDir = join(tempRoot, "mac-heal-noop");
-    mkdirSync(targetDir, { recursive: true });
-    writeFileSync(join(targetDir, "iart"), "#!/bin/sh\necho legacy\n", { encoding: "utf8" });
-    const registration = makeRegistration({ targetDir, platform: "darwin" });
-    const result = await registration.healEntryShims();
-    expect(result).toMatchObject({
-      ok: true,
-      rewrittenForms: [],
-      foreignForms: [],
-      missingForms: [],
-      currentForms: [],
+  it("macOS：候选目录纳入自愈面——过期模板重写、同名他物保留（CLI-031 范围扩展）", async () => {
+    const staleDir = join(tempRoot, "mac-heal-stale");
+    mkdirSync(staleDir, { recursive: true });
+    writeFileSync(join(staleDir, "iart"), LEGACY_SH(APP_EXEC), { encoding: "utf8" });
+    const staleRegistration = makeRegistration({ targetDir: staleDir, platform: "darwin" });
+    const staleResult = await staleRegistration.healEntryShims();
+    expect(staleResult).toMatchObject({ ok: true, rewrittenForms: ["sh"], foreignForms: [], missingForms: [] });
+    expect(readFileSync(join(staleDir, "iart"), "utf8")).toBe(
+      `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${APP_EXEC}" "${cliEntryScriptFile}" "$@"\n`,
+    );
+
+    const foreignDir = join(tempRoot, "mac-heal-foreign");
+    mkdirSync(foreignDir, { recursive: true });
+    writeFileSync(join(foreignDir, "iart"), "#!/bin/sh\necho legacy\n", { encoding: "utf8" });
+    const foreignRegistration = makeRegistration({ targetDir: foreignDir, platform: "darwin" });
+    const foreignResult = await foreignRegistration.healEntryShims();
+    expect(foreignResult).toMatchObject({ ok: true, rewrittenForms: [], foreignForms: ["sh"] });
+    expect(readFileSync(join(foreignDir, "iart"), "utf8")).toContain("legacy");
+  });
+
+  it("候选目录不可用：跳过留痕不属自愈面，不报错（CLI-031 不可写目录跳过）", async () => {
+    // 候选「目录」被同名文件占位：不可用候选跳过，可用候选正常分桶
+    const blocker = join(tempRoot, "mac-heal-blocker");
+    writeFileSync(blocker, "plain file", { encoding: "utf8" });
+    const usableDir = join(tempRoot, "mac-heal-usable");
+    mkdirSync(usableDir, { recursive: true });
+    writeFileSync(join(usableDir, "iart"), "#!/bin/sh\necho foreign\n", { encoding: "utf8" });
+    const registration = makeRegistration({
+      targetDir: join(blocker, "bin"),
+      extraTargetDirs: [usableDir],
+      platform: "darwin",
     });
-    expect(readFileSync(join(targetDir, "iart"), "utf8")).toContain("legacy");
+    const result = await registration.healEntryShims();
+    expect(result).toMatchObject({ ok: true, foreignForms: ["sh"] });
+    expect(readFileSync(join(usableDir, "iart"), "utf8")).toContain("foreign");
   });
 
   it("IO 失败：目标目录不可读时结构化失败（不抛进 UI 层）", async () => {
@@ -554,5 +611,148 @@ describe("注册前入口资源探测（CLI-037）", () => {
     const result = await registration.registerEntry();
     expect(result).toMatchObject({ ok: true, action: "created" });
     expect(existsSync(join(targetDir, "iart"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// macOS 落点候选序列（spec §8：可写候选优先 / 已存 shim 落点稳定 / 全不可用转手动指引）
+// ---------------------------------------------------------------------------
+
+describe("macOS 落点候选序列（spec §8）", () => {
+  it("候选逐一探测：跳过不可用候选，落点为第一个可写候选", async () => {
+    const blocker = join(tempRoot, "cand-blocker");
+    writeFileSync(blocker, "plain file", { encoding: "utf8" });
+    const unusable = join(blocker, "bin"); // 祖先被文件占位 → 不可用
+    const usable = join(tempRoot, "cand-usable");
+    const registration = makeRegistration({ targetDir: unusable, extraTargetDirs: [usable], platform: "darwin" });
+    const result = await registration.registerEntry();
+    expect(result).toMatchObject({ ok: true, action: "created" });
+    if (!result.ok) throw new Error("unexpected");
+    expect(result.entryPath).toBe(join(usable, "iart"));
+    expect(existsSync(join(usable, "iart"))).toBe(true);
+  });
+
+  it("落点稳定：候选中已存本应用 shim 的可写目录优先，重复注册不漂移", async () => {
+    const first = join(tempRoot, "cand-stable-first");
+    const second = join(tempRoot, "cand-stable-second");
+    mkdirSync(second, { recursive: true });
+    // second 已存本应用过期模板（ours）→ 落点选 second 而非排序更前的 first
+    writeFileSync(join(second, "iart"), `#!/bin/sh\nunset ELECTRON_RUN_AS_NODE\nexec "${APP_EXEC}" --cli "$@"\n`, {
+      encoding: "utf8",
+    });
+    const registration = makeRegistration({ targetDir: first, extraTargetDirs: [second], platform: "darwin" });
+    const result = await registration.registerEntry();
+    expect(result).toMatchObject({ ok: true, action: "overwritten" });
+    if (!result.ok) throw new Error("unexpected");
+    expect(result.entryPath).toBe(join(second, "iart"));
+    expect(existsSync(join(first, "iart"))).toBe(false);
+  });
+
+  it("候选逐一不可用：注册失败给手动注册指引命令（sudo 形态），不产生半成品", async () => {
+    const blocker = join(tempRoot, "cand-all-blocker");
+    writeFileSync(blocker, "plain file", { encoding: "utf8" });
+    const registration = makeRegistration({ targetDir: join(blocker, "bin"), platform: "darwin" });
+    const result = await registration.registerEntry();
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unexpected");
+    expect(result.message).toContain("sudo tee");
+    expect(result.message).toContain("ELECTRON_RUN_AS_NODE=1");
+  });
+
+  it("PATH 引导：落点不在 defaultSearchDirs 时状态 pathSetupRequired=true，在则 false", async () => {
+    const hintedDir = join(tempRoot, "cand-path-hint");
+    const needsHint = makeRegistration({ targetDir: hintedDir, platform: "darwin" });
+    expect(await needsHint.registerEntry()).toMatchObject({ ok: true, action: "created" });
+    expect(await needsHint.getEntryStatus()).toMatchObject({
+      supported: true,
+      state: "registered",
+      pathSetupRequired: true,
+    });
+
+    const plainDir = join(tempRoot, "cand-path-nohint");
+    const noHint = makeRegistration({ targetDir: plainDir, platform: "darwin", defaultSearchDirs: [plainDir] });
+    expect(await noHint.registerEntry()).toMatchObject({ ok: true, action: "created" });
+    expect(await noHint.getEntryStatus()).toMatchObject({
+      supported: true,
+      state: "registered",
+      pathSetupRequired: false,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 旧入口遮蔽与遗留清理（spec §8：落点之外同名入口提示；注册仅清本应用遗留 shim）
+// ---------------------------------------------------------------------------
+
+describe("旧入口遮蔽与遗留清理（spec §8）", () => {
+  it("状态携带 legacyEntryPath：落点之外候选目录有同名入口时提示遮蔽", async () => {
+    const targetDir = join(tempRoot, "legacy-status-target");
+    const legacyDir = join(tempRoot, "legacy-status-legacy");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, "iart"), "#!/bin/sh\necho old-manual\n", { encoding: "utf8" });
+    const registration = makeRegistration({ targetDir, extraTargetDirs: [legacyDir], platform: "darwin" });
+    const status = await registration.getEntryStatus();
+    expect(status).toMatchObject({ supported: true, state: "missing", legacyEntryPath: join(legacyDir, "iart") });
+  });
+
+  it("注册收敛落点之外的本应用遗留 shim（多处去重）；同名他物不动", async () => {
+    const targetDir = join(tempRoot, "legacy-clean-target");
+    const legacyA = join(tempRoot, "legacy-clean-a");
+    const legacyB = join(tempRoot, "legacy-clean-b");
+    const foreignDir = join(tempRoot, "legacy-clean-foreign");
+    for (const dir of [legacyA, legacyB, foreignDir]) mkdirSync(dir, { recursive: true });
+    const staleShim = `#!/bin/sh\nunset ELECTRON_RUN_AS_NODE\nexec "${APP_EXEC}" --cli "$@"\n`;
+    writeFileSync(join(legacyA, "iart"), staleShim, { encoding: "utf8" });
+    writeFileSync(join(legacyB, "iart"), staleShim, { encoding: "utf8" });
+    writeFileSync(join(foreignDir, "iart"), "#!/bin/sh\necho user-own-tool\n", { encoding: "utf8" });
+    const registration = makeRegistration({
+      targetDir,
+      extraTargetDirs: [legacyA, legacyB, foreignDir],
+      platform: "darwin",
+    });
+    const result = await registration.registerEntry();
+    // 落点稳定：本应用 shim 已存在的可写目录优先（legacyA 在遗留目录中排序最前）→ 升级覆盖
+    expect(result).toMatchObject({ ok: true, action: "overwritten" });
+    if (!result.ok) throw new Error("unexpected");
+    expect(result.entryPath).toBe(join(legacyA, "iart"));
+    // 又一处遗留本应用 shim 被收敛清理；同名他物不动；未使用的候选目录不落文件
+    expect(existsSync(join(legacyB, "iart"))).toBe(false);
+    expect(readFileSync(join(foreignDir, "iart"), "utf8")).toContain("user-own-tool");
+    expect(existsSync(join(targetDir, "iart"))).toBe(false);
+    // legacyA 处内容升级为当前模板
+    expect(readFileSync(join(legacyA, "iart"), "utf8")).toBe(
+      `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${APP_EXEC}" "${cliEntryScriptFile}" "$@"\n`,
+    );
+  });
+
+  it("卸除面为全部候选目录：落点之外的本应用 shim 同步删除", async () => {
+    const targetDir = join(tempRoot, "legacy-unreg-target");
+    const legacyDir = join(tempRoot, "legacy-unreg-legacy");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, "iart"), `#!/bin/sh\nunset ELECTRON_RUN_AS_NODE\nexec "${APP_EXEC}" --cli "$@"\n`, {
+      encoding: "utf8",
+    });
+    const registration = makeRegistration({ targetDir, extraTargetDirs: [legacyDir], platform: "darwin" });
+    const result = await registration.unregisterEntry();
+    expect(result).toMatchObject({ ok: true, removed: true, reason: "removed" });
+    expect(existsSync(join(legacyDir, "iart"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 失败消息分类（spec §8：权限类给手动指引，非权限类给重试出路）
+// ---------------------------------------------------------------------------
+
+describe("失败消息分类（spec §8）", () => {
+  it("非权限类写入失败：不归因为权限，指认重试出路", async () => {
+    // 目标「目录」被同名文件占位：写入报非 EACCES/EPERM 类错误
+    const notADir = join(tempRoot, "fail-notdir");
+    writeFileSync(notADir, "plain file", { encoding: "utf8" });
+    const registration = makeRegistration({ targetDir: notADir, platform: "darwin" });
+    const result = await registration.registerEntry();
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unexpected");
+    expect(result.message).not.toContain("没有权限");
+    expect(result.message).toContain("重试");
   });
 });

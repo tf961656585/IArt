@@ -26,7 +26,7 @@ type RegistrationModule = {
     form: "sh" | "cmd";
   }) => string;
   createCliEntryRegistration: (options: {
-    targetDir: string;
+    targetDirs: readonly string[];
     appExecPath: string;
     cliEntryScriptPath?: string;
     platform?: string;
@@ -98,7 +98,7 @@ describe("shim 启动形态显式置位 ELECTRON_RUN_AS_NODE=1（CLI-024）", ()
     // 路径替身不可能在本机真实存在；本用例目的在 shim 落盘内容（CLI-024），探测替身放行
     // （探测语义本体由 cli-entry-registration.test 的 CLI-037 组用真实 stat 覆盖）。
     const registration = loadRegistrationModule().createCliEntryRegistration({
-      targetDir,
+      targetDirs: [targetDir],
       appExecPath: WIN_EXEC,
       cliEntryScriptPath: WIN_ENTRY,
       platform: "win32",

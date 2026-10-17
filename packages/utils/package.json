@@ -45,6 +45,11 @@
       "types": "./dist/stable-project-id.d.cts",
       "require": "./dist/stable-project-id.cjs",
       "default": "./dist/stable-project-id.cjs"
+    },
+    "./css-color": {
+      "types": "./dist/css-color.d.cts",
+      "require": "./dist/css-color.cjs",
+      "default": "./dist/css-color.cjs"
     }
   },
   "scripts": {

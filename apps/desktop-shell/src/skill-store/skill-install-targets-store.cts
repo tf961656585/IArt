@@ -17,12 +17,16 @@
  *   - 写入临时文件 + rename 原子写（照 skill-runtime-config-store 先例；非敏感数据无需 0600），
  *     落盘前用包装 schema 自检（不落读不回来的形状）。
  *
- * 防呆（add 时 O(n) 前缀判断，含尾部分隔符归一）：
+ * 防呆（add 时 O(n) 前缀判断，含尾部分隔符归一；update 重跑同一整套校验，仅重复/嵌套
+ * 检查排除目标自身）：
  *   - 与既有目标目录（内置 + 自定义）相同 → duplicate-dir；
  *   - 互为祖先/后代 → nested-dir；
  *   - 落在 app 自有数据目录（dev 与 prod 两个变体）之内或就是它 → reserved-dir。
+ *   - 目录输入先 trim，再展开 `~` / `~/...`（用户主目录；不支持 `~user`）；展开后必须
+ *     绝对路径；已存在但不是目录 → invalid-request；不存在则创建（mkdir recursive）。
  *
- * remove/update 只改注册表，绝不触碰磁盘上的 skill 文件（用户数据保留）。
+ * remove/update 只改注册表条目，绝不触碰磁盘上已有的 skill 文件（用户数据保留）；
+ * update 换目录时按 add 同规则创建新目录（不搬迁既有文件）。
  */
 
 import * as fs from "node:fs";
@@ -42,6 +46,7 @@ import {
   type SkillRemoveCustomTargetResult,
   type SkillUpdateCustomTargetRequest,
 } from "@iart/contracts";
+import { appendMainLog } from "../main-log.cjs";
 
 // ---------------------------------------------------------------------------
 // 内置目标目录事实（自 installer 移入；dev 模式不切换目标目录——第三方约定目录
@@ -181,10 +186,27 @@ const writeRegistryFile = (targets: CustomSkillInstallTarget[]): void => {
 /** 列出全部自定义安装目标（每次现读注册表，不缓存）。 */
 export const listCustomSkillInstallTargets = (): CustomSkillInstallTarget[] => readRegistryFile();
 
-/** 目录归一：必须为绝对路径，path.resolve 归一（顺带去尾部分隔符）。非绝对路径返回 null。 */
+/** 目录归一：trim → `~` / `~/...` 展开（用户主目录；不支持 `~user`）→ 必须为绝对路径，
+ *  path.resolve 归一（顺带去尾部分隔符）。非绝对路径返回 null。 */
 const normalizeSkillsDir = (dir: string): string | null => {
-  if (!path.isAbsolute(dir)) return null;
-  return path.resolve(dir);
+  const trimmed = dir.trim();
+  let expanded = trimmed;
+  if (trimmed === "~" || trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    let home: string;
+    try {
+      home = resolveHomeDir();
+    } catch (err) {
+      // HOME 不可解析时 `~` 无法展开：按非法路径处理（调用方按 invalid-request 返回）
+      appendMainLog("debug", "[skill-install-targets] 目录含 `~` 但主目录不可解析，拒绝", {
+        dir,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+    expanded = trimmed === "~" ? home : path.join(home, trimmed.slice(2));
+  }
+  if (!path.isAbsolute(expanded)) return null;
+  return path.resolve(expanded);
 };
 
 /** 互为祖先/后代（前缀判断含尾部分隔符归一；相同目录不在此列）。 */
@@ -197,40 +219,42 @@ const isReservedDir = (candidate: string): boolean =>
     (appDataDir) => candidate === appDataDir || candidate.startsWith(appDataDir + path.sep),
   );
 
-export const addCustomSkillInstallTarget = (
-  input: SkillAddCustomTargetRequest,
-): { ok: true; target: CustomSkillInstallTarget } | { ok: false; error: SkillCustomTargetErrorCode } => {
-  const name = input.name.trim();
-  if (name.length === 0) {
-    console.debug("[skill-install-targets] add: name 为空白，拒绝");
-    return { ok: false, error: "invalid-request" };
-  }
-  const candidate = normalizeSkillsDir(input.dir);
+/**
+ * add / update 共用的目标目录校验（update 重跑 add 的整套校验，仅「重复/嵌套」排除自身）。
+ *
+ * 顺序与错误码：
+ *   1. 归一后非绝对路径 → invalid-request（相对路径与非 `~` 展开拒绝）
+ *   2. 与既有目标（内置 + 自定义，excludeId 排除自身）目录相同 → duplicate-dir
+ *   3. 互为祖先/后代 → nested-dir
+ *   4. 落在 app 自有数据目录 → reserved-dir
+ *   5. 已存在但不是目录 → invalid-request；不存在则创建（mkdir recursive）
+ *
+ * 校验拒绝分支走主进程文件日志（logs/main.log）——打包态 GUI 主进程 console 无输出，
+ * 仅 console 不构成有效留痕（AGENTS「条件跳过必须留痕」）。
+ */
+const prepareSkillsDir = (
+  rawDir: string,
+  existingTargets: Array<{ id: string; skillsDir: string }>,
+  operation: "add" | "update",
+): { ok: true; skillsDir: string } | { ok: false; error: SkillCustomTargetErrorCode } => {
+  const candidate = normalizeSkillsDir(rawDir);
   if (candidate === null) {
-    console.debug("[skill-install-targets] add: 目录不是绝对路径，拒绝", { dir: input.dir });
+    appendMainLog("debug", `[skill-install-targets] ${operation}: 目录不是绝对路径，拒绝`, {
+      dir: rawDir,
+    });
     return { ok: false, error: "invalid-request" };
   }
 
-  const customs = readRegistryFile();
-  const existingDirs: Array<{ id: string; skillsDir: string }> = [
-    ...SKILL_INSTALL_TARGETS.map((target) => ({
-      id: target,
-      skillsDir: resolveBuiltinTargetSkillsDir(target),
-    })),
-    ...customs.map((entry) => ({ id: entry.id, skillsDir: entry.skillsDir })),
-  ];
-
-  // 防呆 1：与既有目标目录相同 → duplicate-dir；互为祖先/后代 → nested-dir。
-  for (const existing of existingDirs) {
+  for (const existing of existingTargets) {
     if (candidate === existing.skillsDir) {
-      console.debug("[skill-install-targets] add: 目录与既有目标相同", {
+      appendMainLog("debug", `[skill-install-targets] ${operation}: 目录与既有目标相同`, {
         dir: candidate,
         target: existing.id,
       });
       return { ok: false, error: "duplicate-dir" };
     }
     if (isNestedDir(candidate, existing.skillsDir)) {
-      console.debug("[skill-install-targets] add: 目录与既有目标互为祖先/后代", {
+      appendMainLog("debug", `[skill-install-targets] ${operation}: 目录与既有目标互为祖先/后代`, {
         dir: candidate,
         target: existing.id,
       });
@@ -238,17 +262,59 @@ export const addCustomSkillInstallTarget = (
     }
   }
 
-  // 防呆 2：app 自有数据目录（dev 与 prod 两个变体）之内或就是它 → reserved-dir。
   if (isReservedDir(candidate)) {
-    console.debug("[skill-install-targets] add: 目录落在 app 自有数据目录内", { dir: candidate });
+    appendMainLog("debug", `[skill-install-targets] ${operation}: 目录落在 app 自有数据目录内`, {
+      dir: candidate,
+    });
     return { ok: false, error: "reserved-dir" };
   }
 
-  // 目录不存在则创建（创建失败属意外异常，上抛由 IPC 层按 invoke-failed 兜底）。
-  if (!fs.existsSync(candidate)) {
+  const existingStat = fs.statSync(candidate, { throwIfNoEntry: false });
+  if (existingStat !== undefined) {
+    if (!existingStat.isDirectory()) {
+      appendMainLog("debug", `[skill-install-targets] ${operation}: 目标已存在但不是目录，拒绝`, {
+        dir: candidate,
+      });
+      return { ok: false, error: "invalid-request" };
+    }
+  } else {
+    // 目录不存在则创建（创建失败属意外异常，上抛由 IPC 层按 invoke-failed 兜底）。
     fs.mkdirSync(candidate, { recursive: true });
-    console.debug("[skill-install-targets] add: 目标目录不存在，已创建", { dir: candidate });
+    appendMainLog("debug", `[skill-install-targets] ${operation}: 目标目录不存在，已创建`, {
+      dir: candidate,
+    });
   }
+
+  return { ok: true, skillsDir: candidate };
+};
+
+/** 既有目标目录集合（内置 + 自定义）；excludeId 用于 update 排除自身。 */
+const collectExistingTargetDirs = (
+  customs: CustomSkillInstallTarget[],
+  excludeId: string | null,
+): Array<{ id: string; skillsDir: string }> => [
+  ...SKILL_INSTALL_TARGETS.map((target) => ({
+    id: target,
+    skillsDir: resolveBuiltinTargetSkillsDir(target),
+  })),
+  ...customs
+    .filter((entry) => entry.id !== excludeId)
+    .map((entry) => ({ id: entry.id, skillsDir: entry.skillsDir })),
+];
+
+export const addCustomSkillInstallTarget = (
+  input: SkillAddCustomTargetRequest,
+): { ok: true; target: CustomSkillInstallTarget } | { ok: false; error: SkillCustomTargetErrorCode } => {
+  const name = input.name.trim();
+  if (name.length === 0) {
+    appendMainLog("debug", "[skill-install-targets] add: name 为空白，拒绝", undefined);
+    return { ok: false, error: "invalid-request" };
+  }
+
+  const customs = readRegistryFile();
+  const prepared = prepareSkillsDir(input.dir, collectExistingTargetDirs(customs, null), "add");
+  if (!prepared.ok) return { ok: false, error: prepared.error };
+  const candidate = prepared.skillsDir;
 
   // id 生成：custom- + 随机 hex；与既有 id 冲突则重生成。
   const existingIds = new Set(customs.map((entry) => entry.id));
@@ -261,7 +327,7 @@ export const addCustomSkillInstallTarget = (
   try {
     writeRegistryFile([...customs, target]);
   } catch (err) {
-    console.warn("[skill-install-targets] add: 注册表落盘失败", {
+    appendMainLog("warn", "[skill-install-targets] add: 注册表落盘失败", {
       error: err instanceof Error ? err.message : String(err),
     });
     return { ok: false, error: "persist-failed" };
@@ -269,32 +335,48 @@ export const addCustomSkillInstallTarget = (
   return { ok: true, target };
 };
 
+/**
+ * 编辑自定义目标（名称 + 目录，全量提交）。
+ * 目录侧重跑 add 的整套校验（重复/嵌套检查排除自身：只改名的记录不得与自己已占用的
+ * 目录冲突；改到别的目标目录照常报 duplicate-dir / nested-dir）。
+ */
 export const updateCustomSkillInstallTarget = (
   input: SkillUpdateCustomTargetRequest,
 ): { ok: true; target: CustomSkillInstallTarget } | { ok: false; error: SkillCustomTargetErrorCode } => {
   const name = input.name.trim();
   if (name.length === 0) {
-    console.debug("[skill-install-targets] update: name 为空白，拒绝");
+    appendMainLog("debug", "[skill-install-targets] update: name 为空白，拒绝", undefined);
     return { ok: false, error: "invalid-request" };
   }
   // 内置目标不在注册表（硬编码管理）：显式拦截，视同 not-found。
   if (isBuiltinTargetId(input.id)) {
-    console.debug("[skill-install-targets] update: 内置目标不接受改名", { id: input.id });
+    appendMainLog("debug", "[skill-install-targets] update: 内置目标不接受编辑", { id: input.id });
     return { ok: false, error: "not-found" };
   }
 
   const targets = readRegistryFile();
   const existing = targets.find((entry) => entry.id === input.id);
   if (existing === undefined) {
-    console.debug("[skill-install-targets] update: 目标 id 不在注册表", { id: input.id });
+    appendMainLog("debug", "[skill-install-targets] update: 目标 id 不在注册表", { id: input.id });
     return { ok: false, error: "not-found" };
   }
 
-  const updated: CustomSkillInstallTarget = { ...existing, name };
+  const prepared = prepareSkillsDir(
+    input.skillsDir,
+    collectExistingTargetDirs(targets, input.id),
+    "update",
+  );
+  if (!prepared.ok) return { ok: false, error: prepared.error };
+
+  const updated: CustomSkillInstallTarget = {
+    ...existing,
+    name,
+    skillsDir: prepared.skillsDir,
+  };
   try {
     writeRegistryFile(targets.map((entry) => (entry.id === input.id ? updated : entry)));
   } catch (err) {
-    console.warn("[skill-install-targets] update: 注册表落盘失败", {
+    appendMainLog("warn", "[skill-install-targets] update: 注册表落盘失败", {
       error: err instanceof Error ? err.message : String(err),
     });
     return { ok: false, error: "persist-failed" };

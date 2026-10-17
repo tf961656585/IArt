@@ -13,15 +13,13 @@ const AppThemeProvider: React.FC<AppThemeProviderProps> = ({ children, mode }) =
   const storeMode = useAppStore((state) => state.themeMode);
   const effectiveMode = mode ?? storeMode ?? "light";
 
-  // 同步 data-theme，用于自定义样式读取；同步主进程 nativeTheme，
-  // 让原生标题栏/菜单/对话框跟随应用主题（原生 chrome 不读 renderer 状态）
+  // 同步 data-theme，用于自定义样式读取。
+  // 原生主题开关（nativeTheme.themeSource）由 Hub 偏好唯一驱动，Editor 不写——
+  // 它是 app 级单值且会反向覆盖渲染端 prefers-color-scheme 媒询，多写者会互相污染
+  // （docs/hub/window-chrome.md §7.5、docs/editor/window-chrome.md）。
   useEffect(() => {
     if (typeof document !== "undefined") {
       document.documentElement.setAttribute("data-theme", effectiveMode);
-    }
-    const api = window.electron;
-    if (typeof api?.setNativeThemeSource === "function") {
-      void api.setNativeThemeSource(effectiveMode);
     }
   }, [effectiveMode]);
 

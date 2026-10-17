@@ -95,20 +95,28 @@ describe('addCustomSkillInstallTarget 边界校验', () => {
 });
 
 describe('updateCustomSkillInstallTarget 边界校验', () => {
-  it('成功分支经 schema parse 返回更新后条目，位置参数原样透传', async () => {
-    const raw = { ok: true, target: { id: 'custom-ab12cd34', name: '新名字', skillsDir: '/Users/me/skills' } };
+  it('成功分支经 schema parse 返回更新后条目，位置参数（id, name, skillsDir）原样透传', async () => {
+    const raw = { ok: true, target: { id: 'custom-ab12cd34', name: '新名字', skillsDir: '/Users/me/new-skills' } };
     const updateCustom = vi.fn(() => Promise.resolve(raw));
     setElectronApi({ updateCustomSkillInstallTarget: updateCustom });
-    await expect(bridge.updateCustomSkillInstallTarget('custom-ab12cd34', '新名字')).resolves.toEqual(
-      SkillCustomTargetMutationResultSchema.parse(raw),
-    );
-    expect(updateCustom).toHaveBeenCalledWith('custom-ab12cd34', '新名字');
+    await expect(
+      bridge.updateCustomSkillInstallTarget('custom-ab12cd34', '新名字', '/Users/me/new-skills'),
+    ).resolves.toEqual(SkillCustomTargetMutationResultSchema.parse(raw));
+    expect(updateCustom).toHaveBeenCalledWith('custom-ab12cd34', '新名字', '/Users/me/new-skills');
   });
 
   it('失败分支经 schema parse 返回错误码（not-found）', async () => {
     const raw = { ok: false, error: 'not-found' };
     setElectronApi({ updateCustomSkillInstallTarget: () => Promise.resolve(raw) });
-    await expect(bridge.updateCustomSkillInstallTarget('custom-ab12cd34', 'x')).resolves.toEqual(
+    await expect(bridge.updateCustomSkillInstallTarget('custom-ab12cd34', 'x', '/y')).resolves.toEqual(
+      SkillCustomTargetMutationResultSchema.parse(raw),
+    );
+  });
+
+  it('失败分支经 schema parse 返回目录校验错误码（duplicate-dir）', async () => {
+    const raw = { ok: false, error: 'duplicate-dir' };
+    setElectronApi({ updateCustomSkillInstallTarget: () => Promise.resolve(raw) });
+    await expect(bridge.updateCustomSkillInstallTarget('custom-ab12cd34', 'x', '/y')).resolves.toEqual(
       SkillCustomTargetMutationResultSchema.parse(raw),
     );
   });
@@ -116,9 +124,15 @@ describe('updateCustomSkillInstallTarget 边界校验', () => {
   it('window.electron 缺席与 IPC 异常均回退 invoke-failed 结果', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     setElectronApi(undefined);
-    await expect(bridge.updateCustomSkillInstallTarget('x', 'y')).resolves.toEqual({ ok: false, error: 'invoke-failed' });
+    await expect(bridge.updateCustomSkillInstallTarget('x', 'y', '/z')).resolves.toEqual({
+      ok: false,
+      error: 'invoke-failed',
+    });
     setElectronApi({ updateCustomSkillInstallTarget: () => Promise.reject(new Error('ipc down')) });
-    await expect(bridge.updateCustomSkillInstallTarget('x', 'y')).resolves.toEqual({ ok: false, error: 'invoke-failed' });
+    await expect(bridge.updateCustomSkillInstallTarget('x', 'y', '/z')).resolves.toEqual({
+      ok: false,
+      error: 'invoke-failed',
+    });
   });
 });
 

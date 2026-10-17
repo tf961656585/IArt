@@ -7,23 +7,32 @@ import { SettingsSection } from './components/SettingsSection';
 /**
  * 设置页「检查更新」子单元（通用设置分区）：当前版本 + 状态栏 + 检查按钮 + 诊断工具（打开日志/复制诊断）+ 进度条。
  * 逻辑与 vanilla createUpdateController 的 renderStatus/renderProgress 等价；
- * tab 挂载即激活手动检查（等价 vanilla onSettingsTabActivated → requestCheckUpdates(true)）。
+ * tab 挂载先 initialize（应用版本/日志信息/状态快照——本实例的诊断数据源，缺失会让
+ * 「当前版本」显示未知、复制诊断拿到空字段），再手动检查一次更新（等价 vanilla
+ * onSettingsTabActivated → requestCheckUpdates(true)）。
  * 全局 banner/弹窗由 App 顶层的 UpdateBanner 承载（同一 useAppUpdate 数据源）。
  */
 export function UpdateSection() {
-  const { projection, appVersion, notice, isElectron, checkUpdates, openLog, openLogFolder, copyDiagnostics } = useAppUpdate();
+  const { projection, appVersion, notice, isElectron, checkUpdates, openLog, openLogFolder, copyDiagnostics, initialize } = useAppUpdate();
 
-  // 进入设置 tab 时手动检查一次更新（等价 vanilla onSettingsTabActivated → requestCheckUpdates(true)）
+  // 进入设置 tab：先初始化本实例的诊断数据源，再手动检查一次更新
   useEffect(() => {
-    void checkUpdates(true);
-  }, [checkUpdates]);
+    void (async () => {
+      await initialize();
+      await checkUpdates(true);
+    })();
+  }, [initialize, checkUpdates]);
 
   const versionSuffix: string = projection.version ? '（' + projection.version + '）' : '';
 
   const statusLines: string[] = [];
   if (!isElectron) statusLines.push('请在桌面应用中检查更新');
   else if (projection.checking) statusLines.push('正在检查更新...');
-  else if (projection.error) statusLines.push('没能完成更新，请检查网络后重新检查');
+  else if (projection.error) {
+    statusLines.push(
+      projection.errorPhase === 'download' ? '更新下载没能完成，可重新检查后再试' : '没能检查更新，可稍后重新检查',
+    );
+  }
   else if (projection.downloaded) statusLines.push('新版本已下载完成，可以安装了');
   else if (projection.downloading) statusLines.push('正在下载更新' + versionSuffix);
   else if (projection.available) statusLines.push('发现新版本' + versionSuffix);

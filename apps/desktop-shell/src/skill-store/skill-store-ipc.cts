@@ -8,7 +8,8 @@
  *   - skills:install：入参含 bundleUrl、sha512、target、skillId
  *   - skills:reveal-install-folder：定位 skill 安装目录（docs/editor/本地文件快捷跳转.md LFJ-007）
  *   - skills:list-custom-targets / add / update / remove：自定义安装目标注册表管理
- *     （目录来源为系统选择框 selectFolder，主进程只收已选取目录字符串）
+ *     （目录来源为系统选择框 selectFolder，主进程只收已选取目录字符串；update 为全量
+ *     提交 { id, name, skillsDir }，目录侧重跑 add 的整套校验并排除目标自身）
  *
  * 入参与返回均经 packages/contracts 的 Zod schema parse（IPC 边界规范）；
  * 管理通道的意外异常按 invoke-failed 兜底，不向渲染层抛裸异常。
@@ -171,7 +172,7 @@ export const registerSkillStoreIpcHandlers = (): void => {
     runCustomTargetMutation((): SkillCustomTargetMutationResult => {
       const parsed = SkillAddCustomTargetRequestSchema.safeParse(payload);
       if (!parsed.success) {
-        console.debug("[skill-store] add custom target: invalid request", {
+        appendMainLog("debug", "[skill-store] add custom target: invalid request", {
           issue: parsed.error.message,
         });
         return { ok: false, error: "invalid-request" };
@@ -184,7 +185,8 @@ export const registerSkillStoreIpcHandlers = (): void => {
     runCustomTargetMutation((): SkillCustomTargetMutationResult => {
       const parsed = SkillUpdateCustomTargetRequestSchema.safeParse(payload);
       if (!parsed.success) {
-        console.debug("[skill-store] update custom target: invalid request", {
+        // 全量提交：缺 skillsDir 等形状不合法在此拦截（不落注册表、不改磁盘）
+        appendMainLog("debug", "[skill-store] update custom target: invalid request", {
           issue: parsed.error.message,
         });
         return { ok: false, error: "invalid-request" };
@@ -197,7 +199,7 @@ export const registerSkillStoreIpcHandlers = (): void => {
     runCustomTargetRemoval((): SkillRemoveCustomTargetResult => {
       const parsed = SkillRemoveCustomTargetRequestSchema.safeParse(payload);
       if (!parsed.success) {
-        console.debug("[skill-store] remove custom target: invalid request", {
+        appendMainLog("debug", "[skill-store] remove custom target: invalid request", {
           issue: parsed.error.message,
         });
         return { ok: false, error: "invalid-request" };

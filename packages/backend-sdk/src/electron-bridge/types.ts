@@ -38,6 +38,12 @@ export interface SelectFolderOptions {
   title: string | undefined;
   defaultPath: string | undefined;
   buttonLabel: string | undefined;
+  /**
+   * 可选扩展（默认关）：为 true 时主进程在系统选择框 properties 追加 'showHiddenFiles'，
+   * 允许选到隐藏文件夹（如 Skill 自定义安装目录）。不传则与历史行为完全一致。
+   * 仅 selectFolder 通道支持；selectProjectFolder 忽略该字段。
+   */
+  showHiddenFiles?: boolean;
 }
 
 export const SELECT_FOLDER_ERROR_CODES = {
@@ -197,8 +203,9 @@ export type ElectronBridge = {
   closeWindow: () => Promise<void> | undefined;
   // 窗口 chrome（spec docs/hub/window-chrome.md）：主题同步 overlay + 平台让位常量
   setTitleBarOverlay: ((color: string, symbolColor: string) => Promise<void>) | undefined;
-  // 应用生效主题同步到主进程 nativeTheme.themeSource（原生标题栏/菜单/对话框跟随）
-  setNativeThemeSource: ((theme: 'light' | 'dark') => Promise<void>) | undefined;
+  // 应用主题偏好直写到主进程 nativeTheme.themeSource（原生标题栏/菜单/对话框跟随）；
+  // system 直写不解析（spec docs/hub/window-chrome.md §7.5）
+  setNativeThemeSource: ((theme: 'light' | 'dark' | 'system') => Promise<void>) | undefined;
   // 聚焦主窗口并定位设置页子单元（首次指引随批修补，docs/hub/首次指引-design.md §4.4）
   focusHubSettings: ((sectionId: string) => Promise<{ ok: boolean }>) | undefined;
   // main → Hub renderer 的设置页锚点通知（Editor 触发聚焦后 Hub 侧接收）
@@ -221,7 +228,8 @@ export type ElectronBridge = {
   // 自定义安装目标注册表（Hub 弹层统一管理；目录来源为系统选择框 selectFolder）
   listCustomSkillInstallTargets: (() => Promise<unknown>) | undefined;
   addCustomSkillInstallTarget: ((name: string, dir: string) => Promise<unknown>) | undefined;
-  updateCustomSkillInstallTarget: ((id: string, name: string) => Promise<unknown>) | undefined;
+  /** update 为全量提交：name 与 skillsDir（安装目录）都必传。 */
+  updateCustomSkillInstallTarget: ((id: string, name: string, skillsDir: string) => Promise<unknown>) | undefined;
   removeCustomSkillInstallTarget: ((id: string) => Promise<unknown>) | undefined;
   // 打开 backend 业务日志目录（docs/editor/本地文件快捷跳转.md LFJ-008）
   revealBackendLogFolder: (() => Promise<unknown>) | undefined;

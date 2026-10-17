@@ -311,13 +311,19 @@ export const createHubPlatformBridge = (): HubPlatformBridge => {
         return SkillCustomTargetMutationResultSchema.parse({ ok: false, error: 'invoke-failed' });
       }
     },
-    updateCustomSkillInstallTarget: async (id: string, name: string): Promise<SkillCustomTargetMutationResult> => {
+    updateCustomSkillInstallTarget: async (
+      id: string,
+      name: string,
+      skillsDir: string,
+    ): Promise<SkillCustomTargetMutationResult> => {
       const api = getElectronApi();
       if (!api || typeof api.updateCustomSkillInstallTarget !== 'function') {
         return SkillCustomTargetMutationResultSchema.parse({ ok: false, error: 'invoke-failed' });
       }
       try {
-        return SkillCustomTargetMutationResultSchema.parse(await api.updateCustomSkillInstallTarget(id, name));
+        return SkillCustomTargetMutationResultSchema.parse(
+          await api.updateCustomSkillInstallTarget(id, name, skillsDir),
+        );
       } catch (error: unknown) {
         console.warn('[skills] updateCustomSkillInstallTarget failed:', error);
         return SkillCustomTargetMutationResultSchema.parse({ ok: false, error: 'invoke-failed' });

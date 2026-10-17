@@ -218,12 +218,26 @@ describe('管理通道请求 schema（strict）', () => {
     expect(() => SkillAddCustomTargetRequestSchema.parse({ name: 'n', dir: '/a/b', extra: 1 })).toThrow();
   });
 
-  it('update：接受 { id, name }，拒绝多余字段', () => {
-    expect(SkillUpdateCustomTargetRequestSchema.parse({ id: VALID_TARGET_ID, name: 'n' })).toEqual({
-      id: VALID_TARGET_ID,
-      name: 'n',
-    });
-    expect(() => SkillUpdateCustomTargetRequestSchema.parse({ id: VALID_TARGET_ID, name: 'n', extra: 1 })).toThrow();
+  it('update：接受 { id, name, skillsDir }（全量提交），拒绝多余字段', () => {
+    expect(
+      SkillUpdateCustomTargetRequestSchema.parse({
+        id: VALID_TARGET_ID,
+        name: 'n',
+        skillsDir: '/home/u/my-skills',
+      }),
+    ).toEqual({ id: VALID_TARGET_ID, name: 'n', skillsDir: '/home/u/my-skills' });
+    expect(() =>
+      SkillUpdateCustomTargetRequestSchema.parse({
+        id: VALID_TARGET_ID,
+        name: 'n',
+        skillsDir: '/home/u/my-skills',
+        extra: 1,
+      }),
+    ).toThrow();
+  });
+
+  it('update：缺 skillsDir（局部更新）被拒绝', () => {
+    expect(() => SkillUpdateCustomTargetRequestSchema.parse({ id: VALID_TARGET_ID, name: 'n' })).toThrow();
   });
 
   it('remove：接受 { id }，拒绝多余字段', () => {

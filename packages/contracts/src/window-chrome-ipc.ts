@@ -26,14 +26,17 @@ export type WindowChromeIpcChannel =
 /**
  * renderer → main，同步 Windows titleBarOverlay 配色。
  *
- * 载荷为 CSS color string（oklch / hex / rgb 均可，Electron Skia 解析），
- * 映射自 Hub 视觉令牌 --background / --foreground（见 docs/hub/window-chrome.md §7.2）。
+ * 载荷必须是 sRGB hex（#rrggbb / #rrggbbaa）：Electron 的 CSS 颜色解析器
+ * （ParseCSSColor）只认 hex / rgb() / hsl() / named，oklch 会静默解析失败回落
+ * 浅色白条（2026-10-16 实证）。映射自 Hub 视觉令牌 --background / --foreground
+ * （见 docs/hub/window-chrome.md §7.2）；oklch 令牌经 @iart/utils 的 cssColorToHex
+ * 在边界折算，禁止把 oklch 原串直接过 IPC。
  * fire-and-forget：主进程更新 overlay 后无返回值。
  */
 export const SetTitleBarOverlayRequestSchema = z
   .object({
-    color: z.string().min(1),
-    symbolColor: z.string().min(1),
+    color: z.string().regex(/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i),
+    symbolColor: z.string().regex(/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i),
   })
   .strict();
 
@@ -44,19 +47,21 @@ export type SetTitleBarOverlayRequest = z.infer<typeof SetTitleBarOverlayRequest
 // ---------------------------------------------------------------------------
 
 /**
- * renderer → main，把应用生效主题同步到主进程 `nativeTheme.themeSource`。
+ * renderer → main，把应用主题偏好直写到主进程 `nativeTheme.themeSource`。
  *
- * 原生窗口 chrome（macOS Editor 原生标题栏、原生菜单、对话框、滚动条）只认主进程外观，
- * 不读 renderer 的主题 class / localStorage；不同步时这些表面永远跟随系统外观，
- * 深色应用主题下呈现浅色标题栏（Editor 窗口未走 titleBarStyle: 'hidden'）。
+ * 原生窗口 chrome（Editor 原生标题栏、原生菜单、对话框、滚动条）只认主进程外观，
+ * 不读 renderer 的主题 class / localStorage；不同步时这些表面永远跟随系统外观。
  *
- * 载荷只有显式生效主题 light/dark：'system' 偏好由 renderer 自行解析成生效主题后再推送，
- * 不把 system 透传给主进程（themeSource 语义与 renderer 生效主题保持一一对应）。
+ * 裁定（docs/hub/window-chrome.md §7.5）：themeSource 是 app 级单值，会反向覆盖
+ * 渲染端 prefers-color-scheme 媒询，由 Hub 主题偏好唯一驱动——light/dark 直写显式值，
+ * system 必须直写 'system'。把 system 解析成 light/dark 再推送会让媒询从此只能读到
+ * 被写死的值，「跟随系统」自锁失效（2026-10-16 实证）。Editor 不写本开关
+ * （docs/editor/window-chrome.md）。
  * fire-and-forget：主进程更新 themeSource 后无返回值。
  */
 export const SetNativeThemeSourceRequestSchema = z
   .object({
-    theme: z.enum(['light', 'dark']),
+    theme: z.enum(['light', 'dark', 'system']),
   })
   .strict();
 
@@ -112,3 +117,26 @@ export const WINDOW_CHROME_INSETS = {
 } as const;
 
 export type WindowChromeInsets = typeof WINDOW_CHROME_INSETS;
+
+// ---------------------------------------------------------------------------
+// Hub 初始 titleBarOverlay 配色（跨进程单一事实源）
+// ---------------------------------------------------------------------------
+
+/**
+ * Hub 窗口创建期的 Windows titleBarOverlay 初始配色（spec docs/hub/window-chrome.md §5）。
+ *
+ * 主进程创建窗口时读不到 renderer localStorage 中的主题偏好，初始取**默认深色主题**
+ * 令牌的 sRGB hex 折算值；renderer bootstrap 后经 window:set-title-bar-overlay IPC
+ * 按实际主题校正（spec §7.3）。
+ *
+ * 值来源（Chromium 渲染像素实测折算，2026-10-16）：
+ * - color ← apps/hub/src/app/globals.css `.dark --background` oklch(0.165 0.012 277) → #0d0e14
+ * - symbolColor ← `.dark --foreground` oklch(0.97 0.003 277) → #f4f5f7
+ * 与 CSS 令牌的一致性由 apps/hub 的令牌漂移守卫测试看护（globals.css 改值必须同步本常量）。
+ */
+export const HUB_INITIAL_TITLE_BAR_OVERLAY = {
+  color: '#0d0e14',
+  symbolColor: '#f4f5f7',
+} as const;
+
+export type HubInitialTitleBarOverlay = typeof HUB_INITIAL_TITLE_BAR_OVERLAY;

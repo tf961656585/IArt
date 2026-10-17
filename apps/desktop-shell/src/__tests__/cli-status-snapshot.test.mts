@@ -21,9 +21,15 @@ type SnapshotModule = {
     serviceRunning: boolean;
     port: number | null;
     discoveryFilePath: string;
-    entryRegistered: boolean | null;
+    entry: { state: string; entryPath: string | null; legacyEntryPath: string | null; pathSetupRequired: boolean };
     commandLog: readonly unknown[];
   }) => unknown;
+  toCliEntryStatusDetail: (status: unknown) => {
+    state: string;
+    entryPath: string | null;
+    legacyEntryPath: string | null;
+    pathSetupRequired: boolean;
+  };
   isDiscoveryFileValid: (filePath: string) => boolean;
   CLI_RECENT_COMMANDS_MAX: number;
 };
@@ -63,7 +69,7 @@ describe("cli-status-snapshot 状态快照（CLI-013 Main 侧基础）", () => {
       serviceRunning: true,
       port: 47823,
       discoveryFilePath,
-      entryRegistered: true,
+      entry: { state: "registered", entryPath: "/tmp/example/iart", legacyEntryPath: null, pathSetupRequired: false },
       commandLog: [makeLogEntry(1), makeLogEntry(2)],
     }) as Record<string, unknown>;
     // buildCliStatusDto 出站即过 CliStatusDtoSchema.parse；此处再断言一次形状完整性
@@ -72,7 +78,7 @@ describe("cli-status-snapshot 状态快照（CLI-013 Main 侧基础）", () => {
       serviceRunning: true,
       port: 47823,
       discoveryFileValid: true,
-      entryRegistered: true,
+      entry: { state: "registered", entryPath: "/tmp/example/iart", legacyEntryPath: null, pathSetupRequired: false },
     });
     expect(Array.isArray(dto.recentCommands)).toBe(true);
     expect((dto.recentCommands as unknown[]).length).toBe(2);
@@ -85,7 +91,7 @@ describe("cli-status-snapshot 状态快照（CLI-013 Main 侧基础）", () => {
       serviceRunning: true,
       port: 1234,
       discoveryFilePath: join(tempRoot, "missing-discovery.json"),
-      entryRegistered: null,
+      entry: { state: "unsupported", entryPath: null, legacyEntryPath: null, pathSetupRequired: false },
       commandLog: entries,
     }) as { recentCommands: Array<{ paramsSummary: string }> };
     expect(snapshot.CLI_RECENT_COMMANDS_MAX).toBe(20);
@@ -118,10 +124,39 @@ describe("cli-status-snapshot 状态快照（CLI-013 Main 侧基础）", () => {
       serviceRunning: false,
       port: null,
       discoveryFilePath: corruptedPath,
-      entryRegistered: null,
+      entry: { state: "unsupported", entryPath: null, legacyEntryPath: null, pathSetupRequired: false },
       commandLog: [],
     }) as Record<string, unknown>;
     expect(CliStatusDtoSchema.safeParse(dto).success).toBe(true);
-    expect(dto).toMatchObject({ serviceRunning: false, port: null, discoveryFileValid: false, entryRegistered: null });
+    expect(dto).toMatchObject({
+      serviceRunning: false,
+      port: null,
+      discoveryFileValid: false,
+      entry: { state: "unsupported", entryPath: null, legacyEntryPath: null, pathSetupRequired: false },
+    });
+  });
+
+  it("toCliEntryStatusDetail：supported 投影五态字段，unsupported 归 unsupported 态", () => {
+    const snapshot = loadSnapshotModule();
+    expect(
+      snapshot.toCliEntryStatusDetail({
+        supported: true,
+        entryPath: "/tmp/example/iart",
+        state: "stale",
+        legacyEntryPath: "/usr/local/bin/iart",
+        pathSetupRequired: true,
+      }),
+    ).toEqual({
+      state: "stale",
+      entryPath: "/tmp/example/iart",
+      legacyEntryPath: "/usr/local/bin/iart",
+      pathSetupRequired: true,
+    });
+    expect(snapshot.toCliEntryStatusDetail({ supported: false })).toEqual({
+      state: "unsupported",
+      entryPath: null,
+      legacyEntryPath: null,
+      pathSetupRequired: false,
+    });
   });
 });

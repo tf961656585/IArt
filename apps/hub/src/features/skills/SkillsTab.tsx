@@ -7,7 +7,7 @@ import { HubTopBand } from '../../components/HubTopBand';
 import { useSkills } from './SkillsTab.hooks';
 
 /**
- * Skill 商店 tab：刷新 + 管理安装目标 + 全部更新 + 状态栏 + Skill 列表 + 空态。
+ * Skill 商店 tab：刷新 + 管理自定义 Agent 目录 + 全部更新 + 状态栏 + Skill 列表 + 空态。
  * tab 挂载即激活（进入即拉取远端目录 + 刷新已安装状态），
  * 卸载时由 useSkills 中止进行中的拉取。
  */
@@ -51,7 +51,7 @@ export function SkillsTab() {
             <RefreshCw /> 刷新
           </Button>
           <Button variant="outline" onClick={() => setManageOpen(true)}>
-            <FolderCog /> 管理安装目标
+            <FolderCog /> 管理自定义 Agent 目录
           </Button>
           {showUpdateAll ? (
             <Button onClick={() => void updateAll()} disabled={loading} loading={updatingAll}>

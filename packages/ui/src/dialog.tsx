@@ -86,12 +86,17 @@ const dialogSizeVariants = cva(null, {
 // DialogBody 滚动变体：spec「结构槽位语义」节。
 // scroll = standard 形态下唯一滚动容器；canvas = 撑满 + 不滚动，业务内容自管空间。
 // base 含 min-h-0 / min-w-0，保证 flex 子元素能正确收缩，消除外部 min-w-0 依赖。
+// scroll 的 -mx-1 + px-1 为聚焦指示环预留横向裁剪余量（与容器边缘同宽的控件，其
+// 3px 环会被 overflow 在左右边缘整条裁掉；负外边距把裁剪盒外扩 4px，等量内距把
+// 内容拉回原位，子内容零位移）。依据：docs/hub/visual-design.md §8.6「行容器不得裁切
+// 行内控件的聚焦指示环」、spec docs/editor/dialog-sizing-contract.md「结构槽位语义」节。
+// 纵向未预留余量，贴内容区上下边缘的控件环仍会被纵向裁剪（已知残余）。
 const dialogBodyVariants = cva(
   "flex-1 min-h-0 min-w-0",
   {
     variants: {
       variant: {
-        scroll: "overflow-y-auto overscroll-contain",
+        scroll: "-mx-1 px-1 overflow-y-auto overscroll-contain",
         canvas: "overflow-hidden relative",
       },
     },
@@ -199,7 +204,7 @@ function DialogContent(props: DialogContentProps) {
   // grid → flex flex-col；内置 max-h-[90vh]（不可关闭）；overflow-hidden 兜底，
   // 内容滚动交给 DialogBody。
   const baseClassName =
-    "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-modal flex max-h-[90vh] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] flex-col gap-4 overflow-hidden rounded-lg border p-6 shadow-lg duration-200"
+    "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-modal flex max-h-[90vh] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] flex-col gap-4 overflow-hidden rounded-lg border border-border p-6 shadow-lg duration-200"
 
   // 宽度分支（spec「宽度语义档位」「弹窗形态」节）：
   // - standard 形态：size variant 输出 sm:max-w-*，覆盖基线移动端兜底的桌面端宽度。

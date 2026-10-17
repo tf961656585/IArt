@@ -244,7 +244,7 @@ export function useSkills() {
         console.error('[skills] 安装失败:', { skillId: skill.id, target, error: result.error });
         setStatusMessage(
           result.error === 'unknown-target'
-            ? `没能安装 ${skill.name}：安装目标已不存在，请刷新目标列表后重试`
+            ? `没能安装 ${skill.name}：自定义目录已不存在，请刷新后重试`
             : `没能安装 ${skill.name}：${result.error}`,
         );
         return false;

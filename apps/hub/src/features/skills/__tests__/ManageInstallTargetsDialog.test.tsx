@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import {
   SkillCustomTargetMutationResultSchema,
@@ -12,10 +12,12 @@ import type { HubPlatformBridge } from '../../../client/types';
 import { ManageInstallTargetsDialog } from '../ManageInstallTargetsDialog';
 
 /**
- * 「管理安装目标」集中管理弹层（docs/hub/skill-store.md §3.2 UI 口径）：
- * 内置目标只读展示（「内置」徽标，无改名/删除）；自定义目标增删改走平台桥；
- * 目录唯一来源是系统选择框（selectFolder）；错误码→文案映射集中一处；
- * 删除需二次确认；每次操作成功后弹层自行刷新列表。
+ * 「管理自定义 Agent 目录」集中管理弹层（docs/hub/skill-store.md §3.2 UI 口径）：
+ * 内置目标只读展示（「内置」徽标，无编辑/删除）；自定义目标增删改走平台桥；
+ * 文件夹可键入/粘贴，也可用系统选择框（selectFolder，带 showHiddenFiles）取路径；
+ * 错误码→文案映射集中一处；删除需二次确认；每次操作成功后弹层自行刷新列表。
+ * 结构口径：底栏「关闭」+「添加」同排（添加为主操作）；行内「编辑」态首行编辑名称、
+ * 次行编辑文件夹（改路径成功后行内给静默色说明）；添加区由小节标题「添加自定义目录」承载分组。
  *
  * platform 用完整 HubPlatformBridge 桩（编译期钉住接口形状），经 vi.mock 注入 useHubRuntime；
  * 响应夹具经 contracts schema parse 产生（与真实 IPC 响应同形）。
@@ -150,7 +152,7 @@ describe('ManageInstallTargetsDialog 列表展示', () => {
     expect(screen.getAllByText('内置')).toHaveLength(2);
     expect(await screen.findByText('我的目录')).toBeInTheDocument();
     expect(screen.getByText('/Users/me/skills')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '改名 我的目录' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '编辑 我的目录' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '删除 我的目录' })).toBeInTheDocument();
   });
 
@@ -166,7 +168,7 @@ describe('ManageInstallTargetsDialog 列表展示', () => {
     });
     renderDialog();
 
-    expect(await screen.findByText('正在读取安装目标...')).toBeInTheDocument();
+    expect(await screen.findByText('正在读取自定义目录...')).toBeInTheDocument();
     if (resolveList === undefined) throw new Error('listCustom promise 应已被创建');
     resolveList(targetFixture());
     expect(await screen.findByText('我的目录')).toBeInTheDocument();
@@ -179,7 +181,7 @@ describe('ManageInstallTargetsDialog 列表展示', () => {
     renderDialog();
 
     expect(
-      await screen.findByText('还没有自定义目标。添加后，可以把 Skill 安装到你指定的文件夹。'),
+      await screen.findByText('还没有自定义目录。添加后，可以把 Skill 安装到你指定的文件夹。'),
     ).toBeInTheDocument();
   });
 
@@ -190,7 +192,7 @@ describe('ManageInstallTargetsDialog 列表展示', () => {
     platformRef.current = createPlatform({ listCustomSkillInstallTargets: listCustom });
     renderDialog();
 
-    expect(await screen.findByText('没能读取安装目标')).toBeInTheDocument();
+    expect(await screen.findByText('没能读取自定义目录')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '重试' }));
     expect(await screen.findByText('我的目录')).toBeInTheDocument();
     expect(listCustom).toHaveBeenCalledTimes(2);
@@ -198,7 +200,7 @@ describe('ManageInstallTargetsDialog 列表展示', () => {
 });
 
 describe('ManageInstallTargetsDialog 添加', () => {
-  it('校验失败：未填名称提示「请填写名称」，未选文件夹提示「请选择文件夹」，不发起 IPC', async () => {
+  it('校验失败：未填名称提示「请填写名称」，未填文件夹提示「请填写或选择文件夹路径」，不发起 IPC', async () => {
     const addCustom = vi.fn();
     platformRef.current = createPlatform({ addCustomSkillInstallTarget: addCustom });
     renderDialog();
@@ -209,7 +211,7 @@ describe('ManageInstallTargetsDialog 添加', () => {
 
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'dsh' } });
     fireEvent.click(screen.getByRole('button', { name: '添加' }));
-    expect(await screen.findByText('请选择文件夹')).toBeInTheDocument();
+    expect(await screen.findByText('请填写或选择文件夹路径')).toBeInTheDocument();
     expect(addCustom).not.toHaveBeenCalled();
   });
 
@@ -235,7 +237,12 @@ describe('ManageInstallTargetsDialog 添加', () => {
     await screen.findByText('我的目录');
 
     await fillAddForm('dsh', '/Users/me/dsh-skills');
-    expect(selectFolder).toHaveBeenCalledWith({ title: '选择 Skill 安装文件夹', defaultPath: undefined, buttonLabel: '选择' });
+    expect(selectFolder).toHaveBeenCalledWith({
+      title: '选择 Skill 安装文件夹',
+      defaultPath: undefined,
+      buttonLabel: '选择',
+      showHiddenFiles: true,
+    });
 
     fireEvent.click(screen.getByRole('button', { name: '添加' }));
     await waitFor(() => expect(addCustomSkillInstallTarget).toHaveBeenCalledWith('dsh', '/Users/me/dsh-skills'));
@@ -256,13 +263,26 @@ describe('ManageInstallTargetsDialog 添加', () => {
     await fillAddForm('重复目录', '/Users/me/skills');
     fireEvent.click(screen.getByRole('button', { name: '添加' }));
 
-    expect(await screen.findByText('该文件夹已被其他安装目标使用，请另选一个文件夹')).toBeInTheDocument();
+    expect(await screen.findByText('该文件夹已被其他自定义目录使用，请另选一个文件夹')).toBeInTheDocument();
     expect(addCustomSkillInstallTarget).toHaveBeenCalledTimes(1);
+  });
+
+  it('添加被拒：reserved-dir 提示带出路的文案', async () => {
+    const addCustomSkillInstallTarget = vi.fn(() => Promise.resolve(mutationFail('reserved-dir')));
+    platformRef.current = createPlatform({ addCustomSkillInstallTarget });
+    renderDialog();
+    await screen.findByText('我的目录');
+
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '数据目录' } });
+    fireEvent.change(screen.getByLabelText('文件夹'), { target: { value: '/Users/me/app-data' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加' }));
+
+    expect(await screen.findByText('不能使用应用数据所在的文件夹，请另选一个文件夹')).toBeInTheDocument();
   });
 });
 
-describe('ManageInstallTargetsDialog 改名', () => {
-  it('行内编辑：回显原名，保存携带 (id, 新名) 并刷新列表，取消不发起 IPC', async () => {
+describe('ManageInstallTargetsDialog 编辑', () => {
+  it('编辑态两行：名称与文件夹回显原值；保存携带 (id, 新名, 新路径) 并刷新列表；取消不发起 IPC', async () => {
     const updateCustom = vi.fn(() => Promise.resolve(mutationOk('custom-ab12cd34', '新名字', '/Users/me/skills')));
     const listCustom = vi.fn()
       .mockResolvedValueOnce(targetFixture())
@@ -271,35 +291,179 @@ describe('ManageInstallTargetsDialog 改名', () => {
     renderDialog();
     await screen.findByText('我的目录');
 
-    fireEvent.click(screen.getByRole('button', { name: '改名 我的目录' }));
-    const renameInput = screen.getByLabelText('改名 我的目录');
-    expect(renameInput).toHaveValue('我的目录');
-    fireEvent.change(renameInput, { target: { value: '新名字' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存 我的目录 的改名' }));
+    fireEvent.click(screen.getByRole('button', { name: '编辑 我的目录' }));
+    expect(screen.getByLabelText('编辑名称 我的目录')).toHaveValue('我的目录');
+    expect(screen.getByLabelText('编辑文件夹 我的目录')).toHaveValue('/Users/me/skills');
+    fireEvent.change(screen.getByLabelText('编辑名称 我的目录'), { target: { value: '新名字' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存 我的目录' }));
 
-    await waitFor(() => expect(updateCustom).toHaveBeenCalledWith('custom-ab12cd34', '新名字'));
+    await waitFor(() => expect(updateCustom).toHaveBeenCalledWith('custom-ab12cd34', '新名字', '/Users/me/skills'));
     expect(await screen.findByText('新名字')).toBeInTheDocument();
     expect(listCustom).toHaveBeenCalledTimes(2);
+    // 仅改名：不出现「路径已更新」说明（该说明只在文件夹值变化时给）
+    expect(
+      screen.queryByText('路径已更新。原来文件夹里的 Skill 文件不会被移动，如需在新文件夹使用请重新安装。'),
+    ).toBeNull();
 
     // 再次进入编辑后取消：不发起 IPC、回到展示态
-    fireEvent.click(screen.getByRole('button', { name: '改名 新名字' }));
-    fireEvent.click(screen.getByRole('button', { name: '取消 新名字 的改名' }));
+    fireEvent.click(screen.getByRole('button', { name: '编辑 新名字' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消 新名字' }));
     expect(updateCustom).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('button', { name: '改名 新名字' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '编辑 新名字' })).toBeInTheDocument();
   });
 
-  it('改名为空被拦下（请填写名称），不发起 IPC', async () => {
+  it('改文件夹保存后：列表刷新为新路径，行内显示静默色说明（非错误红）', async () => {
+    const updateCustom = vi.fn(() => Promise.resolve(mutationOk('custom-ab12cd34', '我的目录', '/Users/me/new-skills')));
+    const listCustom = vi.fn()
+      .mockResolvedValueOnce(targetFixture())
+      .mockResolvedValueOnce(targetFixture({ skillsDir: '/Users/me/new-skills' }));
+    platformRef.current = createPlatform({ updateCustomSkillInstallTarget: updateCustom, listCustomSkillInstallTargets: listCustom });
+    renderDialog();
+    await screen.findByText('我的目录');
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑 我的目录' }));
+    fireEvent.change(screen.getByLabelText('编辑文件夹 我的目录'), { target: { value: '/Users/me/new-skills' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存 我的目录' }));
+
+    await waitFor(() =>
+      expect(updateCustom).toHaveBeenCalledWith('custom-ab12cd34', '我的目录', '/Users/me/new-skills'),
+    );
+    const notice = await screen.findByText(
+      '路径已更新。原来文件夹里的 Skill 文件不会被移动，如需在新文件夹使用请重新安装。',
+    );
+    expect(notice.className).toContain('text-muted-foreground');
+    expect(notice.className).not.toContain('text-destructive');
+    expect(await screen.findByText('/Users/me/new-skills')).toBeInTheDocument();
+  });
+
+  it('编辑行「选择文件夹」走同一通道（带 showHiddenFiles）回填草稿，未保存不发起 update', async () => {
+    const selectFolder = vi.fn(() => Promise.resolve(selectFolderSuccess('/Users/me/picked-skills')));
+    const updateCustom = vi.fn();
+    platformRef.current = createPlatform({ selectFolder, updateCustomSkillInstallTarget: updateCustom });
+    renderDialog();
+    await screen.findByText('我的目录');
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑 我的目录' }));
+    fireEvent.click(screen.getByRole('button', { name: '选择文件夹 我的目录' }));
+
+    await waitFor(() =>
+      expect(selectFolder).toHaveBeenCalledWith({
+        title: '选择 Skill 安装文件夹',
+        defaultPath: undefined,
+        buttonLabel: '选择',
+        showHiddenFiles: true,
+      }),
+    );
+    await waitFor(() => expect(screen.getByLabelText('编辑文件夹 我的目录')).toHaveValue('/Users/me/picked-skills'));
+    expect(updateCustom).not.toHaveBeenCalled();
+  });
+
+  it('编辑态按 Enter 直接提交保存', async () => {
+    const updateCustom = vi.fn(() => Promise.resolve(mutationOk('custom-ab12cd34', '回车名', '/Users/me/skills')));
+    const listCustom = vi.fn()
+      .mockResolvedValueOnce(targetFixture())
+      .mockResolvedValueOnce(targetFixture({ name: '回车名' }));
+    platformRef.current = createPlatform({ updateCustomSkillInstallTarget: updateCustom, listCustomSkillInstallTargets: listCustom });
+    renderDialog();
+    await screen.findByText('我的目录');
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑 我的目录' }));
+    fireEvent.change(screen.getByLabelText('编辑名称 我的目录'), { target: { value: '回车名' } });
+    fireEvent.keyDown(screen.getByLabelText('编辑名称 我的目录'), { key: 'Enter' });
+
+    await waitFor(() => expect(updateCustom).toHaveBeenCalledWith('custom-ab12cd34', '回车名', '/Users/me/skills'));
+  });
+
+  it('名称为空被拦下（请填写名称），不发起 IPC', async () => {
     const updateCustom = vi.fn();
     platformRef.current = createPlatform({ updateCustomSkillInstallTarget: updateCustom });
     renderDialog();
     await screen.findByText('我的目录');
 
-    fireEvent.click(screen.getByRole('button', { name: '改名 我的目录' }));
-    fireEvent.change(screen.getByLabelText('改名 我的目录'), { target: { value: '   ' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存 我的目录 的改名' }));
+    fireEvent.click(screen.getByRole('button', { name: '编辑 我的目录' }));
+    fireEvent.change(screen.getByLabelText('编辑名称 我的目录'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存 我的目录' }));
 
     expect(await screen.findByText('请填写名称')).toBeInTheDocument();
     expect(updateCustom).not.toHaveBeenCalled();
+  });
+
+  it('文件夹清空被拦下（请填写或选择文件夹路径），不发起 IPC', async () => {
+    const updateCustom = vi.fn();
+    platformRef.current = createPlatform({ updateCustomSkillInstallTarget: updateCustom });
+    renderDialog();
+    await screen.findByText('我的目录');
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑 我的目录' }));
+    fireEvent.change(screen.getByLabelText('编辑文件夹 我的目录'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存 我的目录' }));
+
+    expect(await screen.findByText('请填写或选择文件夹路径')).toBeInTheDocument();
+    expect(updateCustom).not.toHaveBeenCalled();
+  });
+
+  it('编辑被拒：invalid-request 提示指认文件夹路径与修法', async () => {
+    const updateCustom = vi.fn(() => Promise.resolve(mutationFail('invalid-request')));
+    platformRef.current = createPlatform({ updateCustomSkillInstallTarget: updateCustom });
+    renderDialog();
+    await screen.findByText('我的目录');
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑 我的目录' }));
+    fireEvent.change(screen.getByLabelText('编辑文件夹 我的目录'), { target: { value: 'relative/skills' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存 我的目录' }));
+
+    expect(
+      await screen.findByText('文件夹路径不对，请填写完整的文件夹路径（可用 ~ 开头）'),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('ManageInstallTargetsDialog 结构口径', () => {
+  it('底栏组成：「添加」（主操作）与「关闭」同排于弹层底栏，关闭在前、添加殿后', async () => {
+    platformRef.current = createPlatform();
+    renderDialog();
+    await screen.findByText('我的目录');
+
+    const footer = document.querySelector<HTMLElement>('[data-slot="dialog-footer"]');
+    expect(footer).not.toBeNull();
+    if (footer === null) throw new Error('弹层底栏应存在');
+    expect(within(footer).getAllByRole('button').map((button) => button.textContent)).toEqual(['关闭', '添加']);
+  });
+
+  it('文件夹输入框可键入 / 可粘贴（无只读、不设 tabIndex=-1），点击不再唤起系统选择框', async () => {
+    const selectFolder = vi.fn();
+    platformRef.current = createPlatform({ selectFolder });
+    renderDialog();
+    await screen.findByText('我的目录');
+
+    const dirInput = screen.getByLabelText('文件夹');
+    expect(dirInput).toHaveAttribute('placeholder', '选择或粘贴文件夹路径');
+    expect(dirInput).not.toHaveAttribute('readonly');
+    expect(dirInput).not.toHaveAttribute('tabindex');
+
+    fireEvent.click(dirInput);
+    expect(selectFolder).not.toHaveBeenCalled();
+  });
+
+  it('键入路径直接参与添加（提交前 trim），`~` 开头的路径不被前端拒绝（交主进程裁定）', async () => {
+    const addCustom = vi.fn(() => Promise.resolve(mutationOk('custom-11223344', 'dsh', '~/my-skills')));
+    platformRef.current = createPlatform({ addCustomSkillInstallTarget: addCustom });
+    renderDialog();
+    await screen.findByText('我的目录');
+
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: ' dsh ' } });
+    fireEvent.change(screen.getByLabelText('文件夹'), { target: { value: '  ~/my-skills  ' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加' }));
+
+    await waitFor(() => expect(addCustom).toHaveBeenCalledWith('dsh', '~/my-skills'));
+  });
+
+  it('添加区由小节标题「添加自定义目录」承载分组', async () => {
+    platformRef.current = createPlatform();
+    renderDialog();
+    await screen.findByText('我的目录');
+
+    expect(screen.getByText('添加自定义目录')).toBeInTheDocument();
   });
 });
 
@@ -314,14 +478,14 @@ describe('ManageInstallTargetsDialog 删除', () => {
     await screen.findByText('我的目录');
 
     fireEvent.click(screen.getByRole('button', { name: '删除 我的目录' }));
-    expect(await screen.findByText('删除安装目标')).toBeInTheDocument();
+    expect(await screen.findByText('删除自定义目录')).toBeInTheDocument();
     expect(
       screen.getByText('将移除「我的目录」。已安装到该文件夹的 Skill 文件不会被删除，需要时可以手动清理。'),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '删除' }));
     await waitFor(() => expect(removeCustom).toHaveBeenCalledWith('custom-ab12cd34'));
-    expect(await screen.findByText('还没有自定义目标。添加后，可以把 Skill 安装到你指定的文件夹。')).toBeInTheDocument();
+    expect(await screen.findByText('还没有自定义目录。添加后，可以把 Skill 安装到你指定的文件夹。')).toBeInTheDocument();
     expect(listCustom).toHaveBeenCalledTimes(2);
   });
 
@@ -332,7 +496,7 @@ describe('ManageInstallTargetsDialog 删除', () => {
     await screen.findByText('我的目录');
 
     fireEvent.click(screen.getByRole('button', { name: '删除 我的目录' }));
-    await screen.findByText('删除安装目标');
+    await screen.findByText('删除自定义目录');
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
 
     expect(removeCustom).not.toHaveBeenCalled();
@@ -347,10 +511,10 @@ describe('ManageInstallTargetsDialog 删除', () => {
     await screen.findByText('我的目录');
 
     fireEvent.click(screen.getByRole('button', { name: '删除 我的目录' }));
-    await screen.findByText('删除安装目标');
+    await screen.findByText('删除自定义目录');
     fireEvent.click(screen.getByRole('button', { name: '删除' }));
 
-    expect(await screen.findByText('该目标不存在，可能已被删除')).toBeInTheDocument();
+    expect(await screen.findByText('该目录不存在，可能已被删除')).toBeInTheDocument();
     await waitFor(() => expect(listCustom).toHaveBeenCalledTimes(2));
   });
 });

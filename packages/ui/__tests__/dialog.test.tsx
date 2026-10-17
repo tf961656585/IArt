@@ -175,6 +175,9 @@ describe("DialogBody", () => {
     const body = queryBody()
     expect(body.className).toContain("overflow-y-auto")
     expect(body.className).toContain("overscroll-contain")
+    // 聚焦环裁剪余量（spec「结构槽位语义」节）：负外边距外扩裁剪盒 + 等量内距归位内容。
+    expect(body.className).toContain("-mx-1")
+    expect(body.className).toContain("px-1")
   })
 
   it("variant=canvas 输出 overflow-hidden + relative（canvas 形态配套）", () => {
@@ -187,6 +190,8 @@ describe("DialogBody", () => {
     const body = queryBody()
     expect(body.className).toContain("overflow-hidden")
     expect(body.className).toContain("relative")
+    // canvas 变体不承载标准形态的裁剪余量补偿。
+    expect(body.className).not.toContain("-mx-1")
   })
 
   it("未传 variant 时默认 scroll", () => {

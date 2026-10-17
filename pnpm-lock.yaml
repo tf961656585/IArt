@@ -477,6 +477,9 @@ importers:
       '@iart/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@iart/utils':
+        specifier: workspace:*
+        version: link:../../packages/utils
       react:
         specifier: 19.1.0
         version: 19.1.0

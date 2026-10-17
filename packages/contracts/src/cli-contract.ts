@@ -1,5 +1,6 @@
 import * as z from 'zod';
 
+import { CliErrorSchema } from './cli-error-code';
 import { ExecutableModelDirectoryEntrySchema } from './executable-model-catalog-contract';
 import { PromptDockBatchTaskAcceptanceSchema } from './promptdock-batch-contract';
 import { RuntimeMediaAssetViewSchema, RuntimeTaskViewSchema, UnifiedGenerationStatusSchema } from './schemas/runtime-transaction.schema';
@@ -51,42 +52,11 @@ import {
 // ---------------------------------------------------------------------------
 // A. 错误码（spec §9，跨 spec 与测试的稳定枚举）
 // ---------------------------------------------------------------------------
+// 独立承载于 ./cli-error-code（被命令面/代理通道/设置页命令日志共同消费，居下游契约之下；
+// 行数预算拆分先例同 cli-canvas-contract）；此处 re-export 保持 '@iart/contracts' 单一取用面。
 
-/**
- * CLI 错误码：与 spec §9 表格一一对应，语义以 spec 为准，不得增删改名。
- * 错误响应统一为 `{ code, message }`；message 面向使用 CLI 的开发者，使用用户视角业务语言，
- * 不暴露内部实现术语。
- */
-export const CLI_ERROR_CODES = [
-  'not_running',
-  'auth_failed',
-  'project_not_found',
-  'project_name_ambiguous',
-  'project_name_conflict',
-  'project_not_open',
-  'asset_not_found',
-  'batch_not_found',
-  'node_not_found',
-  'group_not_found',
-  'group_name_ambiguous',
-  'invalid_reference',
-  'model_not_available',
-  'task_not_found',
-  'wait_timeout',
-  'command_rejected',
-  'internal_error',
-] as const;
-
-export const CliErrorCodeSchema = z.enum(CLI_ERROR_CODES);
-export type CliErrorCode = z.infer<typeof CliErrorCodeSchema>;
-
-export const CliErrorSchema = z
-  .object({
-    code: CliErrorCodeSchema,
-    message: z.string().min(1),
-  })
-  .strict();
-export type CliError = z.infer<typeof CliErrorSchema>;
+export { CLI_ERROR_CODES, CliErrorCodeSchema, CliErrorSchema } from './cli-error-code';
+export type { CliErrorCode, CliError } from './cli-error-code';
 
 // ---------------------------------------------------------------------------
 // B. 命令面（spec §5）：请求判别联合 + 响应判别联合
@@ -932,56 +902,19 @@ export type CliProxyCommandResponse = z.infer<typeof CliProxyCommandResponseSche
 // ---------------------------------------------------------------------------
 // D. 设置页「命令行工具」子单元 DTO（spec §6.2 命令日志 / §8 状态展示）
 // ---------------------------------------------------------------------------
+// 独立承载于 ./cli-settings-contract（Hub 消费、camelCase 边界；行数预算拆分先例同
+// cli-canvas-contract）；此处 re-export 保持 '@iart/contracts' 单一取用面。
 // 由 Hub 消费，字段用 camelCase。
 
-/**
- * 命令日志条目（spec §6.2：每条命令记录一条——时间、命令、参数摘要、结果状态、耗时）。
- * timestamp 为 UTC ISO 8601（内部存储口径，AGENTS.md 时间戳规范）；展示层由消费端转北京时间。
- * paramsSummary 语义是摘要：仅供诊断与设置页展示，禁止包含提示词全文与凭证/密钥（spec §6.1/§11）。
- */
-export const CliCommandLogEntrySchema = z
-  .object({
-    timestamp: z.string().datetime(),
-    command: z.string().min(1),
-    paramsSummary: z.string(),
-    status: z.enum(['success', 'error']),
-    durationMs: z.number().nonnegative(),
-    errorCode: CliErrorCodeSchema.optional(),
-  })
-  .strict();
-export type CliCommandLogEntry = z.infer<typeof CliCommandLogEntrySchema>;
-
-/**
- * CLI 状态 DTO（spec §8：只读状态展示——在役状态、发现文件有效性、命令入口注册状态、最近命令记录）。
- * 只读展示，不承载 CLI 行为配置，不提供令牌查看或重置（spec §7/§13）。
- */
-export const CliStatusDtoSchema = z
-  .object({
-    serviceRunning: z.boolean(),
-    port: z.number().int().min(1).nullable(),
-    discoveryFileValid: z.boolean(),
-    /**
-     * 命令入口注册状态（spec §3 命令入口注册 / §8 注册状态展示）。
-     * - true：入口已注册且内容与本应用 shim 一致；
-     * - false：入口不存在，或存在但内容已被改动（非本应用 shim）；
-     * - null：当前平台不支持一键注册（入口注册能力缺席），注册状态未知。
-     */
-    entryRegistered: z.boolean().nullable(),
-    /** 最近命令记录，最多 20 条（spec §8）。 */
-    recentCommands: z.array(CliCommandLogEntrySchema).max(20),
-  })
-  .strict();
-export type CliStatusDto = z.infer<typeof CliStatusDtoSchema>;
-
-/**
- * 命令入口注册/卸除操作结果（spec §8 一键注册与卸除注册动作的 IPC 响应形状）。
- * ok:false 时 message 引导手动注册（spec §3：手动注册指引是另一途径）；
- * message 面向用户，使用用户视角业务语言（docs/ui-copy-standard.md 的 CLI 终端外延口径）。
- */
-export const CliEntryOperationResultSchema = z
-  .object({
-    ok: z.boolean(),
-    message: z.string().min(1).optional(),
-  })
-  .strict();
-export type CliEntryOperationResult = z.infer<typeof CliEntryOperationResultSchema>;
+export {
+  CliCommandLogEntrySchema,
+  CliEntryStatusDetailSchema,
+  CliStatusDtoSchema,
+  CliEntryOperationResultSchema,
+} from './cli-settings-contract';
+export type {
+  CliCommandLogEntry,
+  CliEntryStatusDetail,
+  CliStatusDto,
+  CliEntryOperationResult,
+} from './cli-settings-contract';

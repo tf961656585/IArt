@@ -7,6 +7,7 @@ import { revealProjectFolderTarget } from "./reveal/revealProjectFolderTarget.cj
 import { writeTextClipboard } from "./clipboard/writeTextClipboard.cjs";
 import { writeImageFromUrlClipboard } from "./clipboard/writeImageFromUrlClipboard.cjs";
 import {
+  getBooleanField,
   getStringField,
   normalizeDesktopString,
   resolveBackendLogDirHint,
@@ -36,8 +37,6 @@ import {
   HubDesktopBootstrapSchema,
   LOG_DIAGNOSTICS_IPC_CHANNELS,
   RevealBackendLogFolderResultSchema,
-  SetNativeThemeSourceRequestSchema,
-  SetTitleBarOverlayRequestSchema,
   FocusHubSettingsRequestSchema,
   HubFocusSettingsNoticeSchema,
   REVEAL_IPC_CHANNELS,
@@ -47,6 +46,10 @@ import {
 } from "@iart/contracts";
 import type { CliEntryOperationResult, CliStatusDto } from "@iart/contracts";
 import { reportDesktopE2EEvent } from "./desktop-shell-e2e.cjs";
+import {
+  createSetNativeThemeSourceHandler,
+  createSetTitleBarOverlayHandler,
+} from "./window/window-chrome-ipc-handlers.cjs";
 import { registerSkillStoreIpcHandlers } from "./skill-store/skill-store-ipc.cjs";
 
 /** main → Hub renderer 的设置页锚点通知 channel（与 contracts WINDOW_CHROME_IPC_CHANNELS.FOCUS_HUB_SETTINGS 的 renderer 侧通知配对）。 */
@@ -203,6 +206,7 @@ export const registerDesktopIpcHandlers = ({
     title: string,
     defaultPath: string,
     buttonLabel: string,
+    showHiddenFiles: boolean,
   ) => {
     const win = BrowserWindow.getFocusedWindow() || windows.getMainWindow();
     if (!win || win.isDestroyed()) {
@@ -214,10 +218,19 @@ export const registerDesktopIpcHandlers = ({
         debugMessage: "No available browser window",
       };
     }
+    // showHiddenFiles 为可选扩展（默认关）：仅当调用方显式请求时才放宽隐藏项可见性，
+    // 未传该字段的既有调用方 properties 与历史行为完全一致。
+    const dialogProperties: NonNullable<Electron.OpenDialogOptions["properties"]> = [
+      "openDirectory",
+      "createDirectory",
+    ];
+    if (showHiddenFiles) {
+      dialogProperties.push("showHiddenFiles");
+    }
     const result = await dialog.showOpenDialog(win, {
       title,
       defaultPath,
-      properties: ["openDirectory", "createDirectory"],
+      properties: dialogProperties,
       buttonLabel,
     });
     const selectedPath = (result.filePaths[0] !== null && result.filePaths[0] !== undefined ? result.filePaths[0].trim() : undefined) || "";
@@ -238,11 +251,14 @@ export const registerDesktopIpcHandlers = ({
         };
   };
 
+  // select-folder 支持可选 showHiddenFiles（默认关，仅 Hub「选择 Skill 安装文件夹」等
+  // 显式请求的调用方放宽隐藏项）；select-project-folder 不开放该扩展，行为不变。
   ipcMain.handle("select-folder", async (_event, options) =>
     selectDirectory(
       getStringField(options, "title").trim() || "选择文件夹",
       getStringField(options, "defaultPath").trim(),
       getStringField(options, "buttonLabel").trim() || "选择此文件夹",
+      getBooleanField(options, "showHiddenFiles"),
     ),
   );
   ipcMain.handle("select-project-folder", async (_event, options) =>
@@ -250,6 +266,7 @@ export const registerDesktopIpcHandlers = ({
       getStringField(options, "title").trim() || "选择项目文件夹",
       getStringField(options, "defaultPath").trim(),
       getStringField(options, "buttonLabel").trim() || "打开项目",
+      false,
     ),
   );
 
@@ -362,25 +379,17 @@ export const registerDesktopIpcHandlers = ({
     }
   });
 
-  // window:set-title-bar-overlay（spec docs/hub/window-chrome.md §7.4）
-  // 仅作用于 Hub 主窗口：显式取 mainWindow，不用 fromWebContents，防误广播到 Editor 窗口。
-  ipcMain.handle(WINDOW_CHROME_IPC_CHANNELS.SET_TITLE_BAR_OVERLAY, (_event, payload) => {
-    const parsed = SetTitleBarOverlayRequestSchema.safeParse(payload);
-    if (!parsed.success) return;
-    const win = windows.getMainWindow();
-    if (win !== null && win !== undefined && !win.isDestroyed()) {
-      win.setTitleBarOverlay(parsed.data);
-    }
-  });
-
-  // window:set-native-theme-source：把应用生效主题同步到 nativeTheme.themeSource。
-  // 原生窗口 chrome（Editor 原生标题栏、原生菜单、对话框）只认主进程外观，不读 renderer 主题；
-  // 不同步时深色主题下这些表面永远跟随系统外观。app 级单值：Hub / Editor 后写者生效。
-  ipcMain.handle(WINDOW_CHROME_IPC_CHANNELS.SET_NATIVE_THEME_SOURCE, (_event, payload) => {
-    const parsed = SetNativeThemeSourceRequestSchema.safeParse(payload);
-    if (!parsed.success) return;
-    nativeTheme.themeSource = parsed.data.theme;
-  });
+  // window:set-title-bar-overlay / window:set-native-theme-source（spec docs/hub/window-chrome.md §7.4/§7.5）：
+  // handler 逻辑在 window/window-chrome-ipc-handlers.cjs（可注入单元：边界校验 + 主进程留痕）。
+  // 仅作用于 Hub 主窗口：显式取 getMainWindow，不用 fromWebContents，防误广播到 Editor 窗口。
+  ipcMain.handle(
+    WINDOW_CHROME_IPC_CHANNELS.SET_TITLE_BAR_OVERLAY,
+    createSetTitleBarOverlayHandler({ getMainWindow: () => windows.getMainWindow() }),
+  );
+  ipcMain.handle(
+    WINDOW_CHROME_IPC_CHANNELS.SET_NATIVE_THEME_SOURCE,
+    createSetNativeThemeSourceHandler({ nativeTheme }),
+  );
 
   // window:focus-hub-settings（首次指引随批存量修补，docs/hub/首次指引-design.md §4.4）：
   // Editor 聚焦 Hub 主窗口并定位设置页子单元。显示/还原/聚焦走 showMainWindow（已有生命周期

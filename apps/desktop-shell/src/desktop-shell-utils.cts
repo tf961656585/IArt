@@ -74,6 +74,28 @@ export const getStringField = (
   return typeof fieldValue === "string" ? fieldValue : "";
 };
 
+export type DesktopBooleanFields = {
+  showHiddenFiles: unknown | undefined;
+};
+
+export const asDesktopBooleanFields = (
+  value: unknown,
+): DesktopBooleanFields | null =>
+  isObjectLike(value) ? (value as DesktopBooleanFields) : null;
+
+/**
+ * 布尔字段安全读取（照 getStringField 的既有风格）：非对象、字段缺席或值非布尔一律按
+ * false 处理，绝不改变未传该字段的既有调用方行为。
+ */
+export const getBooleanField = (
+  value: unknown,
+  key: keyof DesktopBooleanFields,
+): boolean => {
+  const fields = asDesktopBooleanFields(value);
+  const fieldValue = (fields !== null && fields !== undefined ? fields[key] : undefined);
+  return fieldValue === true;
+};
+
 export const loadRuntimeEnvOnce = () => {
   loadRuntimeEnv({ repoRoot: ROOT_DIR, execDir: undefined, cwd: undefined, packagedAppRoot: undefined, resourcesDir: undefined });
 };

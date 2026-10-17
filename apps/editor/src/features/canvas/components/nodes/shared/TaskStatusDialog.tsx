@@ -94,7 +94,8 @@ export function TaskStatusDialog({
           <DialogTitle>{title || '任务详情'}</DialogTitle>
         </DialogHeader>
 
-        <DialogBody className="pr-1">
+        {/* pr-2 与内容槽裁剪余量（-mx-1 px-1）等量配对：余量把内容右边界相对基线外推 4px，右内距需 8px 才能保持内容几何不变 */}
+        <DialogBody className="pr-2">
           {!taskInfo ? (
             <div className="rounded-md border bg-muted/20 p-3 text-sm text-muted-foreground">还没有任务详情</div>
           ) : (

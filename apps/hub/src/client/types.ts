@@ -135,7 +135,12 @@ export interface HubPlatformBridge {
   /** 自定义安装目标注册表（Hub 弹层统一管理，目录来源为系统选择框 selectFolder）。 */
   listCustomSkillInstallTargets(): Promise<SkillListCustomTargetsResult>;
   addCustomSkillInstallTarget(name: string, dir: string): Promise<SkillCustomTargetMutationResult>;
-  updateCustomSkillInstallTarget(id: string, name: string): Promise<SkillCustomTargetMutationResult>;
+  /** 编辑自定义目标（全量提交：名称 + 安装目录都必传；目录校验归主进程）。 */
+  updateCustomSkillInstallTarget(
+    id: string,
+    name: string,
+    skillsDir: string,
+  ): Promise<SkillCustomTargetMutationResult>;
   removeCustomSkillInstallTarget(id: string): Promise<SkillRemoveCustomTargetResult>;
 
   // ========== CLI 设置页「命令行工具」子单元（docs/integrations/CLI与本地Agent集成.md §8） ==========

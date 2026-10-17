@@ -13,7 +13,10 @@ import type {
   EditorDesktopBootstrap,
   OpenEditorWindowResult,
 } from "@iart/contracts/editor-backend-contract";
-import { WINDOW_CHROME_INSETS } from "@iart/contracts";
+import {
+  HUB_INITIAL_TITLE_BAR_OVERLAY,
+  WINDOW_CHROME_INSETS,
+} from "@iart/contracts";
 import {
   getDb,
   validateProjectFolder,
@@ -246,11 +249,13 @@ export const createWindowController = ({
       ...(process.platform === "win32"
         ? {
             titleBarOverlay: {
-              // 初始取默认深色主题令牌值（主进程创建窗口时读不到 renderer localStorage 偏好）；
-              // 对应 apps/hub/src/app/globals.css .dark 块 --background(:76) / --foreground(:77)。
-              // renderer bootstrap 后经 window:set-title-bar-overlay IPC 按实际主题校正（spec §7.3）。
-              color: "oklch(0.165 0.012 277)",
-              symbolColor: "oklch(0.97 0.003 277)",
+              // 初始取默认深色主题令牌的 sRGB hex 折算值（主进程创建窗口时读不到 renderer
+              // localStorage 偏好）。必须走 hex：Electron 原生颜色解析器不认 oklch，
+              // 静默回落浅色白条（2026-10-16 实证）。值由 contracts 单一事实源
+              // HUB_INITIAL_TITLE_BAR_OVERLAY 承载（Chromium 渲染像素实测折算），与
+              // globals.css 令牌的一致性由 hub 令牌漂移守卫测试看护；renderer bootstrap
+              // 后经 window:set-title-bar-overlay IPC 按实际主题校正（spec §7.3）。
+              ...HUB_INITIAL_TITLE_BAR_OVERLAY,
               height: WINDOW_CHROME_INSETS.hubTopBandHeight,
             },
           }

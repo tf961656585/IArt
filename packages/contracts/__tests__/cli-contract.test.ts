@@ -707,7 +707,7 @@ describe('设置页「命令行工具」DTO（spec §6.2/§8）', () => {
     expect(CliCommandLogEntrySchema.safeParse({ ...valid, extra: 1 }).success).toBe(false);
   });
 
-  it('CLI 状态 DTO：recentCommands 最多 20 条，port 可空，entryRegistered 可空', () => {
+  it('CLI 状态 DTO：recentCommands 最多 20 条，port 可空，entry 为五态详情', () => {
     const entry = {
       timestamp: ISO,
       command: 'project.list',
@@ -715,12 +715,18 @@ describe('设置页「命令行工具」DTO（spec §6.2/§8）', () => {
       status: 'success',
       durationMs: 1,
     };
+    const entryDetail = {
+      state: 'registered',
+      entryPath: '/tmp/example/iart',
+      legacyEntryPath: null,
+      pathSetupRequired: false,
+    };
     expect(
       CliStatusDtoSchema.safeParse({
         serviceRunning: true,
         port: 8765,
         discoveryFileValid: true,
-        entryRegistered: true,
+        entry: entryDetail,
         recentCommands: [],
       }).success,
     ).toBe(true);
@@ -729,7 +735,7 @@ describe('设置页「命令行工具」DTO（spec §6.2/§8）', () => {
         serviceRunning: false,
         port: null,
         discoveryFileValid: false,
-        entryRegistered: null,
+        entry: { state: 'unsupported', entryPath: null, legacyEntryPath: null, pathSetupRequired: false },
         recentCommands: [],
       }).success,
     ).toBe(true);
@@ -738,7 +744,7 @@ describe('设置页「命令行工具」DTO（spec §6.2/§8）', () => {
         serviceRunning: true,
         port: 8765,
         discoveryFileValid: true,
-        entryRegistered: true,
+        entry: entryDetail,
         recentCommands: Array.from({ length: 20 }, () => entry),
       }).success,
     ).toBe(true);
@@ -747,26 +753,41 @@ describe('设置页「命令行工具」DTO（spec §6.2/§8）', () => {
         serviceRunning: true,
         port: 8765,
         discoveryFileValid: true,
-        entryRegistered: true,
+        entry: entryDetail,
         recentCommands: Array.from({ length: 21 }, () => entry),
       }).success,
     ).toBe(false);
   });
 
-  it('CLI 状态 DTO：entryRegistered 边界——boolean 与 null 合法，缺失/非布尔被拒绝（spec §8 注册状态）', () => {
+  it('CLI 状态 DTO：entry 五态边界——五态合法，缺失/非法被拒绝（spec §8 注册状态）', () => {
     const base = {
       serviceRunning: true,
       port: 8765,
       discoveryFileValid: true,
       recentCommands: [],
     };
-    // 三态语义：true=已注册且内容一致；false=未注册或内容被改动；null=平台不支持/状态未知
-    expect(CliStatusDtoSchema.safeParse({ ...base, entryRegistered: true }).success).toBe(true);
-    expect(CliStatusDtoSchema.safeParse({ ...base, entryRegistered: false }).success).toBe(true);
-    expect(CliStatusDtoSchema.safeParse({ ...base, entryRegistered: null }).success).toBe(true);
+    const detail = (state: string) => ({ state, entryPath: '/tmp/example/iart', legacyEntryPath: null, pathSetupRequired: false });
+    for (const state of ['unsupported', 'missing', 'registered', 'stale', 'foreign']) {
+      expect(CliStatusDtoSchema.safeParse({ ...base, entry: detail(state) }).success).toBe(true);
+    }
     expect(CliStatusDtoSchema.safeParse({ ...base }).success).toBe(false);
-    expect(CliStatusDtoSchema.safeParse({ ...base, entryRegistered: 'yes' }).success).toBe(false);
-    expect(CliStatusDtoSchema.safeParse({ ...base, entryRegistered: 1 }).success).toBe(false);
+    // 旧三态命名（modified 等）与旧布尔字段（entryRegistered）不得回归
+    expect(CliStatusDtoSchema.safeParse({ ...base, entry: detail('modified') }).success).toBe(false);
+    expect(CliStatusDtoSchema.safeParse({ ...base, entry: detail('registered'), entryRegistered: true }).success).toBe(false);
+    // entry 详情字段边界：entryPath/legacyEntryPath 可 null；pathSetupRequired 必须布尔；多余键拒绝
+    expect(
+      CliStatusDtoSchema.safeParse({
+        ...base,
+        entry: { state: 'stale', entryPath: null, legacyEntryPath: '/usr/local/bin/iart', pathSetupRequired: true },
+      }).success,
+    ).toBe(true);
+    expect(
+      CliStatusDtoSchema.safeParse({
+        ...base,
+        entry: { state: 'registered', entryPath: '/x', legacyEntryPath: '/y', pathSetupRequired: 'yes' },
+      }).success,
+    ).toBe(false);
+    expect(CliStatusDtoSchema.safeParse({ ...base, entry: detail('registered'), extra: 1 }).success).toBe(false);
   });
 
   it('CLI 设置页通道常量：三条通道命名稳定且经 barrel 导出（spec §8）', () => {

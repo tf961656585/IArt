@@ -22,12 +22,17 @@ type RemovalResult = { ok: true } | { ok: false; error: string };
 type StoreModule = {
   listCustomSkillInstallTargets: () => CustomTarget[];
   addCustomSkillInstallTarget: (input: { name: string; dir: string }) => MutationResult;
-  updateCustomSkillInstallTarget: (input: { id: string; name: string }) => MutationResult;
+  updateCustomSkillInstallTarget: (input: {
+    id: string;
+    name: string;
+    skillsDir: string;
+  }) => MutationResult;
   removeCustomSkillInstallTarget: (input: { id: string }) => RemovalResult;
   __test_only__: {
     getRegistryFilePath: () => string;
     readRegistryFile: () => CustomTarget[];
     writeRegistryFile: (targets: CustomTarget[]) => void;
+    normalizeSkillsDir: (dir: string) => string | null;
     isBuiltinTargetId: (id: string) => boolean;
     resolveBuiltinTargetSkillsDir: (target: "agents" | "claude") => string;
     getAppOwnDataDirs: () => string[];
@@ -150,6 +155,21 @@ describe("skill-install-targets-store + installer（自定义安装目标）", (
   const registryPath = (): string => store.__test_only__.getRegistryFilePath();
   const appOwnDirs = (): string[] => store.__test_only__.getAppOwnDataDirs();
 
+  describe("normalizeSkillsDir（trim + `~` 展开）", () => {
+    it("trim、`~`/`~/...` 展开为主目录、`~user` 不支持、相对路径与空串拒绝", () => {
+      const normalize = store.__test_only__.normalizeSkillsDir;
+      expect(normalize(`  ${path.join(fakeHome, "a")}  `)).toBe(path.join(fakeHome, "a"));
+      expect(normalize("~")).toBe(fakeHome);
+      expect(normalize("~/tools/skills")).toBe(path.join(fakeHome, "tools", "skills"));
+      expect(normalize("~\\tools")).toBe(path.join(fakeHome, "tools"));
+      // `~user` 不支持：不展开，按非绝对路径拒绝
+      expect(normalize("~user/skills")).toBeNull();
+      expect(normalize("relative/dir")).toBeNull();
+      expect(normalize("")).toBeNull();
+      expect(normalize("   ")).toBeNull();
+    });
+  });
+
   describe("addCustomSkillInstallTarget", () => {
     it("成功登记：id 前缀 custom-、目录归一去尾分隔符、目录被创建、文件落盘", () => {
       const dir = path.join(fakeHome, "my-tools", "skills") + path.sep;
@@ -233,14 +253,40 @@ describe("skill-install-targets-store + installer（自定义安装目标）", (
         ok: false,
         error: "invalid-request",
       });
+      expect(store.addCustomSkillInstallTarget({ name: "n", dir: "~user/skills" })).toEqual({
+        ok: false,
+        error: "invalid-request",
+      });
+    });
+
+    it("`~` 展开的目录：归一为主目录下的绝对路径并被创建", () => {
+      const result = store.addCustomSkillInstallTarget({ name: "home", dir: "  ~/tools/skills  " });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.target.skillsDir).toBe(path.join(fakeHome, "tools", "skills"));
+      expect(fs.existsSync(result.target.skillsDir)).toBe(true);
+    });
+
+    it("目标已存在但不是目录 → invalid-request（不登记文件路径）", () => {
+      const filePath = path.join(fakeHome, "a-file");
+      fs.writeFileSync(filePath, "file");
+      expect(store.addCustomSkillInstallTarget({ name: "f", dir: filePath })).toEqual({
+        ok: false,
+        error: "invalid-request",
+      });
+      expect(store.listCustomSkillInstallTargets()).toEqual([]);
     });
   });
 
   describe("updateCustomSkillInstallTarget", () => {
-    it("改名成功并落盘", () => {
+    it("改名成功并落盘（skillsDir 保持自身目录，自排除不误报 duplicate）", () => {
       const added = store.addCustomSkillInstallTarget({ name: "old", dir: path.join(fakeHome, "u", "skills") });
       if (!added.ok) throw new Error("setup failed");
-      const result = store.updateCustomSkillInstallTarget({ id: added.target.id, name: "new-name" });
+      const result = store.updateCustomSkillInstallTarget({
+        id: added.target.id,
+        name: "new-name",
+        skillsDir: added.target.skillsDir,
+      });
       expect(result).toEqual({
         ok: true,
         target: { id: added.target.id, name: "new-name", skillsDir: added.target.skillsDir },
@@ -248,22 +294,127 @@ describe("skill-install-targets-store + installer（自定义安装目标）", (
       expect(store.listCustomSkillInstallTargets()).toEqual([result.ok ? result.target : null]);
     });
 
-    it("id 不在注册表 → not-found", () => {
-      expect(store.updateCustomSkillInstallTarget({ id: "custom-ffffffff", name: "x" })).toEqual({
-        ok: false,
-        error: "not-found",
+    it("换目录成功：目录归一并创建，注册表只改本条目", () => {
+      const added = store.addCustomSkillInstallTarget({ name: "old", dir: path.join(fakeHome, "u", "skills") });
+      if (!added.ok) throw new Error("setup failed");
+      const newDir = path.join(fakeHome, "moved", "skills") + path.sep;
+      const result = store.updateCustomSkillInstallTarget({
+        id: added.target.id,
+        name: "old",
+        skillsDir: newDir,
       });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.target.skillsDir).toBe(path.join(fakeHome, "moved", "skills"));
+      expect(fs.existsSync(result.target.skillsDir)).toBe(true);
+      expect(store.listCustomSkillInstallTargets()).toEqual([result.target]);
+    });
+
+    it("改到别的自定义目标目录 → duplicate-dir；互为嵌套 → nested-dir", () => {
+      const first = store.addCustomSkillInstallTarget({ name: "a", dir: path.join(fakeHome, "a", "skills") });
+      const second = store.addCustomSkillInstallTarget({ name: "b", dir: path.join(fakeHome, "b", "skills") });
+      if (!first.ok || !second.ok) throw new Error("setup failed");
+
+      expect(
+        store.updateCustomSkillInstallTarget({
+          id: first.target.id,
+          name: "a",
+          skillsDir: second.target.skillsDir,
+        }),
+      ).toEqual({ ok: false, error: "duplicate-dir" });
+      expect(
+        store.updateCustomSkillInstallTarget({
+          id: first.target.id,
+          name: "a",
+          skillsDir: path.join(second.target.skillsDir, "sub"),
+        }),
+      ).toEqual({ ok: false, error: "nested-dir" });
+      // 与内置目录相同/嵌套同样拒绝
+      expect(
+        store.updateCustomSkillInstallTarget({
+          id: first.target.id,
+          name: "a",
+          skillsDir: path.join(fakeHome, ".agents", "skills"),
+        }),
+      ).toEqual({ ok: false, error: "duplicate-dir" });
+    });
+
+    it("改到 app 自有数据目录 → reserved-dir", () => {
+      const added = store.addCustomSkillInstallTarget({ name: "a", dir: path.join(fakeHome, "r2", "skills") });
+      if (!added.ok) throw new Error("setup failed");
+      const appDataDir = appOwnDirs()[0];
+      if (appDataDir === undefined) throw new Error("app data dir unresolved");
+      expect(
+        store.updateCustomSkillInstallTarget({
+          id: added.target.id,
+          name: "a",
+          skillsDir: path.join(appDataDir, "sub"),
+        }),
+      ).toEqual({ ok: false, error: "reserved-dir" });
+    });
+
+    it("相对路径 / 目标已存在但不是目录 → invalid-request", () => {
+      const added = store.addCustomSkillInstallTarget({ name: "a", dir: path.join(fakeHome, "inv", "skills") });
+      if (!added.ok) throw new Error("setup failed");
+      expect(
+        store.updateCustomSkillInstallTarget({
+          id: added.target.id,
+          name: "a",
+          skillsDir: "relative/dir",
+        }),
+      ).toEqual({ ok: false, error: "invalid-request" });
+
+      const filePath = path.join(fakeHome, "not-a-dir");
+      fs.writeFileSync(filePath, "file");
+      expect(
+        store.updateCustomSkillInstallTarget({
+          id: added.target.id,
+          name: "a",
+          skillsDir: filePath,
+        }),
+      ).toEqual({ ok: false, error: "invalid-request" });
+      // 校验失败不改注册表
+      expect(store.listCustomSkillInstallTargets()).toEqual([added.target]);
+    });
+
+    it("name 空白 → invalid-request，注册表不变", () => {
+      const added = store.addCustomSkillInstallTarget({ name: "a", dir: path.join(fakeHome, "n", "skills") });
+      if (!added.ok) throw new Error("setup failed");
+      expect(
+        store.updateCustomSkillInstallTarget({
+          id: added.target.id,
+          name: "   ",
+          skillsDir: path.join(fakeHome, "n2", "skills"),
+        }),
+      ).toEqual({ ok: false, error: "invalid-request" });
+      expect(store.listCustomSkillInstallTargets()).toEqual([added.target]);
+    });
+
+    it("id 不在注册表 → not-found", () => {
+      expect(
+        store.updateCustomSkillInstallTarget({
+          id: "custom-ffffffff",
+          name: "x",
+          skillsDir: path.join(fakeHome, "nf", "skills"),
+        }),
+      ).toEqual({ ok: false, error: "not-found" });
     });
 
     it("内置 id（agents/claude）视同 not-found", () => {
-      expect(store.updateCustomSkillInstallTarget({ id: "agents", name: "x" })).toEqual({
-        ok: false,
-        error: "not-found",
-      });
-      expect(store.updateCustomSkillInstallTarget({ id: "claude", name: "x" })).toEqual({
-        ok: false,
-        error: "not-found",
-      });
+      expect(
+        store.updateCustomSkillInstallTarget({
+          id: "agents",
+          name: "x",
+          skillsDir: path.join(fakeHome, "bi", "skills"),
+        }),
+      ).toEqual({ ok: false, error: "not-found" });
+      expect(
+        store.updateCustomSkillInstallTarget({
+          id: "claude",
+          name: "x",
+          skillsDir: path.join(fakeHome, "bi", "skills"),
+        }),
+      ).toEqual({ ok: false, error: "not-found" });
     });
   });
 

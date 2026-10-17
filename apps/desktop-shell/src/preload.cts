@@ -176,8 +176,8 @@ contextBridge.exposeInMainWorld("electron", {
     ipcRenderer.invoke(SKILL_IPC_CHANNELS.LIST_CUSTOM_TARGETS),
   addCustomSkillInstallTarget: (name: string, dir: string) =>
     ipcRenderer.invoke(SKILL_IPC_CHANNELS.ADD_CUSTOM_TARGET, { name, dir }),
-  updateCustomSkillInstallTarget: (id: string, name: string) =>
-    ipcRenderer.invoke(SKILL_IPC_CHANNELS.UPDATE_CUSTOM_TARGET, { id, name }),
+  updateCustomSkillInstallTarget: (id: string, name: string, skillsDir: string) =>
+    ipcRenderer.invoke(SKILL_IPC_CHANNELS.UPDATE_CUSTOM_TARGET, { id, name, skillsDir }),
   removeCustomSkillInstallTarget: (id: string) =>
     ipcRenderer.invoke(SKILL_IPC_CHANNELS.REMOVE_CUSTOM_TARGET, { id }),
 
@@ -325,10 +325,12 @@ contextBridge.exposeInMainWorld("electron", {
   },
 
   // ========== 文件夹选择 API ==========
-  // 选择文件夹（用于创建新项目时选择保存位置）
-  selectFolder: (options: Electron.OpenDialogOptions | undefined) =>
+  // 选择文件夹（用于创建新项目时选择保存位置）；
+  // showHiddenFiles 为可选扩展（默认关）：为 true 时主进程在系统选择框 properties 追加
+  // 'showHiddenFiles'（Skill 安装目录等需要选到隐藏文件夹的场景），不传则行为不变。
+  selectFolder: (options: (Electron.OpenDialogOptions & { showHiddenFiles?: boolean }) | undefined) =>
     ipcRenderer.invoke("select-folder", options),
-  // 选择项目文件夹（用于打开现有项目）
+  // 选择项目文件夹（用于打开现有项目）；不开放 showHiddenFiles 扩展
   selectProjectFolder: (options: Electron.OpenDialogOptions | undefined) =>
     ipcRenderer.invoke("select-project-folder", options),
 
@@ -344,8 +346,9 @@ contextBridge.exposeInMainWorld("electron", {
   // 窗口 chrome（spec docs/hub/window-chrome.md）：主题同步 overlay + 平台/让位常量
   setTitleBarOverlay: (color: string, symbolColor: string) =>
     ipcRenderer.invoke(WINDOW_CHROME_IPC_CHANNELS.SET_TITLE_BAR_OVERLAY, { color, symbolColor }),
-  // 应用生效主题同步到主进程 nativeTheme.themeSource（原生标题栏/菜单/对话框跟随）
-  setNativeThemeSource: (theme: 'light' | 'dark') =>
+  // 应用主题偏好直写到主进程 nativeTheme.themeSource（原生标题栏/菜单/对话框跟随）；
+  // system 直写不解析（spec docs/hub/window-chrome.md §7.5）
+  setNativeThemeSource: (theme: 'light' | 'dark' | 'system') =>
     ipcRenderer.invoke(WINDOW_CHROME_IPC_CHANNELS.SET_NATIVE_THEME_SOURCE, { theme }),
   // 聚焦主窗口并定位设置页子单元（首次指引随批修补，docs/hub/首次指引-design.md §4.4）；
   // Editor 拦截/空态文案的可点击动作经此触发

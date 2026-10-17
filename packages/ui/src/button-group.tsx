@@ -51,7 +51,7 @@ const ButtonGroupText = React.forwardRef<
     <Comp
       ref={ref}
       className={cn(
-        "bg-muted flex items-center gap-2 rounded-md border px-4 text-sm font-medium shadow-xs [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4",
+        "bg-muted flex items-center gap-2 rounded-md border border-input px-4 text-sm font-medium shadow-xs [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4",
         className
       )}
       {...props}

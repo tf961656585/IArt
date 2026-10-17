@@ -15,6 +15,10 @@
  * sha512 取自本地服务实际服务的字节；所有断言对象都是经桥侧 contracts schema parse 后的值。
  * 目录选取（select-folder 系统选择框）不在本接缝范围（docs/hub/skill-store.md §3.2）。
  *
+ * update 为全量提交 { id, name, skillsDir }（2026-10-16 批次）：本文件覆盖改名（同目录
+ * 自排除）、改路径（旧目录文件保留、扫描/定位随新目录解析）、`~` 展开持久化，以及
+ * handler 层缺 skillsDir 的负例（证明新字段是必经路径而非可选装饰）。
+ *
  * 加载机制照 testing/integration 既有先例（desktop.preloadBridge.test.ts /
  * desktop.mainProcessEditorOpen.test.ts）：desktop-shell 侧经 sharedRequire 加载 dist 产物，
  * electron 以 patchModuleLoad 替身注入；Hub 侧直接 import 真实桥 TS 源码（与
@@ -28,7 +32,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { type SkillInstallRequest } from '@iart/contracts';
+import { SKILL_IPC_CHANNELS, type SkillInstallRequest } from '@iart/contracts';
 import { createHubPlatformBridge } from '../../apps/hub/src/client/platform/electron-bridge';
 import { cast, clearCjsCache, patchModuleLoad, sharedRequire } from './helpers/cjs-mock';
 
@@ -308,7 +312,9 @@ describe('Skill 自定义安装目标接缝（真实桥 → 假 IPC 传输 → �
     });
 
     // 已移除的旧 id 按注册表未命中处理（not-found）
-    await expect(bridge.updateCustomSkillInstallTarget(firstTargetId, 'x')).resolves.toEqual({
+    await expect(
+      bridge.updateCustomSkillInstallTarget(firstTargetId, 'x', expectedSkillsDir),
+    ).resolves.toEqual({
       ok: false,
       error: 'not-found',
     });
@@ -335,9 +341,9 @@ describe('Skill 自定义安装目标接缝（真实桥 → 假 IPC 传输 → �
     ).resolves.toEqual({ ok: false, reason: 'unknown-target' });
   });
 
-  it('场景5：改名只动 name，id 与 skillsDir 不变', async () => {
+  it('场景5：改名（同目录自排除）——name 已改、id/skillsDir 不变、安装状态不受影响', async () => {
     await expect(
-      bridge.updateCustomSkillInstallTarget(currentTargetId, 'dsh-renamed'),
+      bridge.updateCustomSkillInstallTarget(currentTargetId, 'dsh-renamed', expectedSkillsDir),
     ).resolves.toEqual({
       ok: true,
       target: { id: currentTargetId, name: 'dsh-renamed', skillsDir: expectedSkillsDir },
@@ -345,5 +351,80 @@ describe('Skill 自定义安装目标接缝（真实桥 → 假 IPC 传输 → �
     await expect(bridge.listCustomSkillInstallTargets()).resolves.toEqual({
       targets: [{ id: currentTargetId, name: 'dsh-renamed', skillsDir: expectedSkillsDir }],
     });
+
+    // 同目录自排除：改到目标自身已占用的目录不报 duplicate-dir；id 与安装状态原样
+    await expect(bridge.getSkillInstalledState()).resolves.toEqual({
+      skills: [{ skillId: SKILL_ID, version: SKILL_VERSION, target: currentTargetId }],
+    });
+    expect(fs.existsSync(path.join(expectedInstallDir, 'skill.json'))).toBe(true);
+  });
+
+  it('场景6：改路径——注册表指向新目录，旧目录文件保留，扫描/定位随新目录解析', async () => {
+    const movedSkillsDir = path.join(tmpRoot, 'dsh-skills-moved');
+    const expectedMovedDir = path.resolve(movedSkillsDir);
+
+    await expect(
+      bridge.updateCustomSkillInstallTarget(currentTargetId, 'dsh-renamed', movedSkillsDir),
+    ).resolves.toEqual({
+      ok: true,
+      target: { id: currentTargetId, name: 'dsh-renamed', skillsDir: expectedMovedDir },
+    });
+    await expect(bridge.listCustomSkillInstallTargets()).resolves.toEqual({
+      targets: [{ id: currentTargetId, name: 'dsh-renamed', skillsDir: expectedMovedDir }],
+    });
+
+    // 不搬移文件：旧目录里已装的 Skill 文件仍在磁盘；新目录按未安装（无 <skillId> 子目录）
+    expect(fs.existsSync(path.join(expectedInstallDir, 'skill.json'))).toBe(true);
+    expect(fs.existsSync(path.join(expectedInstallDir, 'run.sh'))).toBe(true);
+    expect(fs.existsSync(path.join(expectedMovedDir, SKILL_ID))).toBe(false);
+    await expect(bridge.getSkillInstalledState()).resolves.toEqual({ skills: [] });
+
+    // 定位按新目录解析：旧目录有文件却不再被解析到（若仍指旧目录，这里会返回 ok）
+    const revealCallsBefore = shellShowItemInFolder.mock.calls.length;
+    await expect(
+      bridge.revealSkillInstallFolder({ skillId: SKILL_ID, target: currentTargetId }),
+    ).resolves.toEqual({ ok: false, reason: 'path-missing' });
+    expect(shellShowItemInFolder.mock.calls.length).toBe(revealCallsBefore);
+  });
+
+  it('场景7：`~` 展开——update 传 `~/...` 持久化为展开后的绝对路径', async () => {
+    const expectedHomeSkillsDir = path.resolve(path.join(fakeHome, 'seam-home-skills'));
+
+    await expect(
+      bridge.updateCustomSkillInstallTarget(currentTargetId, 'dsh-renamed', '~/seam-home-skills'),
+    ).resolves.toEqual({
+      ok: true,
+      target: { id: currentTargetId, name: 'dsh-renamed', skillsDir: expectedHomeSkillsDir },
+    });
+    // 持久化值即展开后的绝对路径（HOME 已指向临时目录，未展开或展开到真实 HOME 都无法通过）
+    await expect(bridge.listCustomSkillInstallTargets()).resolves.toEqual({
+      targets: [{ id: currentTargetId, name: 'dsh-renamed', skillsDir: expectedHomeSkillsDir }],
+    });
+  });
+
+  it('场景8：负例（接线证明）——缺 skillsDir 的 {id, name} 请求在 handler 层被拒且不落盘', async () => {
+    const before = await bridge.listCustomSkillInstallTargets();
+
+    // 绕过桥的类型签名，直接向真实 handler 投递旧形态两字段请求：形状校验拒绝（invalid-request）
+    await expect(
+      fakeInvoke(SKILL_IPC_CHANNELS.UPDATE_CUSTOM_TARGET, { id: currentTargetId, name: 'dsh-x' }),
+    ).resolves.toEqual({ ok: false, error: 'invalid-request' });
+    await expect(bridge.listCustomSkillInstallTargets()).resolves.toEqual(before);
+
+    // update 重跑 add 的整套目录校验：相对路径拒绝
+    await expect(
+      bridge.updateCustomSkillInstallTarget(currentTargetId, 'dsh-renamed', 'relative/skills'),
+    ).resolves.toEqual({ ok: false, error: 'invalid-request' });
+    // 改到内置目标目录拒绝（重复检查对「别家占用」照常生效，仅排除自身）
+    await expect(
+      bridge.updateCustomSkillInstallTarget(
+        currentTargetId,
+        'dsh-renamed',
+        path.join(fakeHome, '.agents', 'skills'),
+      ),
+    ).resolves.toEqual({ ok: false, error: 'duplicate-dir' });
+    // 被拒请求均不落注册表、不建目录
+    await expect(bridge.listCustomSkillInstallTargets()).resolves.toEqual(before);
+    expect(fs.existsSync(path.join(fakeHome, '.agents'))).toBe(false);
   });
 });

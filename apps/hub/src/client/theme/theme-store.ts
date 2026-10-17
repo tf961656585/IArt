@@ -57,13 +57,16 @@ export function resolveEffectiveTheme(pref: ThemePreference): EffectiveTheme {
 }
 
 /**
- * 将有效主题应用到 document 根元素（toggle .dark class）。
+ * 将主题偏好应用到 document 根元素（toggle .dark class）。
  * 幂等：重复应用同一偏好无副作用。返回生效主题供调用方使用。
+ *
+ * system 只影响 DOM class 的解析（读 prefers-color-scheme 媒询）；themeSource
+ * 同步走偏好直写（system 直写，不解析），见 sync-native-theme。
  */
 export function applyThemeToDocument(pref: ThemePreference): EffectiveTheme {
   const effective = resolveEffectiveTheme(pref);
   document.documentElement.classList.toggle('dark', effective === 'dark');
   syncTitleBarOverlay();
-  syncNativeThemeSource(effective);
+  syncNativeThemeSource(pref);
   return effective;
 }

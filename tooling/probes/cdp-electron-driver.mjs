@@ -1,10 +1,15 @@
 // 裸 CDP 驱动运行中的 dev Electron 窗口（无需 playwright），做真机 DOM / 交互验证。
+// 依赖仓库内 ws 包（node_modules/ws，经 createRequire 从本文件所在目录解析），必须显式加载：
+// Node 22+ 的全局 WHATWG WebSocket 只有 addEventListener / readyState，没有 ws 包的
+// .on()/.send(JSON 字符串) API，直接 new WebSocket(...) 会在 attach 时崩溃
+// （TypeError: ws.on is not a function，2026-10-16 Node v25.6.0 实证）。
 // 前提：dev 实例已起（未打包默认开 --remote-debugging-port 9222，环境变量 IART_CDP_PORT 可覆盖；
 // 见 apps/desktop-shell/src/desktop-shell-bootstrap.cts）。用法与四坑纪律见同目录 README.md。
 // 本文件是驱动基座，不属于构建链、不参与门禁；各次验证写一次性 phase 脚本 import 它。
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+const WebSocket = require('ws');
 
 export const getJson = (url) =>
   new Promise((res, rej) => {
@@ -29,7 +34,7 @@ export async function attachHub(port = 9222) {
   let id = 0;
   const pending = new Map();
   ws.on('message', (m) => {
-    const msg = JSON.parse(m);
+    const msg = JSON.parse(m.toString());
     if (msg.id && pending.has(msg.id)) {
       pending.get(msg.id)(msg);
       pending.delete(msg.id);

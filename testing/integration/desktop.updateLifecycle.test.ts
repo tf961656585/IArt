@@ -587,6 +587,29 @@ describe('desktop updater lifecycle (electron-updater bridge)', () => {
     expect(loaded.mockAutoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
   });
 
+  it('节流按尝试计：检查失败后立即二次 check 也被节流跳过', async () => {
+    loaded = await loadUpdater({ packaged: true, platform: undefined });
+    loaded.controller.setupAutoUpdater();
+
+    loaded.mockAutoUpdater.checkForUpdates.mockImplementation(async () => {
+      loaded?.emit('checking-for-update');
+      throw new Error('feed 404');
+    });
+
+    const first = await loaded.controller.checkForUpdates(false);
+    expect(first.status).toBe('failed');
+    const firstState = loaded.controller.buildUpdateStateSnapshot();
+    expect(firstState.status).toBe('error');
+
+    // 失败同样占用节流窗口（按尝试计），紧随的检查被跳过
+    const second = await loaded.controller.checkForUpdates(false);
+    expect(second.status).toBe('skipped');
+    if (second.status === 'skipped') {
+      expect(second.reason).toBe('throttled');
+    }
+    expect(loaded.mockAutoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
   it('electron-updater 失败同时触发 error 事件与 promise rejection 时，error 状态只发送一次', async () => {
     loaded = await loadUpdater({ packaged: true, platform: undefined });
     loaded.controller.setupAutoUpdater();

@@ -9,6 +9,7 @@
     "@iart/contracts": "workspace:*",
     "@iart/domain": "workspace:*",
     "@iart/ui": "workspace:*",
+    "@iart/utils": "workspace:*",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "zustand": "^4.5.0"

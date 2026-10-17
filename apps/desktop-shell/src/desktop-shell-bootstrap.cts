@@ -46,11 +46,11 @@ import { createCliBackendForwarder } from "./cli/cli-backend-forwarder.cjs";
 import { createCliProxyDispatcher, type CliProxyCommandCandidate } from "./cli/cli-proxy-dispatcher.cjs";
 import {
   createCliEntryRegistration,
-  resolveDefaultCliEntryTargetDir,
+  resolveDefaultCliEntryTargetDirs,
 } from "./cli/cli-entry-registration.cjs";
 import { healCliEntryResource } from "./cli/cli-entry-resource-heal.cjs";
 import { appendMainLog } from "./main-log.cjs";
-import { buildCliStatusDto } from "./cli/cli-status-snapshot.cjs";
+import { buildCliStatusDto, toCliEntryStatusDetail } from "./cli/cli-status-snapshot.cjs";
 import { resolveDefaultDiscoveryFilePath } from "./cli/cli-discovery.cjs";
 import { CLI_PROXY_REQUEST_CHANNEL } from "@iart/contracts";
 import {
@@ -184,11 +184,12 @@ const resolveCliNodeEntryScriptPath = (): string => {
  * CLI 命令入口注册（spec §3/§8，CLI-016/CLI-024）：shim 以 ELECTRON_RUN_AS_NODE=1 把应用
  * 可执行文件作为纯 Node 运行时启动轻量入口脚本（保证经入口启动一律走轻量 CLI 客户端形态，
  * 不进入 browser 进程）；dev 态 app-exec 为 Electron 可执行文件（run-as-node 下等价纯 Node
- * 二进制）+ 上述入口脚本路径。目标目录按平台默认解析（macOS /usr/local/bin；Windows
+ * 二进制）+ 上述入口脚本路径。目标目录按平台候选序列解析（macOS：Homebrew 目录 →
+ * /usr/local/bin → ~/.local/bin，落点为可写候选、候选逐一不可用才转手动指引；Windows：
  * %LOCALAPPDATA%\Microsoft\WindowsApps），一键注册无写权限时结构化失败并引导手动注册。
  */
 const cliEntryRegistration = createCliEntryRegistration({
-  targetDir: resolveDefaultCliEntryTargetDir() ?? "",
+  targetDirs: resolveDefaultCliEntryTargetDirs(),
   appExecPath: process.execPath,
   cliEntryScriptPath: resolveCliNodeEntryScriptPath(),
 });
@@ -258,7 +259,8 @@ const healPackagedCliEntryResource = (): void => {
   );
 };
 
-/** 注册/卸除结果 → 设置页操作结果（用户视角消息；模块内已留 debug 痕）。 */
+/** 注册/卸除结果 → 设置页操作结果（用户视角消息；模块内已留 debug 痕）。
+ *  PATH 引导不在此处附句：状态详情携带 pathSetupRequired，由设置页状态行单独承载（避免同屏重复打印）。 */
 const toCliEntryOperationResult = (
   result:
     | { ok: true; action: "created" | "overwritten" | "noop" }
@@ -267,14 +269,14 @@ const toCliEntryOperationResult = (
 ): { ok: boolean; message?: string } => {
   if (!result.ok) return { ok: false, message: result.message };
   if ("action" in result) {
-    if (result.action === "created") return { ok: true, message: "iart 命令已可在终端直接使用。" };
-    if (result.action === "overwritten") return { ok: true, message: "命令入口已更新，iart 现在连接本应用。" };
-    return { ok: true, message: "命令入口已是最新，无需更改。" };
+    if (result.action === "created") return { ok: true, message: "iart 命令已创建。" };
+    if (result.action === "overwritten") return { ok: true, message: "iart 命令已更新，现在连接本应用。" };
+    return { ok: true, message: "iart 命令已是最新，无需更改。" };
   }
-  if (result.reason === "removed") return { ok: true, message: "已卸除命令入口，终端里的 iart 不再可用。" };
-  if (result.reason === "absent") return { ok: true, message: "命令入口本就未注册，无需卸除。" };
+  if (result.reason === "removed") return { ok: true, message: "已卸除注册，终端里的 iart 不再可用。" };
+  if (result.reason === "absent") return { ok: true, message: "iart 命令本来就未注册，无需卸除。" };
   // foreign_content 聚合可能伴随本应用形态已删除（混合场景），消息不得声称「未做改动」。
-  return { ok: true, message: "检测到指向其他程序的 iart 文件，为避免误删已保留。" };
+  return { ok: true, message: "有一个 iart 命令不是本应用创建的，已保留未删除。" };
 };
 
 const cliExecutorDeps = {
@@ -325,9 +327,7 @@ const cliIpcController: DesktopCliIpcController = {
       serviceRunning: cliControlService !== null,
       port: cliControlService?.port ?? null,
       discoveryFilePath: cliControlService?.discoveryFilePath ?? resolveDefaultDiscoveryFilePath(),
-      entryRegistered: await cliEntryRegistration.getEntryStatus().then((status) =>
-        status.supported ? status.registered : null,
-      ),
+      entry: toCliEntryStatusDetail(await cliEntryRegistration.getEntryStatus()),
       commandLog: cliControlService?.getCommandLog() ?? [],
     }),
   registerEntry: async () => toCliEntryOperationResult(await cliEntryRegistration.registerEntry()),
