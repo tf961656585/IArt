@@ -7,8 +7,7 @@ import {
   type ThinkingTierPool,
 } from '@iart/contracts';
 import { Server } from 'lucide-react';
-import { SettingsSection } from './components/SettingsSection';
-import { AddModelDialog, type ModelMappingDraft } from './provider-connection/AddModelDialog';
+import { AddModelDialog } from './provider-connection/AddModelDialog';
 import { ConfirmDialog } from './provider-connection/ConfirmDialog';
 import { CredentialDialog } from './provider-connection/CredentialDialog';
 import {
@@ -16,7 +15,8 @@ import {
   type CustomModelDialogPayload,
   type CustomModelThinkingContext,
 } from './provider-connection/CustomModelDialog';
-import { ProviderDetail } from './provider-connection/ProviderDetail';
+import { ProviderDetail, StateCard } from './provider-connection/ProviderDetail';
+import type { ModelRow } from './provider-connection/ModelTable';
 import { ProviderNoticeBar, StatusPill, type BindingTone } from './provider-connection/ProviderNoticeBar';
 import { ProviderFormDialog, type ProviderFormPayload } from './provider-connection/ProviderFormDialog';
 import {
@@ -34,8 +34,8 @@ import { useGenerationModelManagement } from './provider-connection/useGeneratio
  * 口径：用户要做的两件事都在这一页完成——① 添加一个服务商（名称 + 地址 + 密钥）；
  * ② 把模型加进来：每条连接只有一个「添加模型」入口（2026-09-26 界面收敛），
  * 恒先出二级选择（生成模型 / 对话模型；2026-09-29 起连接级预选摘除，接口类型只在
- * 添加模型时配置）：生成侧开合并弹窗（AddModelDialog：软件自带的模型在「软件自带的模型」
- * 区块里勾选，软件里没有的模型在「自定义接口的模型」区块里一次写入），对话侧开自建表单弹层。
+ * 添加模型时配置）。生成侧与对话侧各是一个**单一表单**（2026-10-19：软件不内置任何具体模型，
+ * 内置模型的勾选区块与来源分段切换随部署载体一并退场）。
  * 因此不再有并列的第二个页面，也不再需要在两页之间来回跳。
  *
  * 自建模型与思考档位都**不在页面底部单独成块**（2026-09-18）：模型列表已在服务商详情里按
@@ -112,15 +112,15 @@ const attachBlockedReason = (connection: ProviderConnection): string | null => {
     return `「${connection.display_name}」已停用，加不了模型。`;
   }
   if (!connection.has_credential) {
-    return `「${connection.display_name}」还没插密钥。关掉这个窗口后点「插入密钥」，再回来添加模型。`;
+    return `「${connection.display_name}」还没设置密钥。关掉这个窗口后点「设置密钥」，再回来添加模型。`;
   }
   return null;
 };
 
 /**
- * 改一条已接入接入的配置（能力值、思考档位、「服务商那边的模型名」）受同一组前置条件约束：
- * 后端保存接入时同样要求连接 enabled 且有凭证（deployment-store 的 `validateDeployable`），
- * 不满足时保存必然失败，所以与接入一样在提交前拦下、指认可点的修复入口。
+ * 改一个模型的配置（能力值、思考档位、参数覆盖）受同一组前置条件约束：
+ * 后端保存记录时同样要求所属连接 enabled 且有凭证（`describeConnectionOwnershipError`），
+ * 不满足时保存必然失败，所以与添加模型一样在提交前拦下、指认可点的修复入口。
  *
  * retired 的行内「修改」与「模型 ID」输入框根本不渲染（spec §7.5：不提供必然失败的入口），
  * 这里只作防御；disabled 的入口保留——停用可恢复，「启用」按钮就在同一屏。
@@ -134,7 +134,7 @@ const configWriteBlockedReason = (connection: ProviderConnection | null): string
     return `「${connection.display_name}」已停用，改不了配置。`;
   }
   if (!connection.has_credential) {
-    return `「${connection.display_name}」还没插密钥。关掉这个窗口后点「插入密钥」，再回来改配置。`;
+    return `「${connection.display_name}」还没设置密钥。关掉这个窗口后点「设置密钥」，再回来改配置。`;
   }
   return null;
 };
@@ -143,9 +143,7 @@ export function ProviderSection() {
   const {
     api,
     connections,
-    deployments,
-    activeRoutes,
-    deploymentCountByConnection,
+    modelCountByConnection,
     catalog,
     chatCatalog,
     catalogUnavailable,
@@ -158,6 +156,8 @@ export function ProviderSection() {
     saveAgentDefaultModel,
     generationDefaultModelId,
     saveGenerationDefaultModel,
+    loadState,
+    loadError,
     notice,
     setNotice,
     reload,
@@ -181,29 +181,42 @@ export function ProviderSection() {
 
   const selected = selectedId === null ? null : connections.find((item) => item.connection_id === selectedId) ?? null;
 
-  /** 选中的服务商被删掉后回落到第一条，避免右侧停在空态 */
+  /**
+   * 选中态兜底：**有数据即选中首条**（2026-10-19）。
+   *
+   * 此前只在「选中的那条被删掉」时回落，首次进入设置页右侧是一片空白 + 一句「左边选一个」。
+   * 主从页面的默认视图应该是第一条的详情——用户来这里几乎总是要看某一家的模型，
+   * 让他先做一次无意义的点击不算「让他自主选择」，只是把空态成本转嫁给他。
+   * 同时仍然尊重手动选择：只在「没有选中」或「选中的已不存在」时兜底。
+   */
   useEffect(() => {
-    if (selectedId !== null && selected === null && connections.length > 0) {
-      setSelectedId(connections[0]?.connection_id ?? null);
-    }
-  }, [connections, selected, selectedId]);
+    if (connections.length === 0) return;
+    if (selected === null) setSelectedId(connections[0]?.connection_id ?? null);
+  }, [connections, selected]);
 
-  // 进度行与详情行状态共用可执行目录（自带包模型与自建生成模型的族模板合成投影）。
+  // 详情行状态共用可执行目录（用户生成模型记录 × 族模板的合成投影）。
   // 连接级接口类型已摘除（2026-09-29）：不再按连接协议在两个目录间选源——
-  // 详情的行状态按行类型选目录（见 ProviderDetail），对话目录只服务对话行。
-  const notReady = catalog.filter((entry) => !entry.deployment.deployable).length;
-  const usableCount = catalog.length - notReady;
-  // 每个服务商名下的自建模型数（对话与生成两族记录都按归属连接计数）：
-  // 服务商卡片的「已添加 N 个模型」与删除影响面文案用它，跟接入数合并成同一个数。
-  const customCountByConnection = new Map<string, number>();
-  for (const record of [...customChatModels, ...customGenerationModels]) {
-    customCountByConnection.set(
-      record.connection_id,
-      (customCountByConnection.get(record.connection_id) ?? 0) + 1,
-    );
-  }
-  const modelCountByConnection = (connectionId: string): number =>
-    (deploymentCountByConnection.get(connectionId) ?? 0) + (customCountByConnection.get(connectionId) ?? 0);
+  // 表格行状态按行类型选目录（见 ModelTable），对话目录只服务对话行。
+  // 旧的全局进度行（内置模型数 / 当前可用数）已退役（2026-10-19）：全局口径贴在单个服务商
+  // 详情上方会被读成局部状态，且软件不再内置模型、没有区分来源的必要。
+  // 每个服务商名下的模型数由 useProviderConnectionData 一次算好（两族记录按归属连接计数），
+  // 服务商卡片的「已添加 N 个模型」与删除影响面文案共用同一个数。
+
+  /** 全局模型总数（页面头计数；与「这一家有几个」是两个口径，故在页面头而非详情） */
+  const totalModelCount = connections.reduce(
+    (sum, connection) => sum + (modelCountByConnection.get(connection.connection_id) ?? 0),
+    0,
+  );
+
+  /** 组装某个服务商的模型表格行（两族记录行并排，记录归属连接） */
+  const modelRowsOf = (connectionId: string): ModelRow[] => [
+    ...customChatModels
+      .filter((item) => item.connection_id === connectionId)
+      .map((record): ModelRow => ({ kind: 'custom-chat', record })),
+    ...customGenerationModels
+      .filter((item) => item.connection_id === connectionId)
+      .map((record): ModelRow => ({ kind: 'custom-generation', record })),
+  ];
 
   /**
    * 跑一次写入并把结果交给调用方：`failure === null` 表示成功。
@@ -265,7 +278,7 @@ export function ProviderSection() {
         } catch (error: unknown) {
           setNotice({
             tone: 'warn',
-            text: describeError(error, `「${payload.display_name}」已添加，密钥没写进去，请重新插入密钥`),
+            text: describeError(error, `「${payload.display_name}」已添加，密钥没写进去，请重新设置密钥`),
           });
         }
       } else {
@@ -275,42 +288,6 @@ export function ProviderSection() {
     } catch (error: unknown) {
       const text = describeError(error, '没能添加服务商，请检查服务地址后重试');
       // 弹层保持打开：失败原因必须写进弹层（页面提示条被遮罩挡住，用户会看到「点了没反应」）
-      setNotice({ tone: 'error', text });
-      setDialogFailure(text);
-    }
-  };
-
-  const addModels = async (connection: ProviderConnection, items: ModelMappingDraft[]): Promise<void> => {
-    const blocked = attachBlockedReason(connection);
-    if (blocked !== null) {
-      setNotice({ tone: 'error', text: blocked });
-      setDialogFailure(blocked);
-      return;
-    }
-    try {
-      for (const item of items) {
-        const created = await api.createModelDeployment({
-          connection_id: connection.connection_id,
-          model_id: item.model_id,
-          remote_model_id: item.remote_model_id,
-        });
-        await api.setActiveRoute(item.model_id, created.deployment.deployment_id);
-      }
-      setAddModelTo(null);
-      setNotice({ tone: 'success', text: `已添加 ${items.length} 个模型` });
-      setDialogFailure(null);
-      await reload();
-    } catch (error: unknown) {
-      const text = describeError(
-        error,
-        // 输入侧已拦下「连接停用 / 没有密钥」，候选里也滤掉了已添加的模型；剩下只有写入侧会拒的理由
-        // 「不支持」沿用行内状态徽章同一个词（见 invalidity.ts）：同一屏同一条件不该两套说法
-        '没能添加这个模型，请重试；这个服务商不支持它，或它已经添加过了',
-        '这个服务商已经不在了。关掉这个窗口后点「刷新」，就能看到最新状态。',
-      );
-      // 失败也要把列表刷回后端真实状态：批量添加中断时前面几条已经加上了，不刷新的话
-      // 候选里还留着它们，用户再点一次必然撞上「已经添加过了」——同一句提示永远失败
-      await reload();
       setNotice({ tone: 'error', text });
       setDialogFailure(text);
     }
@@ -559,24 +536,22 @@ export function ProviderSection() {
     if (!confirmed || target === null) return;
     if (target.kind === 'delete-provider') {
       const connectionId = target.connection.connection_id;
-      // 影响面按来源分开说（后端级联见 provider-connection-routes DELETE，spec 03 §5.3）：
-      // 在这里添加的自建模型记录被级联删除（模型本身消失）；
-      // 软件自带的模型只是摘掉这条接入，模型本体仍在自带目录、之后可添加到其他服务商——不是「没了」
-      const installed = deploymentCountByConnection.get(connectionId) ?? 0;
-      const custom = customCountByConnection.get(connectionId) ?? 0;
+      // 影响面只有一种（后端级联见 provider-connection-routes DELETE，spec 03 §5.3）：
+      // 连接与它挂着的全部模型记录一并移除。模型只有记录这一处载体，没有「摘掉接入、
+      // 本体留着」的第二去向可交代。
+      const models = modelCountByConnection.get(connectionId) ?? 0;
       await run(
         () => api.deleteProviderConnection(connectionId).then(() => undefined),
         `已删除「${target.connection.display_name}」`
-          + `${installed > 0 ? `，软件自带的 ${installed} 个模型之后可添加到其他服务商` : ''}`
-          + `${custom > 0 ? `，在这里添加的 ${custom} 个模型已一并删除` : ''}`,
+          + `${models > 0 ? `，在这里添加的 ${models} 个模型已一并删除` : ''}`,
         '删除服务商失败，若有任务正在使用它，等任务跑完再试',
         `「${target.connection.display_name}」已经不在了，点「刷新」看最新状态`,
       );
       return;
     }
     if (target.kind === 'clear-credential') {
-      // 删密钥不删任何记录：已装模型的接入与自建模型记录都还在，只是都不可用了——合并成一个数
-      const affected = modelCountByConnection(target.connection.connection_id);
+      // 删密钥不删任何记录：模型记录都还在，只是都不可用了
+      const affected = modelCountByConnection.get(target.connection.connection_id) ?? 0;
       await run(
         () => api.removeProviderConnectionCredential(target.connection.connection_id).then(() => undefined),
         `已删除「${target.connection.display_name}」的密钥${affected > 0 ? `，${affected} 个模型变为不可用` : ''}`,
@@ -613,134 +588,160 @@ export function ProviderSection() {
     }
     if (target.kind === 'delete-custom-generation-model') {
       await confirmDeleteGenerationModel(target);
-      return;
     }
-    await run(
-      () => api.deleteModelDeployment(target.deploymentId).then(() => undefined),
-      `已移除模型「${target.modelId}」`,
-      '没能移除模型，请重试',
-      `「${target.modelId}」已经不在列表里了，点「刷新」看最新状态`,
-    );
   };
 
-  return (
-    <SettingsSection
-      title="服务商"
-      action={<Button size="sm" variant="outline" onClick={() => void reload()}>刷新</Button>}
-    >
+  // ── 页面级三态（2026-10-19）─────────────────────────────────────────────────
+  // 此前只有「空态」一种壳，加载中与读取失败都渲染成「还没有服务商 + 添加服务商」，
+  // 用户读到的是「你还没配」，于是去重复创建。三态必须各说各的。
+  if (loadState === 'loading' && connections.length === 0) {
+    return (
       <div className="flex flex-col gap-3">
-        <ProviderNoticeBar notice={notice} onDismiss={() => setNotice(null)} />
-
-        {catalogUnavailable ? (
-          <p className="text-xs text-muted-foreground">暂时读不到模型清单，点「刷新」再试。</p>
-        ) : null}
-
-        {connections.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-border px-4 py-10 text-center">
-            <Server className="h-10 w-10 text-muted-foreground" aria-hidden="true" />
-            <p className="text-sm font-medium">还没有服务商</p>
-            <Button size="sm" onClick={openAddProvider}>添加服务商</Button>
+        <div className="h-8 w-40 rounded-md bg-muted/60" aria-hidden="true" />
+        <div className="grid grid-cols-[18rem_minmax(0,1fr)] gap-4">
+          <div className="flex flex-col gap-2">
+            <div className="h-13 rounded-md bg-muted/60" aria-hidden="true" />
+            <div className="h-13 rounded-md bg-muted/60" aria-hidden="true" />
+            <div className="h-13 rounded-md bg-muted/60" aria-hidden="true" />
           </div>
-        ) : (
-          <>
-            {/* 进度行只读报数（设计文档裁定：快捷按钮随多选弹层退役，添加走详情里唯一的「添加模型」）。
-                N = 软件自带的模型总数（可执行目录条目），M = 这里当前可用的个数（部署判定通过）。
-                目录恒用可执行目录（连接级接口类型已摘除，不再按连接协议分流）。 */}
-            {catalog.length > 0 ? (
-              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
-                软件自带 {catalog.length} 个模型，当前可用 {usableCount} 个
-              </div>
-            ) : null}
+          <div className="h-32 rounded-md bg-muted/60" aria-hidden="true" />
+        </div>
+        <span className="sr-only" role="status">正在读取服务商</span>
+      </div>
+    );
+  }
 
-            {/* 主从分栏（docs/hub/hub-information-architecture.md §7.2 版式定案 + visual-design §8.5）：
-                左列服务商列表定宽 240px（w-60），右列详情自适应、顶对齐；面板高度由内容决定
-                （min-h-[420px] 已退役），不设滚动容器——内容定高后 overflow-y-auto 是永不触发的死滚动。 */}
-            <div className="flex overflow-hidden rounded-md border border-border">
-              <div className="flex w-60 shrink-0 flex-col gap-2 border-r border-border bg-muted/40 p-3">
-                <Button size="sm" onClick={openAddProvider}>＋ 添加服务商</Button>
-                {connections.map((connection) => (
-                  <ProviderCard
-                    key={connection.connection_id}
-                    connection={connection}
-                    modelCount={modelCountByConnection(connection.connection_id)}
-                    selected={connection.connection_id === selectedId}
-                    onSelect={() => setSelectedId(connection.connection_id)}
-                  />
-                ))}
-              </div>
+  if (loadState === 'error') {
+    return (
+      <StateCard
+        icon={<Server className="h-10 w-10" aria-hidden="true" />}
+        title="没能读取服务商"
+        description={loadError ?? '网络或后端暂时没有响应。已经配置好的内容不会丢失。'}
+        action={<Button size="sm" onClick={() => void reload()}>重新读取</Button>}
+      />
+    );
+  }
 
-              <div className="min-w-0 flex-1 p-4">
-                {selected === null ? (
-                  <p className="py-8 text-center text-xs text-muted-foreground">左边选一个服务商看详情</p>
-                ) : (
-                  <ProviderDetail
-                    connection={selected}
-                    catalog={catalog}
-                    chatCatalog={chatCatalog}
-                    deployments={deployments.filter((item) => item.connection_id === selected.connection_id)}
-                    customChatModels={customChatModels.filter((item) => item.connection_id === selected.connection_id)}
-                    modelListUnavailable={catalogUnavailable || customChatModelsUnavailable}
-                    customGenerationModels={customGenerationModels.filter(
-                      (item) => item.connection_id === selected.connection_id,
-                    )}
-                    activeRoutes={activeRoutes}
-                    onEdit={() => setEditing(selected)}
-                    onCredential={() => setCredentialFor(selected)}
-                    onToggle={() => {
-                      const next = selected.lifecycle === 'enabled' ? 'disabled' : 'enabled';
-                      void run(
-                        () => api.setProviderConnectionLifecycle(selected.connection_id, next).then(() => undefined),
-                        `已${next === 'enabled' ? '启用' : '停用'}「${selected.display_name}」`,
-                        '没能更新状态，请重试',
-                        `「${selected.display_name}」已经不在了，点「刷新」看最新状态`,
-                      );
-                    }}
-                    onClearCredential={() => setConfirm({ kind: 'clear-credential', connection: selected })}
-                    onDelete={() => setConfirm({ kind: 'delete-provider', connection: selected })}
-                    onAddModelByKind={(kind) => {
-                      // 二级选择的结果（添加模型的唯一入口，见 ProviderDetail）：
-                      // 生成侧开合并弹窗（自带模型勾选 + 自定义表单），对话侧开自建表单弹层
-                      if (kind === 'chat') {
-                        openCustomModelDialog({ kind: 'create', connection: selected });
-                        return;
-                      }
-                      openAddModelDialog(selected);
-                    }}
-                    onRenameModel={(deploymentId, modelId, remoteModelId) => {
-                      // 「服务商那边的模型名」是这条接入的一部分，保存受同一组前置条件约束
-                      const blocker = configWriteBlockedReason(selected);
-                      if (blocker !== null) {
-                        setNotice({ tone: 'error', text: blocker });
-                        return;
-                      }
-                      void run(
-                        () => api.updateModelDeployment(deploymentId, { remote_model_id: remoteModelId }).then(() => undefined),
-                        `已更新「${modelId}」的服务商那边的模型 ID`,
-                        '没能保存服务商那边的模型 ID，请重试',
-                        `「${modelId}」已经不在列表里了，点「刷新」看最新状态`,
-                      );
-                    }}
-                    onRemoveModel={(deploymentId, modelId) => setConfirm({ kind: 'remove-model', deploymentId, modelId })}
-                    onEditChatModel={openChatModelConfig}
-                    agentDefaultModelId={agentDefaultModelId}
-                    onToggleAgentDefault={(modelId) => void toggleAgentDefaultModel(modelId)}
-                    generationDefaultModelId={generationDefaultModelId}
-                    onToggleGenerationDefault={(modelId) => void toggleGenerationDefaultModel(modelId)}
-                    onDeleteGenerationModel={requestDeleteGenerationModel}
-                    onEditGenerationModel={openEditGenerationModel}
-                  />
-                )}
-              </div>
-            </div>
-          </>
-        )}
+  if (connections.length === 0) {
+    return (
+      <StateCard
+        icon={<Server className="h-10 w-10" aria-hidden="true" />}
+        title="还没有服务商"
+        description="先添加一个服务商，再把要用的模型加进来。模型只有添加到服务商之后才能用于生成。"
+        action={<Button size="sm" onClick={openAddProvider}>添加服务商</Button>}
+      />
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* 页面头：标题 + 全局计数 + 次要动作「添加服务商」。
+          计数是**全局口径**（不是选中的那一家），所以放在页面头而不是详情上方
+          （旧进度行贴在一个服务商详情上方会被读成该服务商的局部状态）。 */}
+      <div className="flex flex-wrap items-center gap-3" data-page-head>
+        <h2 className="text-sm font-semibold">服务商与模型</h2>
+        <span className="ml-auto text-2xs text-muted-foreground">
+          {`${connections.length} 个服务商 · ${totalModelCount} 个模型`}
+        </span>
+        <Button size="sm" variant="outline" onClick={openAddProvider}>
+          添加服务商
+        </Button>
+      </div>
+
+      <ProviderNoticeBar notice={notice} onDismiss={() => setNotice(null)} />
+
+      {catalogUnavailable ? (
+        <p className="text-xs text-muted-foreground">暂时读不到模型清单，点「刷新」再试。</p>
+      ) : null}
+
+      {/* 主从分栏（IA §7.2 2026-10-19 重定 + visual-design §8.5）：
+          左列定宽 288px（w-72），右列详情自适应 ≥640px（表格五列可读的前提）。
+          面板高度由内容决定，不设保底高度、不设内滚动（内容定高后 overflow-y-auto 是死滚动）。 */}
+      {/* flex-wrap + 详情 min-w-160（640px）：**宽度不够时栏换行、详情独占整行**。
+          不用媒体查询的原因：可用宽度 = 窗口 − 主侧栏 224 − 分区导航 192 − 内距 32，
+          用户拖窗口时它就是连续变化的；按视口断点写死（如 1360）会在 1361 处突然从
+          「详情 776」掉到「详情 660」，而在 1359 处又莫名换行。
+          以「详情至少 640 才并排」为依据，任何窗口宽度都自动得到正确落点：
+          1512 → 288 + 776 并排；1280 → 288 + 640 > 832，栏换行、详情 832 独占一行。 */}
+      <div className="flex flex-wrap overflow-hidden rounded-md border border-border" data-settings-split>
+        <div
+          data-provider-rail
+          role="group"
+          aria-label="服务商列表"
+          className="flex w-72 shrink-0 flex-col gap-2 border-r border-border bg-muted/40 p-3"
+        >
+          <div className="flex items-center justify-between px-1 pb-1">
+            <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+              我添加的服务商
+            </span>
+            <Button size="2xs" variant="ghost" onClick={() => void reload()}>
+              刷新
+            </Button>
+          </div>
+          {connections.map((connection) => (
+            <ProviderCard
+              key={connection.connection_id}
+              connection={connection}
+              modelCount={modelCountByConnection.get(connection.connection_id) ?? 0}
+              selected={connection.connection_id === selectedId}
+              onSelect={() => setSelectedId(connection.connection_id)}
+            />
+          ))}
+        </div>
+
+        <div className="min-w-160 flex-1 basis-0">
+          {selected === null ? (
+            <p className="py-8 text-center text-xs text-muted-foreground">左边选一个服务商看详情</p>
+          ) : (
+            <ProviderDetail
+              connection={selected}
+              onReload={() => void reload()}
+              modelTable={{
+                rows: modelRowsOf(selected.connection_id),
+                catalog,
+                chatCatalog,
+                editable: selected.lifecycle !== 'retired',
+                modelListUnavailable: catalogUnavailable || customChatModelsUnavailable,
+                agentDefaultModelId,
+                generationDefaultModelId,
+                onToggleAgentDefault: (modelId) => void toggleAgentDefaultModel(modelId),
+                onToggleGenerationDefault: (modelId) => void toggleGenerationDefaultModel(modelId),
+                  onEditChatModel: openChatModelConfig,
+                onEditGenerationModel: openEditGenerationModel,
+                onDeleteGenerationModel: requestDeleteGenerationModel,
+              }}
+              onEdit={() => setEditing(selected)}
+              onCredential={() => setCredentialFor(selected)}
+              onToggle={() => {
+                const next = selected.lifecycle === 'enabled' ? 'disabled' : 'enabled';
+                void run(
+                  () => api.setProviderConnectionLifecycle(selected.connection_id, next).then(() => undefined),
+                  `已${next === 'enabled' ? '启用' : '停用'}「${selected.display_name}」`,
+                  '没能更新状态，请重试',
+                  `「${selected.display_name}」已经不在了，点「刷新」看最新状态`,
+                );
+              }}
+              onClearCredential={() => setConfirm({ kind: 'clear-credential', connection: selected })}
+              onDelete={() => setConfirm({ kind: 'delete-provider', connection: selected })}
+              onAddModelByKind={(kind) => {
+                // 二级选择的结果（添加模型的唯一入口，见 ProviderDetail）：
+                // 生成侧开单一表单弹窗，对话侧开单一表单弹层（2026-10-19 起无来源分段）
+                if (kind === 'chat') {
+                  openCustomModelDialog({ kind: 'create', connection: selected });
+                  return;
+                }
+                openAddModelDialog(selected);
+              }}
+            />
+          )}
+        </div>
       </div>
 
       <ConfirmDialog
         open={confirm !== null}
         title={confirmTitle(confirm)}
-        message={confirmMessage(confirm, deploymentCountByConnection, customCountByConnection)}
-        confirmLabel={confirm?.kind === 'remove-model' ? '移除' : '删除'}
+        message={confirmMessage(confirm, modelCountByConnection)}
+        confirmLabel="删除"
         danger
         onResolve={(value) => void handleConfirm(value)}
       />
@@ -796,13 +797,8 @@ export function ProviderSection() {
       {addModelTo !== null ? (
         <AddModelDialog
           providerName={addModelTo.display_name}
-          catalog={catalog}
-          catalogUnavailable={catalogUnavailable}
-          boundModelIds={new Set(
-            deployments.filter((item) => item.connection_id === addModelTo.connection_id).map((item) => item.model_id),
-          )}
-          // 「自定义接口的模型」区块随每条连接的生成侧入口装配（协议归属模型级，
-          // 记录自带接口类型声明，不再按连接协议设限，见 useGenerationModelManagement）
+          // 生成侧单一表单随每条连接的生成侧入口装配（协议归属模型级，记录自带接口类型声明，
+          // 不再按连接协议设限，见 useGenerationModelManagement）
           customForm={generationCustomFormFor(addModelTo)}
           failureText={dialogFailure}
           onClose={() => {
@@ -810,7 +806,6 @@ export function ProviderSection() {
             setDialogFailure(null);
             setAddModelTo(null);
           }}
-          onSubmitBuiltIn={(items) => addModels(addModelTo, items)}
         />
       ) : null}
 
@@ -824,8 +819,8 @@ export function ProviderSection() {
           thinking={dialogThinking}
           // 弹层里的写入失败把原因显示在这里：分区顶部的提示条被遮罩挡住，用户看不到
           failureText={dialogFailure}
-          // 删除只随「改模型配置」出现：模型行内没有删除入口，删除放在模型自己的配置弹层里
-          // （行内的「移除」只摘已装包模型的接入，自建模型没有这一层）
+          // 删除只随「改模型配置」出现（对话侧）：模型行内的删除入口只挂在生成侧行上，
+          // 对话侧没有第二个删除位置
           {...(customModelTarget.kind === 'edit'
             ? { onDelete: () => requestDeleteModel(customModelTarget.model.model_id) }
             : {})}
@@ -842,7 +837,7 @@ export function ProviderSection() {
       ) : null}
 
       {generationModelEditDialog}
-    </SettingsSection>
+    </div>
   );
 }
 

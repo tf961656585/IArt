@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { PUBLIC_RELAY_TARGET_TYPES } = require('@iart/contracts');
@@ -16,16 +16,10 @@ const normalizeString = (value) => (typeof value === 'string' ? value.trim() : '
 const isRecord = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 
 const parseArgs = (argv) => {
-  const options = {
-    packagesDir: '',
-    registryJson: '',
-  };
+  const options = { registryJson: '' };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '--packages-dir') {
-      options.packagesDir = normalizeString(argv[index + 1]);
-      index += 1;
-    } else if (arg === '--registry-json') {
+    if (arg === '--registry-json') {
       options.registryJson = normalizeString(argv[index + 1]);
       index += 1;
     }
@@ -34,17 +28,6 @@ const parseArgs = (argv) => {
 };
 
 const readJsonFile = (filePath) => JSON.parse(fs.readFileSync(filePath, 'utf8'));
-
-const ensureRelativeChildPath = (rootDir, relativePath) => {
-  const normalized = normalizeString(relativePath).replace(/\\/g, '/');
-  if (!normalized || path.isAbsolute(normalized)) return null;
-  const resolved = path.resolve(rootDir, normalized);
-  const normalizedRoot = path.resolve(rootDir);
-  if (resolved !== normalizedRoot && !resolved.startsWith(`${normalizedRoot}${path.sep}`)) {
-    return null;
-  }
-  return resolved;
-};
 
 const collectPublicUrlFromRule = (rule) => {
   if (Array.isArray(rule)) {
@@ -70,85 +53,64 @@ const collectPublicRelayRequirementsFromRuntime = ({ packageId, modelId, runtime
   }];
 };
 
-const collectPackageRequirements = (packageDir) => {
-  const packageId = path.basename(packageDir);
-  const manifestPath = path.join(packageDir, 'manifest.json');
-  if (!fs.existsSync(manifestPath)) {
-    return {
-      requirements: [],
-      issues: [{
-        packageId,
-        modelId: '',
-        code: 'manifest_missing',
-        message: '缺少 manifest.json',
-      }],
-    };
+/** 加载 backend 的族模板注册表（`.cts` 源码，需 tsx 转译）。 */
+const loadFamilyRegistry = async () => {
+  const modulePath = path.join(
+    repoRoot,
+    'apps',
+    'backend',
+    'src',
+    'local-server',
+    'generation-family-templates.registry.cts',
+  );
+  const loaded = await import(pathToFileURL(modulePath).href);
+  const registry = loaded.GENERATION_FAMILY_TEMPLATE_REGISTRY;
+  if (!isRecord(registry)) {
+    throw new Error(`family_template_registry_missing:${modulePath}`);
   }
-  const manifest = readJsonFile(manifestPath);
-  if (!isRecord(manifest) || !isRecord(manifest.entry_model)) {
-    return {
-      requirements: [],
-      issues: [{
-        packageId,
-        modelId: '',
-        code: 'manifest_entry_model_invalid',
-        message: 'manifest.entry_model 缺失或无效',
-      }],
-    };
-  }
-  const modelId = normalizeString(manifest.entry_model.model_id);
-  const modelPath = ensureRelativeChildPath(packageDir, manifest.entry_model.relative_path);
-  if (!modelPath || !fs.existsSync(modelPath)) {
-    return {
-      requirements: [],
-      issues: [{
-        packageId,
-        modelId,
-        code: 'entry_model_file_missing',
-        message: 'entry model 文件缺失',
-      }],
-    };
-  }
-  const runtimeModel = readJsonFile(modelPath);
-  const runtime = isRecord(runtimeModel) ? runtimeModel.runtime : null;
-  return {
-    requirements: collectPublicRelayRequirementsFromRuntime({ packageId, modelId, runtime }),
-    issues: [],
-  };
+  return registry;
 };
 
-const collectRequirements = (packagesDir) => {
-  if (!fs.existsSync(packagesDir) || !fs.statSync(packagesDir).isDirectory()) {
-    return {
-      requirements: [],
-      issues: [{
-        packageId: '*',
-        modelId: '',
-        code: 'packages_root_missing',
-        message: `模型包目录不存在: ${packagesDir}`,
-      }],
-    };
-  }
-  const result = {
-    requirements: [],
-    issues: [],
-  };
-  const packageDirs = fs.readdirSync(packagesDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(packagesDir, entry.name))
-    .sort();
-  for (const packageDir of packageDirs) {
-    try {
-      const collected = collectPackageRequirements(packageDir);
-      result.requirements.push(...collected.requirements);
-      result.issues.push(...collected.issues);
-    } catch (error) {
-      result.issues.push({
-        packageId: path.basename(packageDir),
-        modelId: '',
-        code: 'package_scan_failed',
-        message: error instanceof Error ? error.message : String(error),
-      });
+/**
+ * 族模板 sources → 公网中转需求清单。
+ *
+ * 2026-10-20：校验对象由「已构建的能力包目录」改为「族模板产出的 sources」。族模板是现在唯一
+ * 声明 `url_input_upload_mode` / `url_input_upload_target_type` 的地方（自建生成模型记录 × 族模板
+ * 合成内存态 sources）；包退场后，继续要求存在物理包目录只会让门禁恒红。
+ *
+ * 族模板与素材位强相关：不带任何素材位的形态没有 `public_url` 媒体目标，此时不该声明
+ * public_relay（声明了反而是坏包）。因此逐族按「无素材位」与「全部素材位」两种形态各取一次。
+ */
+const collectFamilyTemplateRequirements = (registry) => {
+  const result = { requirements: [], issues: [] };
+  for (const [familyAdapterId, entry] of Object.entries(registry)) {
+    if (!isRecord(entry) || entry.status !== 'ready') continue;
+    const buildBaseSources = entry.buildBaseSources;
+    if (typeof buildBaseSources !== 'function') continue;
+    const supportsMediaSlots = Array.isArray(entry.supportsMediaSlots)
+      ? entry.supportsMediaSlots
+      : [];
+    for (const acceptedMediaSlots of [[], supportsMediaSlots]) {
+      const modelId = `guard-${familyAdapterId}`;
+      try {
+        const sources = buildBaseSources(modelId, { acceptedMediaSlots });
+        const runtimeModel = isRecord(sources) ? sources.runtimeModel : null;
+        const runtime = isRecord(runtimeModel) ? runtimeModel.runtime : null;
+        result.requirements.push(
+          ...collectPublicRelayRequirementsFromRuntime({
+            packageId: familyAdapterId,
+            modelId,
+            runtime,
+          }),
+        );
+      } catch (error) {
+        result.issues.push({
+          packageId: familyAdapterId,
+          modelId,
+          code: 'family_template_build_failed',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
   return result;
@@ -244,10 +206,20 @@ const formatIssue = (issue) => [
   `message=${issue.message}`,
 ].filter(Boolean).join(' ');
 
-const main = () => {
+const main = async () => {
   const options = parseArgs(process.argv.slice(2));
-  const packagesDir = path.resolve(options.packagesDir || path.join(repoRoot, '.model-assets', 'packages'));
-  const collected = collectRequirements(packagesDir);
+  const registry = await loadFamilyRegistry();
+  const collected = collectFamilyTemplateRequirements(registry);
+
+  // 一个需求都没扫到 = 要么族模板不再声明公网中转（需人工确认），要么扫描逻辑失效。
+  // 后者会让门禁恒绿，所以这里按失败处理并点名，避免「规则还在、只是再也不触发」。
+  if (collected.requirements.length === 0 && collected.issues.length === 0) {
+    console.error('[guard:public-relay-capabilities] failed');
+    console.error('- code=no_public_relay_requirement_collected message=族模板扫描未产出任何公网中转需求');
+    process.exitCode = 1;
+    return;
+  }
+
   const registryTargets = readRegistry(options.registryJson);
   const requirementIssues = validateRequirements(collected.requirements, registryTargets);
   const issues = [...collected.issues, ...requirementIssues];
@@ -265,9 +237,14 @@ const main = () => {
     .filter(Boolean)
     .sort();
   console.log('[guard:public-relay-capabilities] passed');
-  console.log(`- packagesDir=${packagesDir}`);
+  console.log(`- source=family-templates`);
   console.log(`- publicRelayRequirements=${collected.requirements.length}`);
   console.log(`- targetTypes=${targetTypes.length > 0 ? targetTypes.join(',') : '(none)'}`);
 };
 
-main();
+main().catch((error) => {
+  console.error(
+    `[guard:public-relay-capabilities] failed: ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exitCode = 1;
+});

@@ -6,19 +6,17 @@ import {
 import { ensureStorageDirs } from '../storage.cts';
 import * as loggingModule from '../logging.cts';
 import { isPlainObject } from '../utils.cts';
-import { getDeployment } from './deployment-store.cts';
 import { getCustomChatModelByRecordId } from './custom-chat-model-store.cts';
 import { getCustomGenerationModelByRecordId } from './custom-generation-model-store.cts';
-import { resolveClosedFamilyAdapter } from '../model-family-registry.cts';
 
 /**
  * ActiveRouteMap 持久化（spec 03 §6.2；2026-09-25 起值语义为「active 接入记录 id」）。
  *
  * - 文件：config/active-routes.json
  * - 语义：Record<model_id, 接入记录id> 单值映射，切换只影响未派发任务，无 active 时阻断
- * - 解析目标**双查**（spec 03 §6.1：两类接入记录同用 `up_dep_` 前缀）：已装包模型指向其
- *   ModelDeployment（deployment-store），自建模型（对话/生成）指向其模型记录
- *   （custom-*-model-store 的 record_id）
+ * - 解析目标**只有模型记录一种载体**（spec 03 §6.1 单一载体 / §12 PC-14，2026-10-19）：
+ *   对话记录与生成记录各在自家 store 里按 `record_id` 查（两族同用 `up_dep_` 前缀，
+ *   因此两查都做）。部署载体退场后不存在第三查。
  * - 校验：写入时确认目标存在且 model_id 一致；读取时目标缺失视为 stale 并清理
  */
 
@@ -47,46 +45,35 @@ const buildEmptyFile = (): ActiveRoutesFile => ({
   activeRoutes: {},
 });
 
-/** active 接入记录的归一形状：deployment 与自建模型记录共用同一投影。 */
+/** active 接入记录的归一形状（两族模型记录共用同一投影）。 */
 export type ActiveRouteTarget = {
-  /** 接入记录 id（deployment_id 或自建记录 record_id，同一 id 空间）。 */
+  /** 接入记录 id，即模型记录的 `record_id`（同一 id 空间）。 */
   target_id: string;
   model_id: string;
   connection_id: string;
   remote_model_id: string;
-  /** 来源类别（2026-09-26 起协议按模型解析的判别依据）。 */
-  source: 'deployment' | 'custom_chat' | 'custom_generation';
+  /**
+   * 记录所属族（spec 03 §8「来源判别只有模型记录一种」的**族**判别，不是载体判别）。
+   * 2026-10-19 部署载体退场后不再有 `deployment` 取值。
+   */
+  source: 'custom_chat' | 'custom_generation';
   /**
    * 该模型的接口协议（2026-09-26 起协议归属模型级；2026-09-29 起连接不再承载接口类型预选）：
-   * 自建记录取记录自带协议字段；已装包 deployment 按 model_id 封闭族正则表解析，未命中时为
-   * undefined（消费端显式失败，不回落）。连接不再承载模型协议。
+   * 对话记录取 `protocol_adapter_id`、生成记录取 `family_adapter_id`，恒有值——两族记录的
+   * schema 都要求协议字段必填。连接不再承载模型协议，也不按 model_id 名称推断。
    */
-  protocol_adapter_id?: string;
+  protocol_adapter_id: string;
 };
 
 /**
- * 按接入记录 id 解析目标（双查）：deployment → 自建对话记录 → 自建生成记录。
+ * 按接入记录 id 解析目标（两查）：对话记录 → 生成记录。
  *
- * 返回 null 表示两类接入记录里都没有这个 id（stale 引用）。自建记录 store 首次触达会完成
- * v1→v2 迁移，因此先到的 active route 读取也会等迁移完成后再判定 stale。
+ * 返回 null 表示两族记录里都没有这个 id（stale 引用）。记录 store 首次触达会完成自身的存量
+ * 迁移，因此先到的 active route 读取也会等迁移完成后再判定 stale。
  */
 const resolveActiveRouteTargetById = (targetId: unknown): ActiveRouteTarget | null => {
   const id = typeof targetId === 'string' ? targetId.trim() : '';
   if (!id) return null;
-  const deployment = getDeployment(id);
-  if (deployment) {
-    const deploymentProtocol = resolveClosedFamilyAdapter(deployment.model_id);
-    return {
-      target_id: deployment.deployment_id,
-      model_id: deployment.model_id,
-      connection_id: deployment.connection_id,
-      remote_model_id: deployment.remote_model_id,
-      source: 'deployment',
-      // 已装包模型的协议按 model_id 封闭族正则表解析；未命中（异常数据）留空，消费端
-      // （快照构建器 / 可执行目录）显式失败，不回落任何兜底值。
-      ...(deploymentProtocol === null ? {} : { protocol_adapter_id: deploymentProtocol }),
-    };
-  }
   const chatRecord = getCustomChatModelByRecordId(id);
   if (chatRecord) {
     return {
@@ -128,15 +115,15 @@ const normalizeFile = (raw: unknown): ActiveRoutesFile | null => {
     loggingModule.logDebug('[active-route-store] invalid activeRoutes map, drop all', { error: parsed.error.message });
     return { version: FILE_VERSION, updatedAt: new Date(0).toISOString(), activeRoutes: {} };
   }
-  // 过滤掉指向已不存在接入记录（deployment 与自建记录双查都不命中）的映射
+  // 过滤掉指向已不存在接入记录（两族记录都查不到）的映射
   const filtered: ActiveRouteMap = {};
-  Object.entries(parsed.data).forEach(([modelId, deploymentId]) => {
-    const target = resolveActiveRouteTargetById(deploymentId);
+  Object.entries(parsed.data).forEach(([modelId, recordId]) => {
+    const target = resolveActiveRouteTargetById(recordId);
     if (!target) {
-      loggingModule.logDebug('[active-route-store] drop stale active route pointing to missing access record', { modelId, deploymentId });
+      loggingModule.logDebug('[active-route-store] drop stale active route pointing to missing access record', { modelId, recordId });
       return;
     }
-    filtered[modelId] = deploymentId;
+    filtered[modelId] = recordId;
   });
   return {
     version: FILE_VERSION,
@@ -192,8 +179,8 @@ const getActiveRoutes = (): ActiveRouteMap => {
 /**
  * 模型的 active 接入记录 id；无 active 或目标已消失时返回 null。
  *
- * 返回值语义为「active 接入记录 id」：已装包模型为 deployment_id，自建模型为其记录的
- * record_id（两类 id 同用 `up_dep_` 前缀，跨边界 DTO 字段名维持 deployment_id）。
+ * 返回值语义为「active 接入记录 id」，即该模型记录的 `record_id`（跨边界 DTO 字段名沿用
+ * `deployment_id`，见 contracts 的 ExecutionSnapshot 注释）。
  */
 const getActiveDeploymentId = (modelId: unknown): string | null => {
   const id = normalizeModelId(modelId);
@@ -202,30 +189,30 @@ const getActiveDeploymentId = (modelId: unknown): string | null => {
     return null;
   }
   const file = getFile();
-  const deploymentId = file.activeRoutes[id];
-  if (!deploymentId) return null;
-  // 校验目标是否仍存在（deployment 与自建记录双查）
-  const target = resolveActiveRouteTargetById(deploymentId);
+  const recordId = file.activeRoutes[id];
+  if (!recordId) return null;
+  // 校验目标是否仍存在（两族记录两查）
+  const target = resolveActiveRouteTargetById(recordId);
   if (!target) {
-    loggingModule.logDebug('[active-route-store] getActiveDeploymentId: stale mapping, access record missing', { modelId: id, deploymentId });
+    loggingModule.logDebug('[active-route-store] getActiveDeploymentId: stale mapping, access record missing', { modelId: id, recordId });
     return null;
   }
-  return deploymentId;
+  return recordId;
 };
 
 /**
- * 解析模型当前的 active 接入记录（deployment 或自建模型记录的归一投影）。
+ * 解析模型当前的 active 接入记录（模型记录的归一投影）。
  *
- * 执行快照与目录投影的统一入口：消费方不关心目标是 deployment 还是自建记录，只按本投影
- * 取 connection_id / remote_model_id。无 active 或目标已消失时返回 null。
+ * 执行快照与目录投影的统一入口：消费方只按本投影取 connection_id / remote_model_id /
+ * protocol_adapter_id，不关心它来自哪一族的记录。无 active 或目标已消失时返回 null。
  */
 const resolveActiveTarget = (modelId: unknown): ActiveRouteTarget | null => {
-  const deploymentId = getActiveDeploymentId(modelId);
-  if (!deploymentId) return null;
-  return resolveActiveRouteTargetById(deploymentId);
+  const recordId = getActiveDeploymentId(modelId);
+  if (!recordId) return null;
+  return resolveActiveRouteTargetById(recordId);
 };
 
-/** 按接入记录 id 解析目标（双查）；供 active route 写入路由做存在性校验。 */
+/** 按接入记录 id 解析目标（两查）；供 active route 写入路由做存在性校验。 */
 const resolveActiveTargetRecord = (targetId: unknown): ActiveRouteTarget | null =>
   resolveActiveRouteTargetById(targetId);
 
@@ -276,20 +263,8 @@ const clearActiveDeployment = (modelId: unknown): boolean => {
   return true;
 };
 
-const clearActiveRoutesForDeployment = (deploymentId: unknown): number => {
-  const did = typeof deploymentId === 'string' ? deploymentId.trim() : '';
-  if (!did) return 0;
-  const file = getFile();
-  const entries = Object.entries(file.activeRoutes).filter(([, v]) => v === did);
-  if (entries.length === 0) return 0;
-  const nextRoutes = { ...file.activeRoutes };
-  for (const [modelId] of entries) delete nextRoutes[modelId];
-  commitFile({ ...file, activeRoutes: nextRoutes });
-  return entries.length;
-};
-
 /**
- * 清掉指向某条连接的全部 active 路由（deployment 与自建记录双查归属连接）。
+ * 清掉指向某条连接的全部 active 路由（按模型记录归属连接判定）。
  *
  * retired / 删除连接时解除未来 active（已冻结快照不受影响，spec 03 §5.3）。目标已消失的
  * stale 映射一并清理。
@@ -300,8 +275,8 @@ const clearActiveRoutesForConnection = (connectionId: unknown): number => {
   const file = getFile();
   let removed = 0;
   const nextRoutes = { ...file.activeRoutes };
-  for (const [modelId, deploymentId] of Object.entries(file.activeRoutes)) {
-    const target = resolveActiveRouteTargetById(deploymentId);
+  for (const [modelId, recordId] of Object.entries(file.activeRoutes)) {
+    const target = resolveActiveRouteTargetById(recordId);
     if (!target) {
       delete nextRoutes[modelId];
       removed += 1;
@@ -327,7 +302,6 @@ export {
   resolveActiveTargetRecord,
   setActiveDeployment,
   clearActiveDeployment,
-  clearActiveRoutesForDeployment,
   clearActiveRoutesForConnection,
   clearCacheForTest,
   type ActiveRoutesFile,

@@ -154,3 +154,46 @@ void test("openai-image-v1 i2i 全链：注入后 buildRequestBody 产出的 For
   assert.equal(wireBody.get("prompt"), "换成小狗吃鱼");
   assert.ok(wireBody.get("image[0]") instanceof Blob);
 });
+
+// 可灵新标准（2026-10-19 拆成三个提交端点）：模型身份在 URL path，请求体**没有**模型字段。
+// 三个 id 都必须归 URL 模板类——归入 body 类会向上游多注入一个其契约未定义的顶层 model。
+void test("可灵三个适配器：请求体不注入 model（模型身份在 URL path）", () => {
+  for (const adapterId of ["kling-text2video-v1", "kling-image2video-v1", "kling-omni-video-v1"]) {
+    const snapshot = buildSnapshot(adapterId, "kling-v3");
+    const injected = applyRemoteModelInjection({
+      snapshot,
+      url: "/text-to-video/kling-3.0",
+      body: { prompt: "hello", settings: { duration: 5 } },
+    });
+    assert.deepEqual(
+      injected.body,
+      { prompt: "hello", settings: { duration: 5 } },
+      `${adapterId} 的请求体不得被注入 model 字段`,
+    );
+    // 非对象 body 也不得报「requires a JSON object body」——它们根本不在 body 注入类里。
+    assert.deepEqual(applyRemoteModelInjection({ snapshot, url: "/tasks?task_ids=x", body: "raw" }).body, "raw");
+  }
+});
+
+void test("可灵三个适配器：URL 无 {model} 占位时替换是惰性的（分类事实仍成立）", () => {
+  for (const [adapterId, url, expected] of [
+    ["kling-text2video-v1", "https://provider.example/text-to-video/kling-3.0", "https://provider.example/text-to-video/kling-3.0"],
+    ["kling-image2video-v1", "https://provider.example/image-to-video/kling-3.0", "https://provider.example/image-to-video/kling-3.0"],
+    ["kling-omni-video-v1", "https://provider.example/omni-video/kling-3.0-omni", "https://provider.example/omni-video/kling-3.0-omni"],
+  ] as const) {
+    const snapshot = buildSnapshot(adapterId, "kling-v3");
+    const injected = applyRemoteModelInjection({ snapshot, url, body: {} });
+    assert.equal(injected.url, expected, `${adapterId} 当前路径不含占位符，替换惰性`);
+  }
+
+  // 分类事实可验证：同一适配器拿到含 {model} 的模板时替换立即生效。
+  const veoSnapshot = buildSnapshot("veo-v1", "veo-3.1-generate");
+  assert.equal(
+    applyRemoteModelInjection({
+      snapshot: veoSnapshot,
+      url: "https://provider.example/v1beta/models/{model}:predictLongRunning",
+      body: {},
+    }).url,
+    "https://provider.example/v1beta/models/veo-3.1-generate:predictLongRunning",
+  );
+});

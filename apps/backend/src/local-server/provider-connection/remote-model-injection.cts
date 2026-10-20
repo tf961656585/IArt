@@ -24,10 +24,12 @@ import * as loggingModule from '../logging.cts';
  *   - gemini-image-interactions-v1：请求体顶层 `model` = remote_model_id
  *     （Interactions API 端点 `/v1beta/interactions` 无 `{model}` 占位符）。
  *   - seedance-2-0-v1：请求 body 顶层 `model` = remote_model_id（Seedance 2.0 创建任务契约 §6）。
- *   - kling-v1（可灵官方**新设计标准**）：模型身份由 URL path 承载，请求体**没有**任何模型字段
- *     （无 `model_name`、无 `model`），因此归 URL 模板类而非 body 类。归入 body 类会向可灵
- *     上游注入一个其契约未定义的顶层 `model` 字段。
- *     注意当前口径：可灵新标准把模型版本写死在 path 段（`/text-to-video/kling-3.0` 等，见
+ *   - kling-text2video-v1 / kling-image2video-v1 / kling-omni-video-v1（可灵官方**新设计
+ *     标准**，2026-10-19 起按三个提交端点拆成三个适配器）：模型身份由 URL path 承载，
+ *     请求体**没有**任何模型字段（无 `model_name`、无 `model`），因此归 URL 模板类而非
+ *     body 类。归入 body 类会向可灵上游注入一个其契约未定义的顶层 `model` 字段。
+ *     注意当前口径：可灵新标准把模型版本写死在 path 段（`/text-to-video/kling-3.0`、
+ *     `/image-to-video/kling-3.0`、`/omni-video/kling-3.0-omni`，见
  *     docs/provider-remote-apis/07-Kling-视频生成接口.md §5），所以已声明的这些相对路径**不含**
  *     `{model}` 占位符，替换在今天是惰性的——本条目表达的是「模型身份在 URL 而非 body」这一
  *     分类事实；若后续引入 `/text-to-video/{model}` 形态，替换会立即生效。
@@ -46,8 +48,12 @@ const ADAPTER_IDS_WITH_BODY_MODEL: ReadonlySet<ProtocolAdapterId> = new Set([
 
 const ADAPTER_IDS_WITH_URL_MODEL_TEMPLATE: ReadonlySet<ProtocolAdapterId> = new Set([
   'veo-v1',
-  // 可灵新标准：模型身份在 URL path，请求体无模型字段（spec 07 §5 / §7.1）。
-  'kling-v1',
+  // 可灵新标准三个端点：模型身份在 URL path，请求体无模型字段（spec 07 §5 / §7.1）。
+  // 三个条目必须同时在此集合内——分类事实是「模型身份在 URL 而非 body」，与路径当前是否
+  // 含 `{model}` 占位符无关（不含时替换惰性，但绝不能落到 body 类去多注入一个字段）。
+  'kling-text2video-v1',
+  'kling-image2video-v1',
+  'kling-omni-video-v1',
 ]);
 
 type InjectBodyResult =
@@ -133,7 +139,7 @@ type InjectUrlResult =
  * 按 adapter 协议替换 URL 模板 `{model}` 占位符。
  *
  * - 占位符替换使用 encodeURIComponent（URL 路径段编码），避免把上游路径语义破坏。
- * - 不含 `{model}` 占位时原样返回（Veo/Gemini/kling 的轮询路径不含 {model}，不注入）。
+ * - 不含 `{model}` 占位时原样返回（Gemini 与可灵三个端点的轮询路径不含 {model}，不注入）。
  */
 const injectRemoteModelIdIntoUrl = (
   adapterId: ProtocolAdapterId,

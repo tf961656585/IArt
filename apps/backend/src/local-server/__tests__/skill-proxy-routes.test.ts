@@ -12,9 +12,9 @@ import {
   clearCacheForTest as clearConnectionCache,
 } from '../provider-connection/connection-store.cts';
 import {
-  createDeployment,
-  clearCacheForTest as clearDeploymentCache,
-} from '../provider-connection/deployment-store.cts';
+  addCustomGenerationModel,
+  clearCacheForTest as clearCustomGenerationModelCache,
+} from '../provider-connection/custom-generation-model-store.cts';
 import {
   setActiveDeployment,
   clearCacheForTest as clearActiveRouteCache,
@@ -23,7 +23,7 @@ import { releaseLease, setCredentialForConnection } from '../provider-connection
 import { __test_only__ as skillProxyTestOnly } from '../routes/skill-proxy-routes.cts';
 
 /**
- * skill 代理的端点与鉴权来自「模型 active deployment 的服务商连接」——与任务主链同源。
+ * skill 代理的端点与鉴权来自「模型 active 接入目标的服务商连接」——与任务主链同源。
  *
  * 覆盖范围说明：`ProviderConnection.base_url` 被契约限定为 `https://`，而本测试环境没有
  * https mock（仓库无自签证书 fixture），所以转发链路（body 原样、multipart boundary 保留、
@@ -50,11 +50,11 @@ const startServer = async () => {
 
 const resetStores = (): void => {
   clearConnectionCache();
-  clearDeploymentCache();
+  clearCustomGenerationModelCache();
   clearActiveRouteCache();
 };
 
-/** 每个测试用独立临时存储根，隔离服务商连接 / 部署 / active 路由。 */
+/** 每个测试用独立临时存储根，隔离服务商连接 / 模型记录 / active 路由。 */
 const withIsolatedRoots = (t: test.TestContext): void => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-proxy-test-'));
   const previousRoot = process.env['IART_STORAGE_ROOT'];
@@ -75,8 +75,14 @@ const withIsolatedRoots = (t: test.TestContext): void => {
   });
 };
 
-/** 建 enabled 连接 + 凭证 + 该模型部署，并设为 active。 */
-const seedActiveDeployment = async (): Promise<void> => {
+/**
+ * 建 enabled 连接 + 凭证 + 该模型的用户记录，并设为 active。
+ *
+ * 2026-10-19 起模型只有用户记录一种载体（spec 03 §6.1 / PC-14）：不再有独立的接入对象可建，
+ * 记录本身就是接入目标（`record_id`）。本测试断言的是「skill 代理从模型的 active 接入目标解析
+ * 端点与鉴权」这条真实链路，换成记录播种后该语义不变。
+ */
+const seedActiveModelRecord = async (): Promise<void> => {
   const connection = createConnection({
     display_name: 'skill-proxy-test',
     base_url: CONNECTION_BASE_URL,
@@ -84,12 +90,15 @@ const seedActiveDeployment = async (): Promise<void> => {
   const credential = await setCredentialForConnection(connection.connection_id, CREDENTIAL_VALUE);
   assert.ok(credential, 'credential should be stored');
   setConnectionCredential(connection.connection_id, credential.credentialRef, credential.version, true);
-  const deployment = createDeployment({
+  const record = addCustomGenerationModel({
     model_id: SKILL_MODEL_ID,
     connection_id: connection.connection_id,
     remote_model_id: SKILL_MODEL_ID,
+    family_adapter_id: 'openai-image-v1',
   });
-  assert.equal(setActiveDeployment(SKILL_MODEL_ID, deployment.deployment_id), deployment.deployment_id);
+  assert.equal(record.ok, true, 'generation model record should be created');
+  if (!record.ok) return;
+  assert.equal(setActiveDeployment(SKILL_MODEL_ID, record.model.record_id), record.model.record_id);
 };
 
 const parseJson = async (response: FetchableResponse): Promise<JsonValue> => {
@@ -100,11 +109,11 @@ type FetchableResponse = Response;
 
 void test('skill-proxy: resolveSkillUpstream 从模型的服务商连接解析端点与鉴权头', async (t) => {
   withIsolatedRoots(t);
-  await seedActiveDeployment();
+  await seedActiveModelRecord();
 
   const upstream = await skillProxyTestOnly.resolveSkillUpstream(SKILL_MODEL_ID);
 
-  assert.ok(upstream, 'upstream should resolve from the active deployment');
+  assert.ok(upstream, 'upstream should resolve from the active access target');
   assert.equal(upstream.baseUrl, CONNECTION_BASE_URL);
   assert.equal(upstream.authHeaderName.toLowerCase(), 'authorization');
   assert.match(upstream.authHeaderValue, new RegExp(CREDENTIAL_VALUE));

@@ -35,7 +35,7 @@ import { clearActiveDeployment, setActiveDeployment } from '../provider-connecti
  * - PUT    /api/custom-chat-models/:modelId    改记录的可改属性（能力两字段 + 档位两字段整体替换）
  * - DELETE /api/custom-chat-models/:modelId    删除记录（active route 由本路由级联清理）
  *
- * 2026-09-25 起「声明 + ModelDeployment 接入」合并为单记录：接入归属（connection_id +
+ * 2026-09-25 起「声明 + 接入」合并为单记录：接入归属（connection_id +
  * remote_model_id）与能力属性一体，思考档位也随记录走（原 PUT /api/model-deployments/:id
  * 的档位启用关系入口随声明层退役）。写入进 Hub write token 白名单（hub-local-write-policy）。
  * POST 成功后由后端把该记录写入 active route（保持「添加即可用」的用户可见行为）。
@@ -156,14 +156,6 @@ const createCustomChatModelRoutes = (): RouteDefinition[] => [
           : { default_thinking_tier: parsed.data.default_thinking_tier }),
       });
       if (!result.ok) {
-        if (result.reason === 'duplicate_installed_model') {
-          sendError(res, 409, 'conflict', '软件里已经有这个模型了，换一个模型 ID，或直接使用已装的这个模型', corsHeaders);
-          return;
-        }
-        if (result.reason === 'conflicts_with_generation_family') {
-          sendError(res, 409, 'conflict', '这个名字属于生成模型，不能用作对话模型的模型 ID，换一个模型 ID', corsHeaders);
-          return;
-        }
         if (result.reason === 'duplicate_generation_record') {
           sendError(res, 409, 'conflict', '这个名字已经用于一个生成模型，不能再用作对话模型的模型 ID，换一个模型 ID，或先删除那个生成模型', corsHeaders);
           return;

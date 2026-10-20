@@ -21,10 +21,6 @@ import {
   setConnectionCredential,
 } from '../provider-connection/connection-store.cts';
 import {
-  clearCacheForTest as clearDeploymentCache,
-  listDeployments,
-} from '../provider-connection/deployment-store.cts';
-import {
   clearCacheForTest as clearActiveRouteCache,
   getActiveDeploymentId,
   setActiveDeployment,
@@ -32,6 +28,7 @@ import {
 import {
   addCustomChatModel,
   clearCacheForTest as clearCustomModelCache,
+  getCustomChatModel,
 } from '../provider-connection/custom-chat-model-store.cts';
 import {
   addCustomGenerationModel,
@@ -54,14 +51,10 @@ import { setCredentialForConnection } from '../provider-connection/credential-st
  * 三者一致（接缝）；④ 删除级联清 active route；⑤ 对话请求把记录的 remote_model_id 当线上模型名。
  */
 
-const repoRoot = path.join(__dirname, '..', '..', '..', '..', '..');
-const REAL_PACKAGES_DIR = path.join(repoRoot, '.model-assets', 'sources');
-process.env['IART_MODEL_ASSET_PACKAGES_DIR'] = REAL_PACKAGES_DIR;
 process.env['IART_PUBLIC_UPLOAD_CLOUDFLARE_IMAGE_PUBLIC_URL_ENDPOINT'] = 'https://relay.example.invalid/upload';
 
 const HUB_WRITE_TOKEN = 't'.repeat(32);
 /* 已装生成模型的中性 id：不属于任何封闭生成族，用来验证「自建模型不得与已装模型重名」。 */
-const INSTALLED_GENERATION_MODEL_ID = 'z-image-turbo';
 const CHAT_ADAPTER = 'openai-responses-v1';
 const GENERATION_ADAPTER = 'openai-image-v1';
 const CONNECTION_BASE_URL = 'https://byok.example.com/v1';
@@ -87,7 +80,6 @@ const startServer = async (t: test.TestContext): Promise<string> => {
 
 const clearAllCaches = (): void => {
   clearConnectionCache();
-  clearDeploymentCache();
   clearActiveRouteCache();
   clearCustomModelCache();
   clearCustomGenerationModelCache();
@@ -106,7 +98,6 @@ const withIsolatedEnv = (t: test.TestContext): void => {
     else process.env[HUB_LOCAL_WRITE_TOKEN_ENV] = previousToken;
     if (previousRoot === undefined) delete process.env['IART_STORAGE_ROOT'];
     else process.env['IART_STORAGE_ROOT'] = previousRoot;
-    process.env['IART_MODEL_ASSET_PACKAGES_DIR'] = REAL_PACKAGES_DIR;
     clearAllCaches();
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
@@ -194,23 +185,24 @@ void test('自建对话模型：一次写入完成归属与能力，立即成为
     fs.readFileSync(path.join(storageRoot, 'config', 'custom-chat-models.json'), 'utf-8'),
   );
   assert.equal((onDisk as { version: number }).version, 3);
-  assert.deepEqual(listDeployments().filter((deployment) => deployment.model_id === CUSTOM_MODEL_ID), []);
+  // 2026-10-19 起没有第二类接入载体可查：模型记录本身就是接入（原断言在这里再查一遍
+  // deployment store 里没有自建链记录，那个 store 已整体删除）。
+  assert.equal(getCustomChatModel(CUSTOM_MODEL_ID)?.record_id, createdModel.record_id);
 
   // 重名（自己）→ 409
   assert.equal(
     (await addCustomModel(baseUrl, { model_id: CUSTOM_MODEL_ID, connection_id: connectionId, protocol_adapter_id: CHAT_ADAPTER })).status,
     409,
   );
-  // 与已装模型重名 → 409（model_id 全局唯一，生成模型的名字同样不能占用）
-  assert.equal(
-    (await addCustomModel(baseUrl, { model_id: INSTALLED_GENERATION_MODEL_ID, connection_id: connectionId, protocol_adapter_id: CHAT_ADAPTER })).status,
-    409,
-  );
-  // 落在生成族命名空间内 → 409（否则会被生成链路识别为生成模型）
-  assert.equal(
-    (await addCustomModel(baseUrl, { model_id: 'gpt-image-3', connection_id: connectionId, protocol_adapter_id: CHAT_ADAPTER })).status,
-    409,
-  );
+  // 2026-10-19 起「与已装模型包重名」「落在生成族命名空间」两种 409 一并退场：软件不内置任何
+  // 具体模型，模型来源唯一，没有第二个来源可撞名，也不再按族正则识别模型归属（spec 03 §8/§12）。
+  // 原先 gpt-image-* 这类名字会被族正则拦下，现在它就是一条普通的对话模型名，可以添加。
+  const familyNamespaced = await addCustomModel(baseUrl, {
+    model_id: 'gpt-image-3',
+    connection_id: connectionId,
+    protocol_adapter_id: CHAT_ADAPTER,
+  });
+  assert.equal(familyNamespaced.status, 200, '生成族命名空间护栏已随部署载体退场，名字不再被正则拦下');
   // 非法名 → 400
   assert.equal(
     (await addCustomModel(baseUrl, { model_id: 'a b', connection_id: connectionId, protocol_adapter_id: CHAT_ADAPTER })).status,

@@ -8,32 +8,31 @@ import type {
 
 import { buildModelConfigFromNodeProjection } from "@/client/config/modelAssetProjectionBridge";
 import {
-  cloneModelAssetFixtureValue,
-  loadModelAssetPackageCatalogFixture,
-} from "@/client/config/__tests__/fixtures/modelAssetPackageProjectionFixtures";
+  projectAllReadyFamilyModels,
+  projectFamilyModel,
+} from "@/client/config/__tests__/fixtures/familyTemplateProjectionFixtures";
 import type {
   SchemaFieldDefinition,
   SchemaFieldOption,
   SchemaFormDefinition,
 } from "@/features/workspace/schema/types";
 
+/**
+ * 投影本地化（族模板版）。
+ *
+ * 历史：本文件原名 `runtimeModelLocalization.real-packages.test.ts`，从包目录读真实包的
+ * locales。2026-10-20 模型能力包退场、包目录删除后，样本改为**族模板经真实投影管线产出的
+ * 投影与本地化束**：模板自带 zh-CN / en 两份 locales，经 `buildProjectionFromPackageSources`
+ * 的 `validateLocalizationTargets` + `rewriteProjectionLocalizationKeys` 走同一条重写路径。
+ *
+ * 钉住的不变量不变：投影里的文案是**命名空间化的 key**（`model-asset/<packageId>:<keyPath>`），
+ * 而不是硬编码文案；同一 key 在中英文都能解析；标题恒显示 model_id（不翻译）。
+ */
+
 type SupportedLocale = "zh-CN" | "en";
 
-const catalog = loadModelAssetPackageCatalogFixture();
-const projectionByModelId = new Map(
-  catalog.projections.map((projection) => [projection.model_id, projection]),
-);
-const bundleByNamespace = new Map(
-  catalog.localization_bundles.map((bundle) => [bundle.namespace, bundle]),
-);
-
-const loadProjection = (modelId: string): ModelAssetNodeProjection => {
-  const projection = projectionByModelId.get(modelId);
-  if (!projection) {
-    throw new Error(`[real-packages] projection not found for model_id=${modelId}`);
-  }
-  return cloneModelAssetFixtureValue(projection);
-};
+const project = (familyAdapterId: string, modelId: string) =>
+  projectFamilyModel({ familyAdapterId, modelId });
 
 const resolvePath = (resource: Record<string, unknown>, keyPath: string): unknown =>
   keyPath.split(".").reduce<unknown>((current, segment) => {
@@ -45,6 +44,7 @@ const resolvePath = (resource: Record<string, unknown>, keyPath: string): unknow
 
 const parseNamespacedKey = (
   value: string | undefined,
+  bundle: ModelAssetLocalizationBundle,
 ): { bundle: ModelAssetLocalizationBundle; keyPath: string } | null => {
   const normalized = value?.trim();
   if (!normalized) return null;
@@ -52,32 +52,32 @@ const parseNamespacedKey = (
   if (separatorIndex <= 0) return null;
   const namespace = normalized.slice(0, separatorIndex);
   const keyPath = normalized.slice(separatorIndex + 1);
-  const bundle = bundleByNamespace.get(namespace);
-  if (!bundle || !keyPath) return null;
+  if (namespace !== bundle.namespace || !keyPath) return null;
   return { bundle, keyPath };
 };
 
 const resolveModelAssetText = (
   locale: SupportedLocale,
   value: string | undefined,
+  bundle: ModelAssetLocalizationBundle,
 ): string | undefined => {
-  const parsed = parseNamespacedKey(value);
+  const parsed = parseNamespacedKey(value, bundle);
   if (!parsed) return undefined;
   const resolved = resolvePath(parsed.bundle.resources[locale], parsed.keyPath);
   return typeof resolved === "string" && resolved.trim() ? resolved : undefined;
 };
 
-const resolveDisplayText = (locale: SupportedLocale, value: string | undefined): string | undefined =>
-  resolveModelAssetText(locale, value) ?? value;
-
-const loadSchema = async (modelId: string): Promise<SchemaFormDefinition<string>> => {
-  const config = buildModelConfigFromNodeProjection(loadProjection(modelId));
+const loadSchema = async (
+  projection: ModelAssetNodeProjection,
+): Promise<SchemaFormDefinition<string>> => {
+  const config = buildModelConfigFromNodeProjection(projection);
   expect(config).toBeTruthy();
   const form = config?.workspace?.form;
   expect(form && form.kind === "schema").toBeTruthy();
   const schemaModule = await (form as { kind: "schema"; load: () => Promise<unknown> }).load();
   return (
-    (schemaModule as { default?: SchemaFormDefinition<string>; schema?: SchemaFormDefinition<string> }).default ??
+    (schemaModule as { default?: SchemaFormDefinition<string>; schema?: SchemaFormDefinition<string> })
+      .default ??
     (schemaModule as { schema?: SchemaFormDefinition<string> }).schema ??
     schemaModule
   ) as SchemaFormDefinition<string>;
@@ -87,9 +87,10 @@ const expectLocalizedValue = (
   locale: SupportedLocale,
   value: string | undefined,
   expected: string,
-) => {
+  bundle: ModelAssetLocalizationBundle,
+): void => {
   expect(value).toMatch(/^model-asset\/[^:]+:/);
-  expect(resolveDisplayText(locale, value)).toBe(expected);
+  expect(resolveModelAssetText(locale, value, bundle)).toBe(expected);
 };
 
 type SchemaFieldWithOptions = Extract<SchemaFieldDefinition<string>, { options: unknown }>;
@@ -111,152 +112,223 @@ const findStaticOption = (
 const readHelperTextKey = (field: SchemaFieldDefinition<string> | undefined): string | undefined =>
   field !== undefined && "helperTextKey" in field ? field.helperTextKey : undefined;
 
-describe("runtimeModelLocalization real packages", () => {
-  it("真实包目录投影携带动态模型资产 namespace 与字段本地化资源", () => {
-    expect(catalog.diagnostics).toEqual([]);
-    expect(catalog.projections.length).toBeGreaterThan(0);
-    expect(catalog.localization_bundles).toHaveLength(catalog.projections.length);
+describe("投影本地化（族模板）", () => {
+  it("全族投影都携带自己的命名空间与双语文案，标题显示 model_id", () => {
+    const projections = projectAllReadyFamilyModels((familyAdapterId) => `loc-${familyAdapterId}`);
+    // 至少一个族（否则断言退化成空循环）；每个投影必须配一份同名空间本地化束。
+    expect(projections.length).toBeGreaterThan(0);
 
-    const expectations = {
-      "gemini-3-pro-image": {
-        fieldKey: "model-asset/gemini-3-pro-image:fields.image.label",
-      },
-      "gemini-3.1-flash-image": {
-        fieldKey: "model-asset/gemini-3.1-flash-image:fields.image.label",
-      },
-      "gemini-3.1-flash-lite-image": {
-        fieldKey: "model-asset/gemini-3.1-flash-lite-image:fields.image.label",
-      },
-    } satisfies Record<string, { fieldKey: string }>;
+    for (const { projection, localizationBundle, packageId } of projections) {
+      expect(localizationBundle.package_id).toBe(packageId);
+      expect(localizationBundle.namespace).toBe(`model-asset/${packageId}`);
+      expect(Object.keys(localizationBundle.resources).sort()).toEqual(["en", "zh-CN"]);
 
-    Object.entries(expectations).forEach(([modelId, expectation]) => {
-      const projection = loadProjection(modelId);
       const config = buildModelConfigFromNodeProjection(projection);
-      expect(config?.label).toBe(modelId);
+      expect(config).toBeTruthy();
+      // 标题恒显示 model_id，不做翻译
+      expect(config?.label).toBe(projection.model_id);
+      // 模型级 i18n 已退役：文案只走投影内的命名空间 key
       expect(config?.i18n).toBeUndefined();
-      expect(resolveModelAssetText("zh-CN", expectation.fieldKey)).toEqual(expect.any(String));
-      expect(resolveModelAssetText("en", expectation.fieldKey)).toEqual(expect.any(String));
-    });
+
+      // 字段 label 必须是命名空间 key，且中英文都能解析出非空文案
+      const fieldsWithLabel = projection.parameter_schema.fields.filter(
+        (field) => field.label.length > 0,
+      );
+      expect(fieldsWithLabel.length).toBeGreaterThan(0);
+      for (const field of fieldsWithLabel) {
+        expect(field.label.startsWith(`${localizationBundle.namespace}:`)).toBe(true);
+        expect(resolveModelAssetText("zh-CN", field.label, localizationBundle)).toEqual(
+          expect.any(String),
+        );
+        expect(resolveModelAssetText("en", field.label, localizationBundle)).toEqual(
+          expect.any(String),
+        );
+      }
+      // 端口名同理（输入端口可能为空，输出端口恒有）
+      for (const port of [...projection.ports.inputs, ...projection.ports.outputs]) {
+        expect(port.name.startsWith(`${localizationBundle.namespace}:`)).toBe(true);
+        expect(resolveModelAssetText("zh-CN", port.name, localizationBundle)).toEqual(
+          expect.any(String),
+        );
+        expect(resolveModelAssetText("en", port.name, localizationBundle)).toEqual(
+          expect.any(String),
+        );
+      }
+    }
   });
 
-  it("veo-3.1-generate-preview 的字段、帮助、枚举与端口名可在中英文解析，标题显示 model_id", async () => {
-    const veoSchema = await loadSchema("veo-3.1-generate-preview");
-    const veoConfig = buildModelConfigFromNodeProjection(loadProjection("veo-3.1-generate-preview"));
-    const veoFirstFrame = veoSchema.fields.find((field) => field.key === "firstFrameImage");
-    const veoAspectRatio = veoSchema.fields.find((field) => field.key === "aspectRatio");
-    const veoAspectRatioOption = findStaticOption(veoAspectRatio, "16:9");
-    const veoInputPort = veoConfig?.nodeGraphPorts?.inputs?.find((port) => port.id === "referenceImages");
-    const veoOutputPort = veoConfig?.nodeGraphPorts?.outputs?.find((port) => port.id === "video");
+  it("veo 族：字段、帮助、枚举与端口名可在中英文解析", async () => {
+    const MODEL_ID = "loc-veo-v1";
+    const { projection, localizationBundle } = project("veo-v1", MODEL_ID);
+    const schema = await loadSchema(projection);
+    const config = buildModelConfigFromNodeProjection(projection);
+
+    const firstFrameField = schema.fields.find((field) => field.key === "firstFrameImage");
+    const aspectRatioField = schema.fields.find((field) => field.key === "aspectRatio");
+    const aspectRatioOption = findStaticOption(aspectRatioField, "16:9");
+    const outputPort = config?.nodeGraphPorts?.outputs?.find((port) => port.id === "video");
 
     const expectations = {
       "zh-CN": {
-        veoField: "首帧图",
-        veoHelper: "作为视频起始画面的图像；建议不低于 720p，画幅为 16:9 或 9:16。",
-        veoEnum: "横屏 16:9",
-        veoInput: "参考图",
-        veoOutput: "视频",
+        field: "首帧图",
+        helper: "作为视频起始画面；建议不低于 720p，画幅为 16:9 或 9:16。",
+        enumOption: "横屏 16:9",
+        output: "生成视频",
       },
       en: {
-        veoField: "First frame image",
-        veoHelper:
+        field: "First frame image",
+        helper:
           "Image used as the opening frame; 720p or higher and a 16:9 or 9:16 frame is recommended.",
-        veoEnum: "Landscape 16:9",
-        veoInput: "Reference images",
-        veoOutput: "Video",
+        enumOption: "Landscape 16:9",
+        output: "Generated video",
       },
     } satisfies Record<SupportedLocale, Record<string, string>>;
 
-    expect(veoConfig?.label).toBe("veo-3.1-generate-preview");
-    expect(veoConfig?.i18n).toBeUndefined();
+    expect(config?.label).toBe(MODEL_ID);
+    expect(config?.i18n).toBeUndefined();
 
     (["zh-CN", "en"] as const).forEach((locale) => {
-      expectLocalizedValue(locale, veoFirstFrame?.labelKey, expectations[locale].veoField);
-      expectLocalizedValue(locale, readHelperTextKey(veoFirstFrame), expectations[locale].veoHelper);
-      expectLocalizedValue(locale, veoAspectRatioOption?.labelKey, expectations[locale].veoEnum);
-      expectLocalizedValue(locale, veoInputPort?.name, expectations[locale].veoInput);
-      expectLocalizedValue(locale, veoOutputPort?.name, expectations[locale].veoOutput);
+      const expected = expectations[locale];
+      expectLocalizedValue(locale, firstFrameField?.labelKey, expected.field, localizationBundle);
+      expectLocalizedValue(
+        locale,
+        readHelperTextKey(firstFrameField),
+        expected.helper,
+        localizationBundle,
+      );
+      expectLocalizedValue(
+        locale,
+        aspectRatioOption?.labelKey,
+        expected.enumOption,
+        localizationBundle,
+      );
+      expectLocalizedValue(locale, outputPort?.name, expected.output, localizationBundle);
     });
   });
 
-  it("kling-v3 两个真实包的字段、枚举与端口名可在中英文解析，标题显示 model_id", async () => {
-    const textSchema = await loadSchema("kling-v3-text2video");
-    const textConfig = buildModelConfigFromNodeProjection(loadProjection("kling-v3-text2video"));
-    // prompt 已从 parameter_schema.fields 与 input_ports 剥离（方案 B），改用仍存在的
-    // duration / aspectRatio / audio 字段做文本向字段本地化解码断言。
-    const textDuration = textSchema.fields.find((field) => field.key === "duration");
-    const textDurationOption = findStaticOption(textDuration, 5);
-    const textAspectRatio = textSchema.fields.find((field) => field.key === "aspectRatio");
-    const textAspectRatioOption = findStaticOption(textAspectRatio, "16:9");
-    const textAudio = textSchema.fields.find((field) => field.key === "audio");
-    const textAudioOption = findStaticOption(textAudio, "native");
-    const textMultiShot = textSchema.fields.find((field) => field.key === "multiShot");
-    const textOutputPort = textConfig?.nodeGraphPorts?.outputs?.find((port) => port.id === "video");
+  it("可灵文生视频族：时长/比例/音频/多镜头与输出端口可在中英文解析", async () => {
+    const MODEL_ID = "loc-kling-text2video";
+    const { projection, localizationBundle } = project("kling-text2video-v1", MODEL_ID);
+    const schema = await loadSchema(projection);
+    const config = buildModelConfigFromNodeProjection(projection);
 
-    const imageSchema = await loadSchema("kling-v3-image2video");
-    const imageConfig = buildModelConfigFromNodeProjection(loadProjection("kling-v3-image2video"));
-    const imageFirstFrameField = imageSchema.fields.find((field) => field.key === "firstFrameImage");
-    const imageLastFrameField = imageSchema.fields.find((field) => field.key === "lastFrameImage");
-    const imageResolution = imageSchema.fields.find((field) => field.key === "resolution");
-    const imageResolutionOption = findStaticOption(imageResolution, "4k");
-    const imageFirstFrameInputPort = imageConfig?.nodeGraphPorts?.inputs?.find((port) => port.id === "firstFrameImage");
-    const imageLastFrameInputPort = imageConfig?.nodeGraphPorts?.inputs?.find((port) => port.id === "lastFrameImage");
-    const imageOutputPort = imageConfig?.nodeGraphPorts?.outputs?.find((port) => port.id === "video");
+    const durationField = schema.fields.find((field) => field.key === "duration");
+    const durationOption = findStaticOption(durationField, 5);
+    const aspectRatioField = schema.fields.find((field) => field.key === "aspectRatio");
+    const aspectRatioOption = findStaticOption(aspectRatioField, "16:9");
+    const audioField = schema.fields.find((field) => field.key === "audio");
+    const audioOption = findStaticOption(audioField, "native");
+    const multiShotField = schema.fields.find((field) => field.key === "multiShot");
+    const outputPort = config?.nodeGraphPorts?.outputs?.find((port) => port.id === "video");
 
     const expectations = {
       "zh-CN": {
-        textDuration: "视频时长",
-        textDurationOption: "5 秒",
-        textAspectRatio: "16:9 横屏",
-        textAudio: "原生音频",
-        textMultiShot: "多镜头",
-        textOutput: "视频",
-        imageFirstFrameField: "首帧图",
-        imageLastFrameField: "尾帧图",
-        imageResolution: "4K",
-        imageFirstFrameInput: "首帧图",
-        imageLastFrameInput: "尾帧图",
-        imageOutput: "视频",
+        duration: "视频时长",
+        durationOption: "5 秒",
+        aspectRatioOption: "16:9 横屏",
+        audioOption: "原生音频",
+        multiShot: "多镜头",
+        output: "视频",
       },
       en: {
-        textDuration: "Duration",
-        textDurationOption: "5 seconds",
-        textAspectRatio: "16:9 landscape",
-        textAudio: "Native audio",
-        textMultiShot: "Multi-shot",
-        textOutput: "Video",
-        imageFirstFrameField: "First frame image",
-        imageLastFrameField: "Last frame image",
-        imageResolution: "4K",
-        imageFirstFrameInput: "First frame image",
-        imageLastFrameInput: "Last frame image",
-        imageOutput: "Video",
+        duration: "Duration",
+        durationOption: "5 seconds",
+        aspectRatioOption: "16:9 landscape",
+        audioOption: "Native audio",
+        multiShot: "Multi-shot",
+        output: "Video",
       },
     } satisfies Record<SupportedLocale, Record<string, string>>;
 
-    expect(textConfig?.label).toBe("kling-v3-text2video");
-    expect(textConfig?.i18n).toBeUndefined();
-    expect(imageConfig?.label).toBe("kling-v3-image2video");
-    expect(imageConfig?.i18n).toBeUndefined();
+    expect(config?.label).toBe(MODEL_ID);
+    expect(config?.i18n).toBeUndefined();
 
     (["zh-CN", "en"] as const).forEach((locale) => {
-      expectLocalizedValue(locale, textDuration?.labelKey, expectations[locale].textDuration);
-      expectLocalizedValue(locale, textDurationOption?.labelKey, expectations[locale].textDurationOption);
-      expectLocalizedValue(locale, textAspectRatioOption?.labelKey, expectations[locale].textAspectRatio);
-      expectLocalizedValue(locale, textAudioOption?.labelKey, expectations[locale].textAudio);
-      expectLocalizedValue(locale, textMultiShot?.labelKey, expectations[locale].textMultiShot);
-      expectLocalizedValue(locale, textOutputPort?.name, expectations[locale].textOutput);
-
-      expectLocalizedValue(locale, imageFirstFrameField?.labelKey, expectations[locale].imageFirstFrameField);
-      expectLocalizedValue(locale, imageLastFrameField?.labelKey, expectations[locale].imageLastFrameField);
-      expectLocalizedValue(locale, imageResolutionOption?.labelKey, expectations[locale].imageResolution);
-      expectLocalizedValue(locale, imageFirstFrameInputPort?.name, expectations[locale].imageFirstFrameInput);
-      expectLocalizedValue(locale, imageLastFrameInputPort?.name, expectations[locale].imageLastFrameInput);
-      expectLocalizedValue(locale, imageOutputPort?.name, expectations[locale].imageOutput);
+      const expected = expectations[locale];
+      expectLocalizedValue(locale, durationField?.labelKey, expected.duration, localizationBundle);
+      expectLocalizedValue(
+        locale,
+        durationOption?.labelKey,
+        expected.durationOption,
+        localizationBundle,
+      );
+      expectLocalizedValue(
+        locale,
+        aspectRatioOption?.labelKey,
+        expected.aspectRatioOption,
+        localizationBundle,
+      );
+      expectLocalizedValue(locale, audioOption?.labelKey, expected.audioOption, localizationBundle);
+      expectLocalizedValue(locale, multiShotField?.labelKey, expected.multiShot, localizationBundle);
+      expectLocalizedValue(locale, outputPort?.name, expected.output, localizationBundle);
     });
   });
 
-  it("真实投影不再携带 Editor 全局模型资产文案 key", () => {
-    const serialized = JSON.stringify(catalog.projections);
+  it("可灵图生视频族：首/尾帧字段与输入端口可在中英文解析，分辨率枚举含 4K", async () => {
+    const MODEL_ID = "loc-kling-image2video";
+    const { projection, localizationBundle } = project("kling-image2video-v1", MODEL_ID);
+    const schema = await loadSchema(projection);
+    const config = buildModelConfigFromNodeProjection(projection);
+
+    const firstFrameField = schema.fields.find((field) => field.key === "firstFrameImage");
+    const lastFrameField = schema.fields.find((field) => field.key === "lastFrameImage");
+    const resolutionField = schema.fields.find((field) => field.key === "resolution");
+    const resolutionOption = findStaticOption(resolutionField, "4k");
+    const firstFrameInputPort = config?.nodeGraphPorts?.inputs?.find(
+      (port) => port.id === "firstFrameImage",
+    );
+    const lastFrameInputPort = config?.nodeGraphPorts?.inputs?.find(
+      (port) => port.id === "lastFrameImage",
+    );
+    const outputPort = config?.nodeGraphPorts?.outputs?.find((port) => port.id === "video");
+
+    const expectations = {
+      "zh-CN": {
+        firstFrame: "首帧图",
+        lastFrame: "尾帧图",
+        resolution: "4K",
+        output: "视频",
+      },
+      en: {
+        firstFrame: "First frame",
+        lastFrame: "Last frame",
+        resolution: "4K",
+        output: "Video",
+      },
+    } satisfies Record<SupportedLocale, Record<string, string>>;
+
+    expect(config?.label).toBe(MODEL_ID);
+    expect(config?.i18n).toBeUndefined();
+
+    (["zh-CN", "en"] as const).forEach((locale) => {
+      const expected = expectations[locale];
+      expectLocalizedValue(
+        locale,
+        firstFrameField?.labelKey,
+        expected.firstFrame,
+        localizationBundle,
+      );
+      expectLocalizedValue(locale, lastFrameField?.labelKey, expected.lastFrame, localizationBundle);
+      expectLocalizedValue(
+        locale,
+        resolutionOption?.labelKey,
+        expected.resolution,
+        localizationBundle,
+      );
+      expectLocalizedValue(
+        locale,
+        firstFrameInputPort?.name,
+        expected.firstFrame,
+        localizationBundle,
+      );
+      expectLocalizedValue(locale, lastFrameInputPort?.name, expected.lastFrame, localizationBundle);
+      expectLocalizedValue(locale, outputPort?.name, expected.output, localizationBundle);
+    });
+  });
+
+  it("投影不再携带 Editor 全局模型资产文案 key", () => {
+    const projections = projectAllReadyFamilyModels((familyAdapterId) => `loc-ns-${familyAdapterId}`);
+    const serialized = JSON.stringify(projections.map((item) => item.projection));
     expect(serialized).not.toContain("pages:modelWorkspace");
     expect(serialized).not.toContain("models.");
     expect(serialized).not.toContain("models:");

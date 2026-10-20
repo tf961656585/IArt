@@ -9,9 +9,10 @@
  * - 文生图模式（image 为空）：JSON /v1/images/generations
  * - 图生图模式（image 非空）：multipart /v1/images/edits
  *
- * 这组测试不依赖 .model-assets/packages/gpt-image-2 真实包存在，
- * 直接用 inline fixture 模拟合并包的 payload_rules，验证 evaluateRule 的求值行为。
- * 真实包测试由子计划 5 的集成测试覆盖。
+ * 这组测试不依赖磁盘上的任何资产文件：直接用 inline fixture 模拟合并形态的 payload_rules，
+ * 验证 evaluateRule 的求值行为。族模板侧的同形契约由
+ * `gpt-image-2-merge.alias.test.ts`（投影层）与 `openai-image-family.wire-injection.test.ts`
+ * （求值 → 注入 → wire 全链）覆盖。
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";

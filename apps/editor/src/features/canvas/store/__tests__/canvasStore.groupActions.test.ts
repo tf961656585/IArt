@@ -1,8 +1,12 @@
+// @spec: AG-CN-018, AL-GC-003
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useCanvasStore } from '../canvasStore';
 import { createNodeGraph } from '../../types/nodeGraph';
 import type { GraphNode, GroupNodeData, TextInputNodeData } from '../../types';
 import type { AgentNodeData } from '../../types/agentNode';
+import { buildGroupDerivedSize } from '../../components/canvas/groupDerivedSize';
+import { buildCanvasSizeSources } from '../../utils/nodeOccupancy';
+import { rectsIntersect } from '../../utils/taskNodePlacement';
 
 const createTestGraph = () =>
   createNodeGraph({
@@ -641,6 +645,84 @@ describe('canvasStore group actions', () => {
       addTextInputNode('free-1', 100, 100);
       const emptyGroupId = useCanvasStore.getState().createGroup([], undefined);
       expect(emptyGroupId).toBeNull();
+    });
+  });
+
+  describe('容器级防重叠（双组整理）', () => {
+    /** 用 store 派生几何取容器矩形（与渲染/收口同一派生实现）。 */
+    const derivedRect = (id: string) => {
+      const graph = useCanvasStore.getState().nodeGraph;
+      if (!graph) throw new Error('graph missing');
+      const sizeSources = buildCanvasSizeSources(useCanvasStore.getState());
+      const entry = buildGroupDerivedSize({ nodes: graph.nodes, sizeSources }).byGroupId[id];
+      if (!entry) throw new Error(`容器派生 entry 缺失：${id}`);
+      return {
+        x: entry.position.x,
+        y: entry.position.y,
+        width: entry.size.width,
+        height: entry.size.height,
+      };
+    };
+
+    it('组 A 整理后不得与组 B 相交（整组让位），组 B 节点不动', async () => {
+      // 组 A：成员纵向散布；组 B：紧邻 A 右侧（横向上与 A 整理后的派生矩形相交）
+      addTextInputNode('a1', 0, 0);
+      addTextInputNode('a2', 0, 400);
+      const groupA = useCanvasStore.getState().createGroup(['a1', 'a2'], undefined);
+      addTextInputNode('b1', 150, 0);
+      addTextInputNode('b2', 150, 300);
+      const groupB = useCanvasStore.getState().createGroup(['b1', 'b2'], undefined);
+      if (groupA === null || groupB === null) throw new Error('建组失败');
+
+      // 整理前 A/B 已相交（构造场景），整理后必须消解
+      expect(rectsIntersect(derivedRect(groupA), derivedRect(groupB))).toBe(true);
+      const b1Before = findNode('b1')?.position;
+      const b2Before = findNode('b2')?.position;
+
+      const result = await useCanvasStore.getState().autoLayoutContainer(groupA, {
+        measuredSizeByNodeId: undefined,
+        derivedSizeByNodeId: undefined,
+        columns: 1,
+      });
+      expect(result).not.toBeNull();
+      if (!result) throw new Error('整理未执行');
+
+      expect(rectsIntersect(derivedRect(groupA), derivedRect(groupB))).toBe(false);
+      // 组 B 是完全独立的最外层容器，不随 A 让位移动
+      expect(findNode('b1')?.position).toEqual(b1Before);
+      expect(findNode('b2')?.position).toEqual(b2Before);
+      // 返回值位置 = 实际落位（成员同 delta 平移，相对布局保持）
+      const a1 = findNode('a1')?.position;
+      const a2 = findNode('a2')?.position;
+      if (!a1 || !a2) throw new Error('成员位置缺失');
+      const resultA1 = result.positions.a1;
+      const resultA2 = result.positions.a2;
+      if (!resultA1 || !resultA2) throw new Error('返回值缺少成员最终位置');
+      expect(a1).toEqual(resultA1);
+      expect(a2).toEqual(resultA2);
+      expect(a2.y - a1.y).toBe(240);
+    });
+
+    it('单组无邻居时锚点保持不漂移（让位逻辑不介入）', async () => {
+      addTextInputNode('m1', 800, 700);
+      addTextInputNode('m2', 900, 850);
+      const groupId = useCanvasStore.getState().createGroup(['m1', 'm2'], undefined);
+      if (groupId === null) throw new Error('建组失败');
+
+      const before = derivedRect(groupId);
+      const result = await useCanvasStore
+        .getState()
+        .autoLayoutContainer(groupId, {
+          measuredSizeByNodeId: undefined,
+          derivedSizeByNodeId: undefined,
+          columns: 1,
+        });
+      expect(result).not.toBeNull();
+
+      const after = derivedRect(groupId);
+      // 无邻居可让位：容器锚点（派生 position）保持，成员相对网格重排
+      expect(after.x).toBe(before.x);
+      expect(after.y).toBe(before.y);
     });
   });
 });

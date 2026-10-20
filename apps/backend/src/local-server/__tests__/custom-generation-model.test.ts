@@ -10,8 +10,10 @@ import {
   CustomGenerationModelRemovalResponseSchema,
   CustomGenerationModelResponseSchema,
   FamilyTemplateParameterDescriptorSchema,
+  GENERATION_FAMILY_ADAPTER_IDS,
   HUB_LOCAL_WRITE_TOKEN_ENV,
   HUB_LOCAL_WRITE_TOKEN_HEADER,
+  type GenerationMediaSlotId,
 } from '@iart/contracts';
 import { createRequestHandler } from '../router.cts';
 import {
@@ -19,10 +21,6 @@ import {
   createConnection,
   setConnectionCredential,
 } from '../provider-connection/connection-store.cts';
-import {
-  clearCacheForTest as clearDeploymentCache,
-  listDeployments,
-} from '../provider-connection/deployment-store.cts';
 import {
   clearCacheForTest as clearActiveRouteCache,
   getActiveDeploymentId,
@@ -33,30 +31,27 @@ import {
 } from '../provider-connection/custom-chat-model-store.cts';
 import {
   clearCacheForTest as clearCustomGenerationModelCache,
+  getCustomGenerationModel,
 } from '../provider-connection/custom-generation-model-store.cts';
+import { GENERATION_FAMILY_TEMPLATE_REGISTRY } from '../generation-family-templates.registry.cts';
 import { setCredentialForConnection } from '../provider-connection/credential-store.cts';
 
 /**
  * 自建生成模型记录（spec 03 §6.1「Deployment 与自建模型记录」，2026-09-25 单记录形态，
  * 形态镜像对话侧 custom-chat-model.test）。
  *
- * 覆盖五条口径：① 一次写入完成能力属性与接入归属，立即成为当前使用（接缝：记录 × active
- * route × 目录一致）；② 查重三类拒绝（本域重名、对话记录重名、已装模型重名）；
- * ③ 命名空间护栏（命中其他生成族正则拒绝、命中本族 gpt-image-* 放行）与 Hub write token；
+ * 覆盖四类口径：① 一次写入完成能力属性与接入归属，立即成为当前使用（接缝：记录 × active
+ * route × 目录一致）；② 查重两类拒绝（本域重名、对话记录重名）——2026-10-19 起「与已装模型包
+ * 重名」随部署载体退场消失（软件不内置任何具体模型）；
+ * ③ 族归属只由记录的 family_adapter_id 决定（名字长得像别族不再被拦）与 Hub write token；
  * ④ 归属校验（连接存在、enabled、有凭证）——2026-09-26 起协议归属模型级，连接不再约束
  * 协议族，生成记录可挂任意连接；⑤ 删除级联清 active route，参数覆盖的落盘 round-trip 与
  * PUT 语义不变。
  */
 
-const repoRoot = path.join(__dirname, '..', '..', '..', '..', '..');
-const REAL_PACKAGES_DIR = path.join(repoRoot, '.model-assets', 'sources');
-process.env['IART_MODEL_ASSET_PACKAGES_DIR'] = REAL_PACKAGES_DIR;
 process.env['IART_PUBLIC_UPLOAD_CLOUDFLARE_IMAGE_PUBLIC_URL_ENDPOINT'] = 'https://relay.example.invalid/upload';
 
 const HUB_WRITE_TOKEN = 'g'.repeat(32);
-/* 已装生成模型的中性 id：不属于任何封闭生成族正则，用来验证「生成记录不得与已装模型重名」。
-   查重走与对话侧同一份实现（findProjectionByModelIdOrAlias），这里用真实已装包钉住它。 */
-const INSTALLED_GENERATION_MODEL_ID = 'z-image-turbo';
 const OPENAI_IMAGE_ADAPTER = 'openai-image-v1';
 const OTHER_FAMILY_ADAPTER = 'veo-v1';
 const CHAT_ADAPTER = 'gemini-chat-v1';
@@ -81,7 +76,6 @@ const startServer = async (t: test.TestContext): Promise<string> => {
 
 const clearAllCaches = (): void => {
   clearConnectionCache();
-  clearDeploymentCache();
   clearActiveRouteCache();
   clearCustomChatModelCache();
   clearCustomGenerationModelCache();
@@ -99,7 +93,6 @@ const withIsolatedEnv = (t: test.TestContext): void => {
     else process.env[HUB_LOCAL_WRITE_TOKEN_ENV] = previousToken;
     if (previousRoot === undefined) delete process.env['IART_STORAGE_ROOT'];
     else process.env['IART_STORAGE_ROOT'] = previousRoot;
-    process.env['IART_MODEL_ASSET_PACKAGES_DIR'] = REAL_PACKAGES_DIR;
     clearAllCaches();
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
@@ -150,7 +143,7 @@ void test('自建生成模型：一次写入完成归属与能力，立即成为
   );
   assert.deepEqual(empty.models, []);
 
-  // 省略 remote_model_id：回落 model_id；省略 supports_reference_image：落库为 false（仅文生图）
+  // 省略 remote_model_id：回落 model_id；省略 accepted_media_slots：落库为空清单（不接受任何素材）
   const created = await addGenerationModel(baseUrl, {
     model_id: CUSTOM_MODEL_ID,
     connection_id: connectionId,
@@ -163,7 +156,7 @@ void test('自建生成模型：一次写入完成归属与能力，立即成为
   assert.equal(createdModel.remote_model_id, CUSTOM_MODEL_ID, 'remote_model_id 缺省回落 model_id');
   assert.match(createdModel.record_id, /^up_dep_[a-z0-9][a-z0-9-_]*$/, 'record_id 用接入记录 id 空间');
   assert.equal(createdModel.family_adapter_id, OPENAI_IMAGE_ADAPTER);
-  assert.equal(createdModel.supports_reference_image, false);
+  assert.deepEqual(createdModel.accepted_media_slots, []);
 
   // 接缝一致：active route 已指向该记录，目录投影标成可提交
   assert.equal(getActiveDeploymentId(CUSTOM_MODEL_ID), createdModel.record_id);
@@ -174,27 +167,29 @@ void test('自建生成模型：一次写入完成归属与能力，立即成为
   assert.equal(entry.deployment.deployable, true);
   assert.equal(entry.deployment.active_deployment_id, createdModel.record_id);
 
-  // 落盘形状：记录文件 version 2，deployment store 不再产生自建链记录
+  // 落盘形状：记录文件 version 3，deployment store 不再产生自建链记录
   const storageRoot = process.env['IART_STORAGE_ROOT'];
   assert.ok(storageRoot);
   const onDisk: unknown = JSON.parse(
     fs.readFileSync(path.join(storageRoot, 'config', 'custom-generation-models.json'), 'utf-8'),
   );
-  assert.equal((onDisk as { version: number }).version, 2);
-  assert.deepEqual(listDeployments().filter((deployment) => deployment.model_id === CUSTOM_MODEL_ID), []);
+  assert.equal((onDisk as { version: number }).version, 3);
+  // 2026-10-19 起没有第二类接入载体可查：模型记录本身就是接入（原断言在这里再查一遍
+  // deployment store 里没有自建链记录，那个 store 已整体删除）。
+  assert.equal(getCustomGenerationModel(CUSTOM_MODEL_ID)?.record_id, createdModel.record_id);
 
-  // 显式声明支持参考图
+  // 显式声明接受参考图素材位
   const withReference = await addGenerationModel(baseUrl, {
     model_id: REFERENCE_IMAGE_MODEL_ID,
     connection_id: connectionId,
     family_adapter_id: OPENAI_IMAGE_ADAPTER,
-    supports_reference_image: true,
+    accepted_media_slots: ['reference_image'],
     remote_model_id: REMOTE_MODEL_ID,
   });
   assert.equal(withReference.status, 200);
-  assert.equal(
-    CustomGenerationModelResponseSchema.parse(await withReference.json()).model.supports_reference_image,
-    true,
+  assert.deepEqual(
+    CustomGenerationModelResponseSchema.parse(await withReference.json()).model.accepted_media_slots,
+    ['reference_image'],
   );
 
   const listed = CustomGenerationModelListResponseSchema.parse(
@@ -208,7 +203,7 @@ void test('自建生成模型：一次写入完成归属与能力，立即成为
     400,
   );
   assert.equal(
-    (await addGenerationModel(baseUrl, { model_id: 'bad-ref-model', connection_id: connectionId, family_adapter_id: OPENAI_IMAGE_ADAPTER, supports_reference_image: 'yes' }))
+    (await addGenerationModel(baseUrl, { model_id: 'bad-ref-model', connection_id: connectionId, family_adapter_id: OPENAI_IMAGE_ADAPTER, accepted_media_slots: 'yes' }))
       .status,
     400,
   );
@@ -275,7 +270,7 @@ void test('自建生成模型：归属校验——连接不存在 / 未启用 / 
   assert.equal(chatConnRecord.status, 200, '生成记录可挂对话协议连接（连接不再约束协议族）');
 });
 
-void test('自建生成模型：查重三类拒绝（本域重名、对话记录重名、已装模型重名）', async (t) => {
+void test('自建生成模型：查重两类拒绝（本域重名、对话记录重名）', async (t) => {
   withIsolatedEnv(t);
   const baseUrl = await startServer(t);
   const connectionId = await seedConnection(OPENAI_IMAGE_ADAPTER);
@@ -290,7 +285,7 @@ void test('自建生成模型：查重三类拒绝（本域重名、对话记录
   assert.equal(ownDuplicate.status, 409);
   assert.match(
     await readErrorBody(ownDuplicate),
-    new RegExp(`软件里已经添加过「${CUSTOM_MODEL_ID}」了。换一个模型 ID，或在模型列表里先删除它再重新添加。`),
+    new RegExp(`已经有「${CUSTOM_MODEL_ID}」这个模型了。换一个模型 ID，或在模型列表里先删除它再重新添加。`),
   );
 
   // 与对话侧自建记录重名 → 409（model_id 全局唯一，两个域不能各占一份）
@@ -304,27 +299,24 @@ void test('自建生成模型：查重三类拒绝（本域重名、对话记录
   assert.equal(chatCollision.status, 409);
   assert.match(await readErrorBody(chatCollision), /对话模型/);
 
-  // 与已装模型包重名（model_id / 别名 / 变体名共用一份查重实现）→ 409
-  const installedCollision = await addGenerationModel(baseUrl, { model_id: INSTALLED_GENERATION_MODEL_ID, connection_id: connectionId, family_adapter_id: OPENAI_IMAGE_ADAPTER });
-  assert.equal(installedCollision.status, 409);
-  assert.match(await readErrorBody(installedCollision), /换一个模型 ID/);
 });
 
-void test('自建生成模型：命名空间护栏拒绝他族正则、放行本族正则', async (t) => {
+void test('自建生成模型：族归属只由记录的 family_adapter_id 决定，不再按 model_id 正则设护栏', async (t) => {
   withIsolatedEnv(t);
   const baseUrl = await startServer(t);
   const connectionId = await seedConnection(OPENAI_IMAGE_ADAPTER);
 
-  // 命中其他生成族正则 → 409（D2：防冒名与未来装包撞车）
-  for (const foreignId of ['veo-my-video', 'doubao-seedance-2-0-my-video', 'gemini-my-image-model', 'kling-v3-text2video']) {
-    const response = await addGenerationModel(baseUrl, { model_id: foreignId, connection_id: connectionId, family_adapter_id: OPENAI_IMAGE_ADAPTER });
-    assert.equal(response.status, 409, `${foreignId} 应命中他族命名空间护栏`);
-    assert.match(await readErrorBody(response), /其他类型的生成模型/);
+  // 2026-10-19 起模型来源唯一（软件不内置任何具体模型），「命中他族正则即拒」的命名空间护栏
+  // 与「与已装包重名即拒」的查重一并退场——没有第二个来源可撞名，也不存在按名字冒名的对象。
+  // 名字长得像哪一族与它实际属于哪一族无关：族只由记录自带的 family_adapter_id 声明。
+  for (const nameLikeOtherFamily of ['veo-my-video', 'doubao-seedance-2-0-my-video', 'gemini-my-image-model', 'kling-v3-text2video']) {
+    const response = await addGenerationModel(baseUrl, {
+      model_id: nameLikeOtherFamily,
+      connection_id: connectionId,
+      family_adapter_id: OPENAI_IMAGE_ADAPTER,
+    });
+    assert.equal(response.status, 200, `${nameLikeOtherFamily} 的名字不应再被族正则拦下`);
   }
-
-  // 命中本族正则（gpt-image-*，且未与已装包重名）→ 放行
-  const ownFamily = await addGenerationModel(baseUrl, { model_id: 'gpt-image-my-custom', connection_id: connectionId, family_adapter_id: OPENAI_IMAGE_ADAPTER });
-  assert.equal(ownFamily.status, 200, '命中本族正则的未装名字应放行');
 });
 
 void test('自建生成模型：写路由受 Hub write token 保护', async (t) => {
@@ -337,7 +329,7 @@ void test('自建生成模型：写路由受 Hub write token 保护', async (t) 
   const put = await fetch(`${baseUrl}/api/custom-generation-models/${CUSTOM_MODEL_ID}`, {
     method: 'PUT',
     headers: writeHeaders(false),
-    body: JSON.stringify({ supports_reference_image: true }),
+    body: JSON.stringify({ accepted_media_slots: ['reference_image'] }),
   });
   assert.equal(put.status, 403);
   const remove = await fetch(`${baseUrl}/api/custom-generation-models/${CUSTOM_MODEL_ID}`, {
@@ -347,7 +339,7 @@ void test('自建生成模型：写路由受 Hub write token 保护', async (t) 
   assert.equal(remove.status, 403);
 });
 
-void test('自建生成模型：改参考图支持、删除级联清 active route（响应只剩 model_id）', async (t) => {
+void test('自建生成模型：改接受的素材位、删除级联清 active route（响应只剩 model_id）', async (t) => {
   withIsolatedEnv(t);
   const baseUrl = await startServer(t);
   const connectionId = await seedConnection(OPENAI_IMAGE_ADAPTER);
@@ -357,19 +349,39 @@ void test('自建生成模型：改参考图支持、删除级联清 active rout
     200,
   );
 
-  // 改参考图支持（可改属性的整体替换；model_id 与接入归属不提供修改）
+  // 改接受的素材位（可改属性的整体替换；model_id 与接入归属不提供修改）
   const updated = await fetch(`${baseUrl}/api/custom-generation-models/${CUSTOM_MODEL_ID}`, {
     method: 'PUT',
     headers: writeHeaders(),
-    body: JSON.stringify({ supports_reference_image: true }),
+    body: JSON.stringify({ accepted_media_slots: ['reference_image'] }),
   });
   assert.equal(updated.status, 200);
-  assert.equal(CustomGenerationModelResponseSchema.parse(await updated.json()).model.supports_reference_image, true);
+  assert.deepEqual(
+    CustomGenerationModelResponseSchema.parse(await updated.json()).model.accepted_media_slots,
+    ['reference_image'],
+  );
+  // 素材位 × 族能力守卫：openai-image-v1 的模板表达不了首帧图，越界位在写入侧就被拒
+  const outOfFamily = await fetch(`${baseUrl}/api/custom-generation-models/${CUSTOM_MODEL_ID}`, {
+    method: 'PUT',
+    headers: writeHeaders(),
+    body: JSON.stringify({ accepted_media_slots: ['reference_image', 'first_frame'] }),
+  });
+  assert.equal(outOfFamily.status, 400, '族模板表达不了的素材位必须在保存时被拒');
+  assert.match(await readErrorBody(outOfFamily), /first_frame/);
+  // 被拒的这次写入不改变已存记录（整体替换语义下不留半截状态）
+  const afterReject = CustomGenerationModelListResponseSchema.parse(
+    await (await fetch(`${baseUrl}/api/custom-generation-models`)).json(),
+  );
+  assert.deepEqual(
+    afterReject.models.find((model) => model.model_id === CUSTOM_MODEL_ID)?.accepted_media_slots,
+    ['reference_image'],
+  );
+  // 素材位词表是封闭集合：词表外的取值被拒
   assert.equal(
     (await fetch(`${baseUrl}/api/custom-generation-models/${CUSTOM_MODEL_ID}`, {
       method: 'PUT',
       headers: writeHeaders(),
-      body: JSON.stringify({ supports_reference_image: 'yes' }),
+      body: JSON.stringify({ accepted_media_slots: ['not_a_slot'] }),
     })).status,
     400,
   );
@@ -377,7 +389,7 @@ void test('自建生成模型：改参考图支持、删除级联清 active rout
     (await fetch(`${baseUrl}/api/custom-generation-models/never-declared`, {
       method: 'PUT',
       headers: writeHeaders(),
-      body: JSON.stringify({ supports_reference_image: true }),
+      body: JSON.stringify({ accepted_media_slots: ['reference_image'] }),
     })).status,
     404,
   );
@@ -448,18 +460,18 @@ void test('参数覆盖：POST 携带、落盘 round-trip、PUT 缺省不变/出
   const keptPut = await fetch(`${baseUrl}/api/custom-generation-models/${CUSTOM_MODEL_ID}`, {
     method: 'PUT',
     headers: writeHeaders(),
-    body: JSON.stringify({ supports_reference_image: true }),
+    body: JSON.stringify({ accepted_media_slots: ['reference_image'] }),
   });
   assert.equal(keptPut.status, 200);
   const keptModel = CustomGenerationModelResponseSchema.parse(await keptPut.json()).model;
-  assert.equal(keptModel.supports_reference_image, true);
+  assert.deepEqual(keptModel.accepted_media_slots, ['reference_image']);
   assert.equal(keptModel.parameter_overrides.custom.length, 1, 'absent overrides must keep existing ones');
 
   // PUT 出现 = 整体替换；显式空覆盖即清空。
   const clearedPut = await fetch(`${baseUrl}/api/custom-generation-models/${CUSTOM_MODEL_ID}`, {
     method: 'PUT',
     headers: writeHeaders(),
-    body: JSON.stringify({ supports_reference_image: true, parameter_overrides: { official: [], custom: [] } }),
+    body: JSON.stringify({ accepted_media_slots: ['reference_image'], parameter_overrides: { official: [], custom: [] } }),
   });
   assert.equal(clearedPut.status, 200);
   const clearedModel = CustomGenerationModelResponseSchema.parse(await clearedPut.json()).model;
@@ -470,24 +482,24 @@ void test('参数覆盖：POST 携带、落盘 round-trip、PUT 缺省不变/出
     method: 'PUT',
     headers: writeHeaders(),
     body: JSON.stringify({
-      supports_reference_image: true,
+      accepted_media_slots: ['reference_image'],
       parameter_overrides: { official: [{ field_key: 'size', wire_name: 'model' }], custom: [] },
     }),
   });
   assert.equal(illegalPut.status, 400);
   assert.match(await readErrorBody(illegalPut), /重名/);
 
-  // PUT 非法覆盖（禁用 image）→ 400。
+  // PUT 非法覆盖（禁用素材位字段）→ 400 + 指认它是模型自带的素材输入。
   const imagePut = await fetch(`${baseUrl}/api/custom-generation-models/${CUSTOM_MODEL_ID}`, {
     method: 'PUT',
     headers: writeHeaders(),
     body: JSON.stringify({
-      supports_reference_image: true,
+      accepted_media_slots: ['reference_image'],
       parameter_overrides: { official: [{ field_key: 'image', enabled: false }], custom: [] },
     }),
   });
   assert.equal(imagePut.status, 400);
-  assert.match(await readErrorBody(imagePut), /参考图/);
+  assert.match(await readErrorBody(imagePut), /素材输入/);
 
   // POST 非法覆盖同样被拒。
   const illegalPost = await addGenerationModel(baseUrl, {
@@ -498,6 +510,137 @@ void test('参数覆盖：POST 携带、落盘 round-trip、PUT 缺省不变/出
   });
   assert.equal(illegalPost.status, 400);
   assert.match(await readErrorBody(illegalPost), /nope/);
+});
+
+void test('接口类型值域 7 个全部可写入记录：素材位按该族模板能力收口（不再人人可勾满）', async (t) => {
+  withIsolatedEnv(t);
+  const baseUrl = await startServer(t);
+  const connectionId = await seedConnection(OPENAI_IMAGE_ADAPTER);
+
+  // 契约值域即界面下拉顺序（顺序变化是界面行为变化，故逐值断言）
+  assert.deepEqual([...GENERATION_FAMILY_ADAPTER_IDS], [
+    'openai-image-v1',
+    'gemini-image-interactions-v1',
+    'seedance-2-0-v1',
+    'veo-v1',
+    'kling-text2video-v1',
+    'kling-image2video-v1',
+    'kling-omni-video-v1',
+  ]);
+
+  for (const familyAdapterId of GENERATION_FAMILY_ADAPTER_IDS) {
+    // ① 接口类型本身全部可写入记录（值域扩容的事实不变）。
+    const modelId = `adapter-${familyAdapterId}`;
+    const response = await addGenerationModel(baseUrl, {
+      model_id: modelId,
+      connection_id: connectionId,
+      family_adapter_id: familyAdapterId,
+    });
+    assert.equal(response.status, 200, `${familyAdapterId} 应可作为接口类型写入记录`);
+    const created = CustomGenerationModelResponseSchema.parse(await response.json()).model;
+    assert.equal(created.family_adapter_id, familyAdapterId);
+    assert.deepEqual(created.accepted_media_slots, [], '不声明素材位即不接受任何素材');
+
+    // ② 素材位要过族能力守卫：只有该族模板 `supportsMediaSlots` 里的素材位才放行，其余
+    //    （含未就绪族的任何非空清单）一律拒绝——批次 2 曾放行任意词表内组合，正是本批要堵的洞。
+    //    期望值从注册表派生，不手写「哪族支持哪几位」：逐族实现批次让支持面持续变化。
+    const requestedSlots: GenerationMediaSlotId[] = ['reference_image', 'first_frame'];
+    const supportedSlots = GENERATION_FAMILY_TEMPLATE_REGISTRY[familyAdapterId].supportsMediaSlots;
+    const allRequestedSupported = requestedSlots.every((slot) => supportedSlots.includes(slot));
+    const withSlots = await addGenerationModel(baseUrl, {
+      model_id: `${modelId}-slots`,
+      connection_id: connectionId,
+      family_adapter_id: familyAdapterId,
+      accepted_media_slots: requestedSlots,
+    });
+    if (allRequestedSupported) {
+      assert.equal(
+        withSlots.status,
+        200,
+        `${familyAdapterId} 的模板能表达 ${requestedSlots.join('、')}，必须放行`,
+      );
+    } else {
+      assert.equal(
+        withSlots.status,
+        400,
+        `${familyAdapterId} 表达不了 ${requestedSlots.filter((slot) => !supportedSlots.includes(slot)).join('、')}，必须拒绝`,
+      );
+    }
+
+    // ③ 该族能力范围内的素材位必须放行（例如已就绪图像族/视频族的参考图）。
+    const supportsReferenceImage = supportedSlots.includes('reference_image');
+    const supported = await addGenerationModel(baseUrl, {
+      model_id: `${modelId}-ref`,
+      connection_id: connectionId,
+      family_adapter_id: familyAdapterId,
+      accepted_media_slots: ['reference_image'],
+    });
+    if (supportsReferenceImage) {
+      assert.equal(supported.status, 200, `${familyAdapterId} 的模板能表达参考图，必须放行`);
+    } else {
+      assert.equal(supported.status, 400, `${familyAdapterId} 的模板表达不了参考图，必须拒绝`);
+    }
+  }
+
+  // 已删除的旧 id（kling-v1）不再被接受：拆分是删名而非别名兼容
+  assert.equal(
+    (await addGenerationModel(baseUrl, {
+      model_id: 'legacy-kling-model',
+      connection_id: connectionId,
+      family_adapter_id: 'kling-v1',
+    })).status,
+    400,
+  );
+});
+
+void test('素材位 × 族能力守卫：文生视频族勾首帧被拒、openai 族勾参考图放行（批次 2 遗留风险）', async (t) => {
+  withIsolatedEnv(t);
+  const baseUrl = await startServer(t);
+  const connectionId = await seedConnection(OPENAI_IMAGE_ADAPTER);
+
+  // ① 可灵文生视频族：官方该端点没有任何素材输入，勾首帧必须被显式拒绝并给可读原因。
+  const klingText = await addGenerationModel(baseUrl, {
+    model_id: 'kling-text2video-with-frame',
+    connection_id: connectionId,
+    family_adapter_id: 'kling-text2video-v1',
+    accepted_media_slots: ['first_frame'],
+  });
+  assert.equal(klingText.status, 400, '文生视频族不接受首帧图');
+  // 该族模板尚未实现（注册表 pending），拒绝文案说清是「素材输入」这一类不允许，而不是笼统失败：
+  // 逐族实现批次把该族转 ready 后，文案会随支持清单改成逐位指认（openai 族的用例即该形态）。
+  assert.match(await readErrorBody(klingText), /素材/);
+  // 记录没有落库（拒绝不是「写进去再悄悄忽略」）
+  const listedAfterReject = CustomGenerationModelListResponseSchema.parse(
+    await (await fetch(`${baseUrl}/api/custom-generation-models`)).json(),
+  );
+  assert.equal(
+    listedAfterReject.models.some((model) => model.model_id === 'kling-text2video-with-frame'),
+    false,
+    '被拒的写入不得落库',
+  );
+
+  // ② openai-image-v1 族勾参考图必须通过（它确实是该族模板能表达的素材位）。
+  const openaiRef = await addGenerationModel(baseUrl, {
+    model_id: 'openai-with-reference-image',
+    connection_id: connectionId,
+    family_adapter_id: OPENAI_IMAGE_ADAPTER,
+    accepted_media_slots: ['reference_image'],
+  });
+  assert.equal(openaiRef.status, 200, 'openai-image-v1 接受参考图素材位');
+  assert.deepEqual(
+    CustomGenerationModelResponseSchema.parse(await openaiRef.json()).model.accepted_media_slots,
+    ['reference_image'],
+  );
+
+  // ③ 已就绪族的越界位同样被拒（不是「只要族 ready 就任意勾」）。
+  const openaiOutOfFamily = await addGenerationModel(baseUrl, {
+    model_id: 'openai-with-first-frame',
+    connection_id: connectionId,
+    family_adapter_id: OPENAI_IMAGE_ADAPTER,
+    accepted_media_slots: ['first_frame'],
+  });
+  assert.equal(openaiOutOfFamily.status, 400, 'openai-image-v1 表达不了首帧图');
+  assert.match(await readErrorBody(openaiOutOfFamily), /first_frame/, '已就绪族的越界位要逐位指认');
 });
 
 void test('族模板参数描述端点：openai-image-v1 返回官方参数与保留键，未知族 404', async (t) => {
@@ -518,6 +661,48 @@ void test('族模板参数描述端点：openai-image-v1 返回官方参数与�
   assert.equal(format.wire_name, 'output_format');
   assert.ok(descriptor.reserved_wire_names.includes('output_format'));
 
+  // 素材位能力随描述符下发给 Hub（界面据此逐项渲染勾选框；0 位族给空数组而不是缺键）
+  assert.deepEqual(
+    descriptor.supports_media_slots,
+    ['reference_image'],
+    'openai-image-v1 只能表达参考图，描述符必须如实下发该族能力',
+  );
+
   const missing = await fetch(`${baseUrl}/api/generation-family-templates/not-a-family`);
   assert.equal(missing.status, 404);
+
+  // 未就绪族与未知族必须可区分：合法的接口类型但模板尚未实现 → 501（不是 404「没有这类模型」）。
+  // pending 清单从注册表派生（逐族实现批次逐个转 ready，测试不手写「只有 openai 就绪」）。
+  // 全部 7 族转 ready 后 pending 清单为空：此时逐个断言描述符端点可用（501 分支的覆盖由
+  // 「将来新增接口类型仍先登记 pending」保证，测试不写死某族必须 pending）。
+  const pendingFamilyAdapterIds = GENERATION_FAMILY_ADAPTER_IDS.filter(
+    (id) => GENERATION_FAMILY_TEMPLATE_REGISTRY[id].status === 'pending',
+  );
+  for (const pendingFamilyAdapterId of pendingFamilyAdapterIds) {
+    const pending = await fetch(
+      `${baseUrl}/api/generation-family-templates/${encodeURIComponent(pendingFamilyAdapterId)}`,
+    );
+    assert.equal(
+      pending.status,
+      501,
+      `${pendingFamilyAdapterId} 是合法接口类型但族模板未就绪，必须给 501 而不是 404`,
+    );
+  }
+  const readyFamilyAdapterIds = GENERATION_FAMILY_ADAPTER_IDS.filter(
+    (id) => GENERATION_FAMILY_TEMPLATE_REGISTRY[id].status === 'ready',
+  );
+  assert.ok(readyFamilyAdapterIds.length > 0, '至少有一个族必须已就绪');
+  for (const readyFamilyAdapterId of readyFamilyAdapterIds) {
+    const ready = await fetch(
+      `${baseUrl}/api/generation-family-templates/${encodeURIComponent(readyFamilyAdapterId)}`,
+    );
+    assert.equal(ready.status, 200, `${readyFamilyAdapterId} 已就绪，描述符端点必须给 200`);
+    const readyDescriptor = FamilyTemplateParameterDescriptorSchema.parse(await ready.json());
+    // 描述符的素材位必须与注册表条目的能力逐位一致（单源：注册表是唯一能力事实）
+    assert.deepEqual(
+      readyDescriptor.supports_media_slots,
+      [...GENERATION_FAMILY_TEMPLATE_REGISTRY[readyFamilyAdapterId].supportsMediaSlots],
+      `${readyFamilyAdapterId} 描述符的素材位必须等于注册表条目声明的能力`,
+    );
+  }
 });

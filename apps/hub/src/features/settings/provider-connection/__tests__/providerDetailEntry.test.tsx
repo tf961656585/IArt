@@ -2,13 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type {
   CustomChatModel,
+  CustomGenerationModel,
   ExecutableModelDirectoryEntry,
-  ModelDeployment,
   ProtocolAdapterId,
   ProviderConnection,
 } from '@iart/contracts';
 
 import { ProviderDetail } from '../ProviderDetail';
+import type { ModelRow } from '../ModelTable';
 
 /**
  * 服务商详情入口与模型清单（spec 03 §6.1「记录即接入」、provider-config-ui-design §4.3）。
@@ -18,6 +19,16 @@ import { ProviderDetail } from '../ProviderDetail';
  * 选完交给容器开对应表单——不再有「有预选直接开弹窗」的分流。
  * 详情也不再显示「默认接口类型」只读行。
  * retired 连接不给任何入口（不提供必然失败的入口，也不解释为什么没有，spec §7.5）。
+ *
+ * 2026-10-19 形态变更（设置页迭代 B2）：模型清单由两行卡改为 52px 单行表格，行内动作收进
+ * 「⋯」菜单，破坏性项在菜单内独立成组。本文件的断言随之改为「菜单项可达」——
+ * 保护的行为不变（记录即接入、按行类型选目录、三态分离、retired 无入口），
+ * 变的是触发点位置。
+ *
+ * 2026-10-19 部署载体退场：模型行不再分来源（没有 `kind: 'installed'`），「自带模型行」的
+ * 那一组用例（行内改名、从本服务商移除、按种行类型选目录的对照）随之删除——它们保护的
+ * 「两族行各查自己的目录」由对话行 + 生成行两条记录行继续钉住；而「服务商模型 ID 可改」
+ * 这条能力本身已随载体退场（记录上的远端模型名创建后不可变，spec 03 §6.1）。
  */
 
 const connectionWith = (protocolAdapterId: ProtocolAdapterId): ProviderConnection => ({
@@ -60,61 +71,55 @@ const catalogEntry = (modelId: string, deployable = true): ExecutableModelDirect
   },
 });
 
-const deployment = (modelId: string): ModelDeployment => ({
-  deployment_id: `up_dep_${modelId}`,
-  model_id: modelId,
-  connection_id: 'up_conn_plain',
-  remote_model_id: modelId,
-  created_at: '2026-09-24T00:00:00.000Z',
-  updated_at: '2026-09-24T00:00:00.000Z',
-});
-
+/** 详情渲染器：把「模型清单的输入」整成 modelTable（与 ProviderDetail 的 props 形状对齐）。 */
 const renderDetail = (
   connection: ProviderConnection,
   {
     lifecycle,
     catalog = [],
     chatCatalog = [],
-    deployments = [],
     customChatModels = [],
+    customGenerationModels = [],
     modelListUnavailable = false,
-    activeRoutes = {},
+    onAddModelByKind = noop,
   }: {
     lifecycle?: ProviderConnection['lifecycle'];
     catalog?: ExecutableModelDirectoryEntry[];
     chatCatalog?: ExecutableModelDirectoryEntry[];
-    deployments?: ModelDeployment[];
-    customChatModels?: Parameters<typeof ProviderDetail>[0]['customChatModels'];
+    customChatModels?: CustomChatModel[];
+    customGenerationModels?: CustomGenerationModel[];
     modelListUnavailable?: boolean;
-    activeRoutes?: Record<string, string>;
+    onAddModelByKind?: (kind: 'generation' | 'chat') => void;
   } = {},
 ): void => {
-  const base = connection;
+  const withLifecycle = lifecycle === undefined ? connection : { ...connection, lifecycle };
   render(
     <ProviderDetail
-      connection={lifecycle === undefined ? base : { ...base, lifecycle }}
-      catalog={catalog}
-      chatCatalog={chatCatalog}
-      deployments={deployments}
-      customChatModels={customChatModels}
-      modelListUnavailable={modelListUnavailable}
-      customGenerationModels={[]}
-      activeRoutes={activeRoutes}
+      connection={withLifecycle}
+      onReload={noop}
       onEdit={noop}
       onCredential={noop}
       onToggle={noop}
       onClearCredential={noop}
       onDelete={noop}
-      onAddModelByKind={noop}
-      onRenameModel={noop}
-      onRemoveModel={noop}
-      onEditChatModel={noop}
-      agentDefaultModelId={null}
-      onToggleAgentDefault={noop}
-      generationDefaultModelId={null}
-      onToggleGenerationDefault={noop}
-      onDeleteGenerationModel={noop}
-      onEditGenerationModel={noop}
+      onAddModelByKind={onAddModelByKind}
+      modelTable={{
+        rows: [
+          ...customChatModels.map((item): ModelRow => ({ kind: 'custom-chat', record: item })),
+          ...customGenerationModels.map((item): ModelRow => ({ kind: 'custom-generation', record: item })),
+        ],
+        catalog,
+        chatCatalog,
+        editable: withLifecycle.lifecycle !== 'retired',
+        modelListUnavailable,
+        agentDefaultModelId: null,
+        generationDefaultModelId: null,
+        onToggleAgentDefault: noop,
+        onToggleGenerationDefault: noop,
+        onEditChatModel: noop,
+        onEditGenerationModel: noop,
+        onDeleteGenerationModel: noop,
+      }}
     />,
   );
 };
@@ -122,33 +127,7 @@ const renderDetail = (
 describe('服务商详情「添加模型」入口', () => {
   it('有预选历史的连接也是二级选择：点「生成模型」交回容器（连接级预选已摘除，不再直接开弹窗）', () => {
     const onAddModelByKind = vi.fn();
-    render(
-      <ProviderDetail
-        connection={connectionWith('openai-image-v1')}
-        catalog={[]}
-        chatCatalog={[]}
-        deployments={[]}
-        customChatModels={[]}
-        modelListUnavailable={false}
-        customGenerationModels={[]}
-        activeRoutes={{}}
-        onEdit={noop}
-        onCredential={noop}
-        onToggle={noop}
-        onClearCredential={noop}
-        onDelete={noop}
-        onAddModelByKind={onAddModelByKind}
-        onRenameModel={noop}
-        onRemoveModel={noop}
-        onEditChatModel={noop}
-        agentDefaultModelId={null}
-        onToggleAgentDefault={noop}
-        generationDefaultModelId={null}
-        onToggleGenerationDefault={noop}
-        onDeleteGenerationModel={noop}
-        onEditGenerationModel={noop}
-      />,
-    );
+    renderDetail(connectionWith('openai-image-v1'), { onAddModelByKind });
 
     // 二级选择跟着入口走：键盘打开（入口对键盘可见），「生成模型」交回 generation
     fireEvent.keyDown(screen.getByRole('button', { name: '添加模型' }), { key: 'Enter' });
@@ -158,33 +137,7 @@ describe('服务商详情「添加模型」入口', () => {
 
   it('没有接口类型字段的连接：「添加模型」同样先出二级选择，选「对话模型」交回容器', () => {
     const onAddModelByKind = vi.fn();
-    render(
-      <ProviderDetail
-        connection={connectionWithoutDefault}
-        catalog={[]}
-        chatCatalog={[]}
-        deployments={[]}
-        customChatModels={[]}
-        modelListUnavailable={false}
-        customGenerationModels={[]}
-        activeRoutes={{}}
-        onEdit={noop}
-        onCredential={noop}
-        onToggle={noop}
-        onClearCredential={noop}
-        onDelete={noop}
-        onAddModelByKind={onAddModelByKind}
-        onRenameModel={noop}
-        onRemoveModel={noop}
-        onEditChatModel={noop}
-        agentDefaultModelId={null}
-        onToggleAgentDefault={noop}
-        generationDefaultModelId={null}
-        onToggleGenerationDefault={noop}
-        onDeleteGenerationModel={noop}
-        onEditGenerationModel={noop}
-      />,
-    );
+    renderDetail(connectionWithoutDefault, { onAddModelByKind });
 
     fireEvent.keyDown(screen.getByRole('button', { name: '添加模型' }), { key: 'Enter' });
     fireEvent.click(screen.getByRole('menuitem', { name: '对话模型' }));
@@ -196,8 +149,11 @@ describe('服务商详情只读信息', () => {
   it('详情不再显示「默认接口类型」行：接口类型只属于模型，添加模型时再配置', () => {
     renderDetail(connectionWith('openai-image-v1'));
     expect(screen.queryByText('默认接口类型')).not.toBeInTheDocument();
-    expect(screen.getByText('服务地址')).toBeInTheDocument();
-    expect(screen.getByText('密钥')).toBeInTheDocument();
+    // 详情头第二行 = 地址 · 密钥状态（2026-10-19 起不再用 label/value 双行字段表，
+    // 且**不复读模型数**——模型清单就在正下方逐行可见）
+    expect(screen.getByText('https://api.example.com')).toBeInTheDocument();
+    expect(screen.getByText('密钥已保存')).toBeInTheDocument();
+    expect(screen.queryByText(/个模型$/)).not.toBeInTheDocument();
   });
 });
 
@@ -217,25 +173,42 @@ describe('服务商详情模型行与空态', () => {
     created_at: '2026-09-25T00:00:00.000Z',
   };
 
-  it('自建对话记录行有「修改」与「设为 Agent 默认」，没有行内改名与「移除」（记录即接入）', () => {
+  const generationRecord: CustomGenerationModel = {
+    model_id: 'gpt-image-1',
+    record_id: 'up_dep_rec2',
+    connection_id: 'up_conn_plain',
+    remote_model_id: 'gpt-image-1',
+    family_adapter_id: 'openai-image-v1',
+    accepted_media_slots: [],
+    parameter_overrides: { official: [], custom: [] },
+    created_at: '2026-09-25T00:00:00.000Z',
+  };
+
+  it('对话记录行：菜单里有「修改配置」、默认列是星标，没有「从本服务商移除」与行内改名', () => {
     renderDetail(chatConnection, { customChatModels: [chatRecord] });
 
-    expect(screen.getByText('my-llm')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '修改「my-llm」的配置' })).toBeInTheDocument();
+    // 模型 ID 在单元格里出现一次（另一处是远程 ID 列，同为 'my-llm'，故用 all）
+    expect(screen.getAllByText('my-llm').length).toBeGreaterThan(0);
+    // 默认列是星标按钮（不再占用动作区的文字按钮）
     expect(screen.getByRole('button', { name: '把「my-llm」设为 Agent 默认模型' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '移除' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('my-llm 的模型 ID')).not.toBeInTheDocument();
+    // 记录的线上模型名不可改（spec 03 §6.1：改它等于换一个远端模型，走删除后重建）
+    expect(screen.queryByRole('button', { name: '修改「my-llm」的服务商模型 ID' })).not.toBeInTheDocument();
+
+    // 行内动作收进「⋯」菜单
+    fireEvent.keyDown(screen.getByRole('button', { name: '「my-llm」的操作' }), { key: 'Enter' });
+    expect(screen.getByRole('menuitem', { name: '修改配置' })).toBeInTheDocument();
+    // 没有「从本服务商移除」这一层：模型只有记录一处载体，删掉即消失
+    expect(screen.queryByRole('menuitem', { name: '从本服务商移除' })).not.toBeInTheDocument();
   });
 
-  it('行状态按行类型选目录：对话行查对话目录，自带包行查可执行目录（连接可混放两种模型）', () => {
-    // 两条行各在「自己的」目录里：对话行只进对话目录，自带包行只进可执行目录。
-    // 单一目录判全场的旧口径会把其中一条判成「状态未知」，这里钉住新口径
+  it('行状态按行类型选目录：对话行查对话目录，生成行查可执行目录（连接可混放两种模型）', () => {
+    // 两条行各在「自己的」目录里：对话行只进对话目录，生成行只进可执行目录。
+    // 单一目录判全场的旧口径会把其中一条判成「状态未知」，这里钉住新口径。
     renderDetail(connectionWithoutDefault, {
       catalog: [catalogEntry('gpt-image-1')],
       chatCatalog: [catalogEntry('my-llm')],
-      deployments: [deployment('gpt-image-1')],
       customChatModels: [chatRecord],
-      activeRoutes: { 'gpt-image-1': 'up_dep_gpt-image-1' },
+      customGenerationModels: [generationRecord],
     });
 
     expect(screen.getAllByText('可用')).toHaveLength(2);
@@ -244,9 +217,9 @@ describe('服务商详情模型行与空态', () => {
   it('没有模型时空态指向「添加模型」', () => {
     renderDetail(chatConnection);
 
-    expect(
-      screen.getByText('这个服务商还没有模型。点上面的「添加模型」加几个。'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('这个服务商还没有模型。')).toBeInTheDocument();
+    // 入口只有详情头一处（同屏不得出现两个同名按钮）：空态只指路，不再挂第二个按钮
+    expect(screen.getAllByRole('button', { name: '添加模型' })).toHaveLength(1);
   });
 
   it('清单读不到时与「还没有模型」分开说：任何连接都让用户刷新，不引他去重新添加', () => {
@@ -260,6 +233,7 @@ describe('服务商详情模型行与空态', () => {
     renderDetail(chatConnection, { lifecycle: 'retired' });
 
     expect(screen.queryByRole('button', { name: '添加模型' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '服务商操作' })).not.toBeInTheDocument();
     expect(screen.getByText('这个服务商还没有模型。')).toBeInTheDocument();
   });
 });

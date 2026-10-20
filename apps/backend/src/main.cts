@@ -25,6 +25,7 @@ import {
 } from './local-server/thumbnail-reconcile-service.cjs';
 import { loadRuntimeEnv } from './runtime-env-loader.cjs';
 import { writeSkillRuntimeConfig } from './local-server/skill-runtime/skill-runtime-config-store.cts';
+import { retireLegacyModelDeploymentCarrier } from './local-server/legacy-carrier-retirement.cts';
 import {
   setCredentialCryptoProvider,
 } from './local-server/provider-connection/credential-store.cjs';
@@ -396,6 +397,19 @@ server.on('error', (error) => {
 
 server.listen({ host: HOST, port: PORT }, () => {
   backendStartupSettled = true;
+  // 部署载体退役的收尾（spec 03 §11 一次性换轨）：装载两族模型记录（触发各自的 v1 存量迁移与
+  // 「旧接入 → 记录」换算），再把搬不走的残留条目归档并丢弃旧接入文件。放在 listen 回调里是
+  // 为了让「任何模型被执行、被投影或被提交之前换轨已完成」，且不依赖请求先打到哪个端点。
+  // 幂等：记录已是当前形状时是纯读取；旧文件不在时零操作。失败不阻断监听（残留只会让迁移下次
+  // 启动重试，而模型记录不受影响）。
+  try {
+    const archived = retireLegacyModelDeploymentCarrier();
+    if (archived > 0) {
+      logInfo('legacy model deployment carrier retired', { archivedDeployments: archived });
+    }
+  } catch (error: unknown) {
+    logError('legacy model deployment carrier retirement failed', { error: formatErrorForLog(error) });
+  }
   const address = server.address();
   const serverPort = typeof address === 'object' && address ? address.port : null;
   setServerPort(serverPort);

@@ -16,23 +16,16 @@ const isHubLocalWriteGuardedRoute = (method: unknown, pathname: string) => {
   if (pathname.startsWith('/api/prompt-presets/') && (isMethod(method, 'PUT') || isMethod(method, 'DELETE'))) {
     return true;
   }
-  // Provider 连接、Deployment 与 ActiveRoute 写路由（spec 03 §4/§6：Hub 是管理入口）。
+  // Provider 连接与 ActiveRoute 写路由（spec 03 §4/§6：Hub 是管理入口）。
   // ProviderConnection：POST /api/provider-connections、PUT/DELETE /:id、PUT /:id/lifecycle、PUT/DELETE /:id/credential
-  // ModelDeployment：POST /api/model-deployments、PUT/DELETE /:id
   // ActiveRoute：PUT/DELETE /api/active-routes/:modelId
   // 均受 Hub write token 保护；GET 只读不加。
+  // 2026-10-19 起不再有 /api/model-deployments 写保护——该路由已随部署载体退场删除；模型的增删
+  // 走两族记录自己的写路由（下面 custom-*-models 两段），它们各自受保护。
   if (pathname === '/api/provider-connections' && isMethod(method, 'POST')) {
     return true;
   }
   if (pathname.startsWith('/api/provider-connections/')) {
-    if (isMethod(method, 'POST') || isMethod(method, 'PUT') || isMethod(method, 'DELETE')) {
-      return true;
-    }
-  }
-  if (pathname === '/api/model-deployments' && isMethod(method, 'POST')) {
-    return true;
-  }
-  if (pathname.startsWith('/api/model-deployments/')) {
     if (isMethod(method, 'POST') || isMethod(method, 'PUT') || isMethod(method, 'DELETE')) {
       return true;
     }

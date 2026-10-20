@@ -10,30 +10,29 @@ import {
 import { ensureStorageDirs } from '../storage.cts';
 import * as loggingModule from '../logging.cts';
 import { isPlainObject } from '../utils.cts';
-import { findProjectionByModelIdOrAlias } from '../model-package-catalog.cts';
-import { resolveClosedFamilyAdapter } from '../model-family-registry.cts';
 import { getConnection } from './connection-store.cts';
 import { getCustomGenerationModel } from './custom-generation-model-store.cts';
+import { generateRecordId } from './record-id.cts';
 import {
-  generateDeploymentId,
-  listDeployments,
   listLegacyDeploymentThinkingTiers,
-  removeDeploymentsByIds,
-} from './deployment-store.cts';
+  listLegacyDeployments,
+  removeLegacyDeploymentsByIds,
+  type LegacyDeployment,
+} from './legacy-deployment-file.cts';
 
 /**
  * 自建对话模型记录（spec 03 §6.1「Deployment 与自建模型记录」、spec 37 v4.0.0）。
  *
  * - 文件：config/custom-chat-models.json（version 3）
- * - 2026-09-25 起「声明 + ModelDeployment 接入」两层合并为**服务商作用域单记录**：一条记录
+ * - 2026-09-25 起「声明 + 接入」两层合并为**服务商作用域单记录**（接入载体已于 2026-10-19 退场）：一条记录
  *   同时承载能力属性（上下文窗口、最大输出 token、思考档位启用）与接入归属
  *   （connection_id + remote_model_id），用户一次写入完成添加；`record_id` 由 backend 生成
  *   （复用 deployment id 生成逻辑，同一 id 空间），active route 与执行快照引用它
  * - 2026-09-26 起协议归属模型级：记录自带 `protocol_adapter_id`（对话族），连接不再约束协议
- * - 思考档位随本记录走（原 ModelDeployment 上的档位字段已随声明层合并退役）
- * - v1 存量迁移：每条 v1 声明从 model-deployments 反查该 model_id 的 deployment 合成记录
- *   （record_id 继承 deployment_id，active-routes 零改动）；无 deployment 的孤儿声明丢弃并
- *   留痕；迁移完成后自建链 deployment 记录移除（信息已并入记录）
+ * - 思考档位随本记录走（旧接入载体上的档位字段已随声明层合并退役）
+ * - v1 存量迁移：每条 v1 声明从旧接入文件反查该 model_id 的接入合成记录（record_id 继承旧接入
+ *   id，active-routes 零改动）；无接入的孤儿声明丢弃并留痕；迁移完成后被并掉的旧接入从旧文件
+ *   移除（信息已并入记录）
  * - v2 存量迁移：每条 v2 记录从其归属连接回填 `protocol_adapter_id`（协议事实源此前在连接
  *   上）；连接缺失或协议非对话族的记录按孤儿丢弃并留痕
  * - 删除记录时的 active route 清理由调用方编排，本模块不感知路由
@@ -128,14 +127,14 @@ const parseLegacyDeclaration = (entry: unknown): {
 };
 
 /**
- * v1 → v2 迁移：把声明与它名下的 deployment 合成单记录。
+ * v1 → v2 迁移：把声明与它名下的旧接入合成单记录。
  *
- * 调用前必须已触发 `listDeployments()`（deployment store 先于声明迁移就绪：反查依赖接入
- * 数据，档位值来自 deployment store 的 v1 剥键存档）。返回合成记录与被并入的 deployment id。
+ * 反查依赖旧接入数据，档位值来自旧文件读取时的 v1 剥键存档（`listLegacyDeploymentThinkingTiers`）。
+ * 返回合成记录与被并入的接入 id。
  */
 const migrateLegacyModels = (rawModels: unknown[]): { records: CustomChatModel[]; mergedDeploymentIds: string[] } => {
   const legacyTiers = listLegacyDeploymentThinkingTiers();
-  const deployments = listDeployments();
+  const deployments = listLegacyDeployments();
   const records: CustomChatModel[] = [];
   const mergedDeploymentIds: string[] = [];
   const seen = new Set<string>();
@@ -150,9 +149,9 @@ const migrateLegacyModels = (rawModels: unknown[]): { records: CustomChatModel[]
       continue;
     }
     seen.add(legacy.model_id);
-    // 反查该 model_id 的接入：listDeployments 按 created_at 升序，取最早一条（多接入属历史
-    // 异常态；active 指向的那条与新记录 id 一致时零漂移，否则用户重新设一次 active 即可）。
-    const deployment = deployments.find((item) => item.model_id === legacy.model_id);
+    // 反查该 model_id 的接入：旧接入按 created_at 升序，取最早一条（多接入属历史异常态；
+    // active 指向的那条与新记录 id 一致时零漂移，否则用户重新设一次 active 即可）。
+    const deployment: LegacyDeployment | undefined = deployments.find((item) => item.model_id === legacy.model_id);
     if (!deployment) {
       loggingModule.logDebug('[custom-chat-model-store] migrate: orphan declaration without deployment, dropped', {
         modelId: legacy.model_id,
@@ -297,15 +296,14 @@ const readFromDisk = (paths: unknown): CustomChatModelsFile | null => {
       return migrated;
     }
     if (version === 1) {
-      // v1 存量文件：先确保 deployment store 就绪（其 normalize 会剥掉退役档位键并存档原值），
-      // 再按 model_id 反查接入合成 v2 记录，落盘升级——之后每次读取都走 v2 正常路径。
-      listDeployments();
+      // v1 存量文件：按 model_id 反查旧接入合成 v2/v3 记录，落盘升级——之后每次读取都走
+      // 当前形状的正常路径。
       const rawModels = (parsed as { models: unknown }).models;
       const { records, mergedDeploymentIds } = migrateLegacyModels(Array.isArray(rawModels) ? rawModels : []);
       const migrated: CustomChatModelsFile = { version: FILE_VERSION, updatedAt, models: records };
       writeToDisk(paths, migrated);
       if (mergedDeploymentIds.length > 0) {
-        const removed = removeDeploymentsByIds(mergedDeploymentIds);
+        const removed = removeLegacyDeploymentsByIds(mergedDeploymentIds);
         loggingModule.logDebug('[custom-chat-model-store] migrate: custom-chain deployments removed', {
           removed,
           mergedDeploymentIds,
@@ -396,28 +394,25 @@ const getCustomChatModelByRecordId = (recordId: unknown): CustomChatModel | null
 /**
  * 添加自建模型的结果。
  *
- * `duplicate_installed_model`：该标识已经是某个已装模型的 `model_id`、别名或变体名——两个来源
- * 共用全局唯一的 `model_id`，同名会让目录出现重影，所以在写入侧拒绝（spec 37）。
- * `conflicts_with_generation_family`：该标识落在生成族命名空间内，会被生成链路识别为生成模型。
- * `duplicate_generation_record`：该标识已被一个生成侧自建记录占用——两个域共用全局唯一的
+ * `duplicate_generation_record`：该标识已被一个生成侧记录占用——两个域共用全局唯一的
  * `model_id`（与生成侧对对话记录的查重互为镜像，见 custom-generation-model-store）。
+ * `already_exists`：本域已有同 `model_id` 的记录。
+ *
+ * 2026-10-19 起不再有「与已装模型包重名」（`duplicate_installed_model`）与「落在生成族命名
+ * 空间」（`conflicts_with_generation_family`）两种失败：软件不内置任何具体模型，模型来源只有
+ * 用户记录，没有第二个来源可撞名（spec 03 §6.1 单一载体 / §12 PC-14、PC-15）。
  */
 export type AddCustomChatModelResult =
   | { ok: true; model: CustomChatModel }
   | {
       ok: false;
-      reason:
-        | 'duplicate_installed_model'
-        | 'conflicts_with_generation_family'
-        | 'duplicate_generation_record'
-        | 'already_exists';
+      reason: 'duplicate_generation_record' | 'already_exists';
     };
 
 /**
  * 添加自建对话模型（能力属性 + 接入归属 + 协议一次写入）。
  *
- * `record_id` 由本 store 生成（复用 deployment id 生成逻辑，保持 `up_dep_` 前缀与同一 id
- * 空间）；归属校验（连接存在、enabled、有凭证）、协议合法性校验与档位协议可表达性校验由
+ * `record_id` 由本 store 生成（`up_dep_` 前缀，与生成侧同一 id 空间，见 record-id.cts）；归属校验（连接存在、enabled、有凭证）、协议合法性校验与档位协议可表达性校验由
  * 调用方（路由）在写入侧执行，本 store 只管查重、档位归一化与形状。
  *
  * 档位两字段随创建一次落库（spec 37「思考档位」）：省略 = 只有「不思考」可用；默认档位
@@ -447,25 +442,16 @@ const addCustomChatModel = (input: {
     loggingModule.logDebug('[custom-chat-model-store] add: already exists', { modelId });
     return { ok: false, reason: 'already_exists' };
   }
-  if (resolveClosedFamilyAdapter(modelId) !== null) {
-    loggingModule.logDebug('[custom-chat-model-store] add: model_id in generation family namespace', { modelId });
-    return { ok: false, reason: 'conflicts_with_generation_family' };
-  }
-  // 与生成侧自建记录互斥（C6：model_id 全局唯一，两个域不能各占一份；镜像生成侧对对话记录的查重）
+  // 与生成侧记录互斥（model_id 全局唯一，两个域不能各占一份；镜像生成侧对对话记录的查重）
   if (getCustomGenerationModel(modelId) !== null) {
     loggingModule.logDebug('[custom-chat-model-store] add: collision with generation record', { modelId });
     return { ok: false, reason: 'duplicate_generation_record' };
-  }
-  // 与已装模型包（model_id / shell_model_id / 别名 / 变体名）全局互斥
-  if (findProjectionByModelIdOrAlias(modelId) !== undefined) {
-    loggingModule.logDebug('[custom-chat-model-store] add: collision with installed model', { modelId });
-    return { ok: false, reason: 'duplicate_installed_model' };
   }
   const remoteModelId = normalizeModelId(input.remote_model_id) || modelId;
   const enabledTiers = sanitizeTierList(input.enabled_thinking_tiers ?? []);
   const candidate = {
     model_id: modelId,
-    record_id: generateDeploymentId(),
+    record_id: generateRecordId(),
     connection_id: input.connection_id,
     protocol_adapter_id: input.protocol_adapter_id,
     remote_model_id: remoteModelId,
@@ -572,7 +558,7 @@ const removeCustomChatModelsByConnection = (connectionId: unknown): CustomChatMo
  * 从全部对话记录的启用列表里摘掉某个档位，返回受影响的**模型**数。
  *
  * 用于删除自定义档位时的级联清理（spec 37）；默认档位指向被删档位时一并清空。
- * 档位启用关系随自建对话记录走（原 ModelDeployment 上的档位字段已退役）。
+ * 档位启用关系随自建对话记录走（旧接入载体上的档位字段已退役）。
  */
 const stripThinkingTierFromChatModels = (tier: unknown): number => {
   const parsed = ThinkingTierSchema.safeParse(typeof tier === 'string' ? tier.trim() : '');

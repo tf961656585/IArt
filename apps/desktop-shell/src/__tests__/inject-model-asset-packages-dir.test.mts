@@ -42,7 +42,6 @@ const makeEnv = (overrides: Partial<DesktopEnv> = {}): DesktopEnv =>
 
 describe("injectModelAssetPackagesDir", () => {
   let runtime: RuntimeModule;
-  const repoPackagesDir = `${workspaceRoot}/.model-assets/packages`;
 
   beforeAll(() => {
     runtime = loadRuntimeModule();
@@ -68,22 +67,29 @@ describe("injectModelAssetPackagesDir", () => {
     });
   });
 
-  describe("dev 模式自动指向仓库 packages 目录", () => {
-    // 仓库 .model-assets/packages 在正常开发环境下存在；
-    // CI 若剥离资产目录则跳过本用例。
-    const itIfRepo = existsSync(repoPackagesDir) ? it : it.skip;
-
-    itIfRepo("dev 模式（isPackaged=false）注入仓库 .model-assets/packages", () => {
+  describe("不再自动指向仓库 packages 目录", () => {
+    // 模型唯一来源是用户模型记录（spec 03 PC-15）：模型能力包不再是模型来源，dev 与打包态
+    // 行为一致——都不注入包目录。
+    //
+    // 2026-10-20：原先用「仓库包目录确实存在」作前置来保证用例钉的是「即使目录存在也不注入」。
+    // 该目录已随模型能力包退场删除，这个前置从此恒假、用例被静默跳过——判据失效而测试不报错，
+    // 正是「靠某类对象存在才成立的判定」的典型。现改为无条件断言：不注入是**无条件**行为，
+    // 与磁盘上有没有残留目录无关。
+    it("dev 模式（isPackaged=false）不注入仓库 packages 目录", () => {
       const env = makeEnv();
 
       runtime.injectModelAssetPackagesDir(env, false);
 
-      expect(env.IART_MODEL_ASSET_PACKAGES_DIR).toBe(repoPackagesDir);
+      expect(env.IART_MODEL_ASSET_PACKAGES_DIR).toBeUndefined();
     });
 
-    // 打包模式（isPackaged=true）不注入任何目录：
-    // 模型能力包只随软件安装包内置分发，backend 走默认探测（resolveModelPackagesRoot）
-    // 命中 Resources/model-assets，env 保持 undefined 即可。
+    it("打包模式（isPackaged=true）同样不注入", () => {
+      const env = makeEnv();
+
+      runtime.injectModelAssetPackagesDir(env, true);
+
+      expect(env.IART_MODEL_ASSET_PACKAGES_DIR).toBeUndefined();
+    });
   });
 });
 

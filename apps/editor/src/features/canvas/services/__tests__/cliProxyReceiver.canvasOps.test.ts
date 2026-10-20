@@ -1,4 +1,4 @@
-// @spec: CLI-027, CLI-028, CLI-029, CLI-030, CLI-032
+// @spec: CLI-027, CLI-028, CLI-029, CLI-030, CLI-032, CLI-048
 //
 // CLI 代理执行通道 · 画布操作四命令映射测试（2026-10-14 批次新增，从 cliProxyReceiver.test.ts
 // 拆分——该文件受 max-lines 门禁约束）。
@@ -17,6 +17,8 @@ import { useCanvasStore } from '../../store/canvasStore';
 import { createNodeGraph } from '../../types/nodeGraph';
 import type { AgentNodeData, GraphNode, GroupNodeData, TextInputNodeData } from '../../types';
 import { executeCliProxyCommand } from '../cliProxyReceiver';
+import { buildGroupDerivedSize } from '../../components/canvas/groupDerivedSize';
+import { buildCanvasSizeSources } from '../../utils/nodeOccupancy';
 
 // ---------------------------------------------------------------------------
 // store 种床（沿 cliProxyReceiver.test.ts 的既有惯例：真实 store + setState 种节点）
@@ -677,6 +679,42 @@ describe('CLI 代理执行通道 · 画布操作四命令', () => {
       expect(posOf('m2').x).toBeGreaterThan(posOf('m1').x);
       expect(posOf('m2').y).toBe(posOf('m1').y);
       expect(posOf('m3').y).toBeGreaterThan(posOf('m1').y);
+    });
+  });
+
+  describe('canvas.layout --scope containers（CLI-048，组间重叠修复）', () => {
+    it('两个重叠组整组让位后派生框不相交', async () => {
+      addGroupNode('g1');
+      addGroupNode('g2');
+      addTextInputNode('a1', 0, 0, 'g1');
+      addTextInputNode('a2', 300, 0, 'g1');
+      addTextInputNode('b1', 100, 100, 'g2');
+      addTextInputNode('b2', 400, 100, 'g2');
+
+      const command: CliProxyCommand = {
+        command: 'canvas.layout',
+        request_id: 'req-containers',
+        scope: 'containers',
+      };
+      const response = parseResponse(await executeCliProxyCommand(command));
+      if (!('positions' in response)) throw new Error('expected layout success response');
+
+      const state = useCanvasStore.getState();
+      const graph = state.nodeGraph;
+      if (!graph) throw new Error('nodeGraph 为空');
+      const derived = buildGroupDerivedSize({
+        nodes: graph.nodes,
+        sizeSources: buildCanvasSizeSources(state),
+      });
+      const first = derived.byGroupId['g1'];
+      const second = derived.byGroupId['g2'];
+      if (!first || !second) throw new Error('容器派生 entry 缺失');
+      const overlap =
+        first.position.x < second.position.x + second.size.width &&
+        first.position.x + first.size.width > second.position.x &&
+        first.position.y < second.position.y + second.size.height &&
+        first.position.y + first.size.height > second.position.y;
+      expect(overlap).toBe(false);
     });
   });
 });

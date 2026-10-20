@@ -38,8 +38,6 @@ import { clearCacheForTest as clearTierCache } from '../provider-connection/thin
  * ③删除自定义档的级联清理；④对话模型目录只投影「已启用且当前协议可表达」的档位。
  */
 
-const repoRoot = path.join(__dirname, '..', '..', '..', '..', '..');
-process.env['IART_MODEL_ASSET_PACKAGES_DIR'] = path.join(repoRoot, '.model-assets', 'sources');
 process.env['IART_PUBLIC_UPLOAD_CLOUDFLARE_IMAGE_PUBLIC_URL_ENDPOINT'] = 'https://relay.example.invalid/upload';
 
 const HUB_WRITE_TOKEN = 't'.repeat(32);

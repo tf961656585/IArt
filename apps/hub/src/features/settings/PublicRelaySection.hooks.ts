@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { HubConfigResponse, PublicRelayTargetSettings } from '@iart/contracts';
 import { useHubRuntime } from '../../components/providers/HubAppProvider';
+import { useDebouncedCommit } from './components/useDebouncedCommit';
 import { validateHttpUrlInput } from './url-validation';
 
 /**
@@ -31,7 +32,7 @@ export function usePublicRelay() {
   const [selfHostedEndpoint, setSelfHostedEndpoint] = useState('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
 
   const applySettings = useCallback((payload: HubConfigResponse | null | undefined): void => {
     if (!payload) return;
@@ -76,20 +77,19 @@ export function usePublicRelay() {
     [applySettings, settingsFeature],
   );
 
-  const debouncedPersist = useCallback(
-    (cloudflare: string, selfHosted: string): void => {
-      if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = setTimeout(() => {
-        void persist(cloudflare, selfHosted);
-      }, 300);
-    },
-    [persist],
-  );
+  // 挂起值经 ref 读取：切换分区会卸载本页，卸载时钩子冲出挂起提交（用最后一次输入值）
+  const pendingRef = useRef<{ cloudflare: string; selfHosted: string }>({ cloudflare: '', selfHosted: '' });
+  pendingRef.current = { cloudflare: cloudflareEndpoint, selfHosted: selfHostedEndpoint };
+  const debouncedPersist = useDebouncedCommit(() => {
+    const { cloudflare, selfHosted } = pendingRef.current;
+    void persist(cloudflare, selfHosted);
+  });
 
   const changeCloudflareEndpoint = useCallback(
     (value: string): void => {
       setCloudflareEndpoint(value);
-      debouncedPersist(value, selfHostedEndpoint);
+      pendingRef.current = { cloudflare: value, selfHosted: selfHostedEndpoint };
+      debouncedPersist();
     },
     [debouncedPersist, selfHostedEndpoint],
   );
@@ -97,16 +97,11 @@ export function usePublicRelay() {
   const changeSelfHostedEndpoint = useCallback(
     (value: string): void => {
       setSelfHostedEndpoint(value);
-      debouncedPersist(cloudflareEndpoint, value);
+      pendingRef.current = { cloudflare: cloudflareEndpoint, selfHosted: value };
+      debouncedPersist();
     },
     [cloudflareEndpoint, debouncedPersist],
   );
-
-  useEffect(() => {
-    return () => {
-      if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current);
-    };
-  }, []);
 
   return {
     cloudflareEndpoint,

@@ -164,9 +164,10 @@ export const CliCanvasNodeDeleteParamsSchema = z
   .strict();
 export type CliCanvasNodeDeleteParams = z.infer<typeof CliCanvasNodeDeleteParamsSchema>;
 
-/** `canvas layout` 的 `--scope all|group:<id>`：字符串 all 或 `{ group }` 对象形态。 */
+/** `canvas layout` 的 `--scope all|containers|group:<id>`：字符串 all/containers 或 `{ group }` 对象形态。 */
 export const CliLayoutScopeSchema = z.union([
   z.literal('all'),
+  z.literal('containers'),
   z
     .object({
       group: z.string().min(1),

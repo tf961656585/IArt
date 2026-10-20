@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EXECUTABLE_MODEL_FAILURE_CODES } from '@iart/contracts';
-import { MODEL_FAILURE_MESSAGE, countDeploymentsByConnection } from '../invalidity';
+import { MODEL_FAILURE_MESSAGE, countModelsByConnection } from '../invalidity';
 
 /**
  * 原因码 → 界面文案的完整性守卫。
@@ -37,9 +37,9 @@ describe('MODEL_FAILURE_MESSAGE 完整性', () => {
   });
 });
 
-describe('countDeploymentsByConnection', () => {
-  it('按服务统计绑定数量，未出现的服务不落在 map 中', () => {
-    const counts = countDeploymentsByConnection([
+describe('countModelsByConnection', () => {
+  it('按服务统计模型数量，未出现的服务不落在 map 中', () => {
+    const counts = countModelsByConnection([
       { connection_id: 'up_conn_1' },
       { connection_id: 'up_conn_1' },
       { connection_id: 'up_conn_2' },
@@ -50,6 +50,6 @@ describe('countDeploymentsByConnection', () => {
   });
 
   it('空列表返回空 map', () => {
-    expect(countDeploymentsByConnection([]).size).toBe(0);
+    expect(countModelsByConnection([]).size).toBe(0);
   });
 });

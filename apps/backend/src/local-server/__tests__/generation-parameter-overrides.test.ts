@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { ParameterOverrides } from '@iart/contracts';
 import {
-  buildOpenAiImageV1BaseTemplateSources,
+  GENERATION_FAMILY_ADAPTER_IDS,
+  GENERATION_MEDIA_SLOT_IDS,
+  type GenerationFamilyAdapterId,
+  type GenerationMediaSlotId,
+  type ParameterOverrides,
+} from '@iart/contracts';
+import { buildGeminiImageInteractionsV1BaseTemplateSources } from '../generation-family-templates.gemini-image.cts';
+import { buildOpenAiImageV1BaseTemplateSources } from '../generation-family-templates.openai-image.cts';
+import {
   buildFamilyTemplateParameterDescriptor,
-} from '../generation-family-templates.cts';
+  GENERATION_FAMILY_TEMPLATE_REGISTRY,
+} from '../generation-family-templates.registry.cts';
 import {
   applyParameterOverrides,
   EMPTY_PARAMETER_OVERRIDES,
@@ -13,7 +21,7 @@ import {
   validateParameterOverrides,
 } from '../generation-parameter-overrides.cts';
 import { isObjectRecord } from '../model-package-catalog.shared.cts';
-import type { CatalogRawObject } from '../model-package-catalog.types.cts';
+import type { CatalogRawObject, JsonObject } from '../model-package-catalog.types.cts';
 import type { GenerationFamilyTemplateSources } from '../generation-family-templates.cts';
 
 /**
@@ -30,10 +38,10 @@ const asRaw = (value: unknown): CatalogRawObject => {
 };
 
 const T2I_SOURCES = buildOpenAiImageV1BaseTemplateSources('overrides-unit-model', {
-  supportsReferenceImage: false,
+  acceptedMediaSlots: [],
 });
 const I2I_SOURCES = buildOpenAiImageV1BaseTemplateSources('overrides-unit-model-ref', {
-  supportsReferenceImage: true,
+  acceptedMediaSlots: ['reference_image'],
 });
 
 /** 测试字面量显式写全必填键（required 等），直接以契约输出类型进入校验器；不 parse——
@@ -87,7 +95,7 @@ void test('S1 别名：body.<wire> 键段整体改写，面板字段与展示语
   assert.ok(payloadRulesOf(i2iOutput)['body.image_size']);
 });
 
-void test('S2 禁用：字段、默认值与 payload_rules 一并移除；image 不可禁用', () => {
+void test('S2 禁用：字段、默认值与 payload_rules 一并移除；素材位字段不可禁用', () => {
   const overrides = overridesOf({
     official: [{ field_key: 'moderation', enabled: false }],
     custom: [],
@@ -108,7 +116,7 @@ void test('S2 禁用：字段、默认值与 payload_rules 一并移除；image 
   assert.deepEqual(violationsOf(I2I_SOURCES, overridesOf({
     official: [{ field_key: 'image', enabled: false }],
     custom: [],
-  })), ['official_field_image_not_overridable']);
+  })), ['official_field_media_slot_not_overridable']);
 });
 
 void test('S3 枚举替换：选项替换、默认值随行；替换后旧默认值非法被拒', () => {
@@ -395,8 +403,10 @@ void test('禁用字段被其他字段 visible_when 或 payload_rules 条件引�
 });
 
 void test('族模板参数描述：字段、wire 名、预设与保留键（GET 描述符端点的数据构建）', () => {
-  const descriptor = buildFamilyTemplateParameterDescriptor('openai-image-v1');
-  assert.ok(descriptor, 'openai-image-v1 must have a parameter descriptor');
+  const result = buildFamilyTemplateParameterDescriptor('openai-image-v1');
+  assert.equal(result.kind, 'ready', 'openai-image-v1 must have a parameter descriptor');
+  assert.ok(result.kind === 'ready');
+  const descriptor = result.descriptor;
   assert.deepEqual(
     descriptor.official_fields.map((field) => field.field_key),
     ['size', 'quality', 'format', 'moderation'],
@@ -421,11 +431,47 @@ void test('族模板参数描述：字段、wire 名、预设与保留键（GET 
   assert.ok(descriptor.reserved_wire_names.includes('model'));
   assert.ok(descriptor.reserved_wire_names.includes('prompt'));
   assert.ok(descriptor.reserved_wire_names.includes('input'));
-  assert.ok(descriptor.reserved_wire_names.includes('image'), 'image is family-reserved even in the t2i baseline');
+  assert.ok(descriptor.reserved_wire_names.includes('image'), '素材位字段键保留，t2i 基线同样保留');
+  // 素材位词表里的每个 id 都保留（参数层永不开放），词表扩容时这条断言自动跟随
+  for (const slot of GENERATION_MEDIA_SLOT_IDS) {
+    assert.ok(descriptor.reserved_wire_names.includes(slot), `${slot} 素材位必须保留`);
+  }
   assert.ok(descriptor.reserved_wire_names.includes('output_format'));
   assert.ok(descriptor.reserved_wire_names.includes('n'));
 
-  assert.equal(buildFamilyTemplateParameterDescriptor('not-a-family'), null);
+  // 未知族与未就绪族必须可区分：前者是非法 id（路由 404），后者是合法接口类型但模板未实现
+  assert.equal(buildFamilyTemplateParameterDescriptor('not-a-family').kind, 'unknown');
+  // pending 清单从注册表派生（逐族实现批次逐个转 ready，测试不手写「哪族还没实现」——
+  // 手写清单会在并行批次把某族转 ready 时变成对方的红灯）。
+  const pendingFamilyAdapterIds = GENERATION_FAMILY_ADAPTER_IDS.filter(
+    (id) => GENERATION_FAMILY_TEMPLATE_REGISTRY[id].status === 'pending',
+  );
+  for (const pendingFamilyAdapterId of pendingFamilyAdapterIds) {
+    assert.equal(
+      buildFamilyTemplateParameterDescriptor(pendingFamilyAdapterId).kind,
+      'pending',
+      `${pendingFamilyAdapterId} 在注册表里 pending，描述符入口必须同样返回 pending`,
+    );
+  }
+  // veo 族已就绪：同一入口必须给出描述符而不是 pending
+  assert.equal(buildFamilyTemplateParameterDescriptor('veo-v1').kind, 'ready');
+
+  // 素材位能力：描述符必须从注册表条目填入（各族不各自声明一份，防两侧漂移）
+  const descriptorByFamily = new Map<GenerationFamilyAdapterId, readonly GenerationMediaSlotId[]>();
+  for (const familyAdapterId of GENERATION_FAMILY_ADAPTER_IDS) {
+    const built = buildFamilyTemplateParameterDescriptor(familyAdapterId);
+    if (built.kind !== 'ready') continue;
+    descriptorByFamily.set(familyAdapterId, built.descriptor.supports_media_slots);
+    assert.deepEqual(
+      built.descriptor.supports_media_slots,
+      [...GENERATION_FAMILY_TEMPLATE_REGISTRY[familyAdapterId].supportsMediaSlots],
+      `${familyAdapterId} 的描述符素材位必须等于注册表声明的能力`,
+    );
+  }
+  // 三个代表族的取值显式钉住：0 位族给空数组（不是缺键），Veo 不含参考图
+  assert.deepEqual(descriptorByFamily.get('kling-text2video-v1'), [], '文生视频族一个素材位都没有');
+  assert.deepEqual(descriptorByFamily.get('veo-v1'), ['first_frame', 'last_frame']);
+  assert.equal(descriptorByFamily.get('seedance-2-0-v1')?.length, 5, 'Seedance 2.0 五个素材位');
 });
 
 void test('校验错误文案用户可读：无内部术语上屏、用中文显示名拼句', () => {
@@ -492,4 +538,200 @@ void test('校验错误文案用户可读：无内部术语上屏、用中文显
     assert.ok(message.endsWith('。'), `message must end with a full stop: ${message}`);
     assert.ok(message.includes('请') || message.includes('：'), `message must carry guidance: ${message}`);
   }
+});
+
+/**
+ * 合成一份「字段引用嵌在 compute 规则内部」的模板：这是 gemini 图像族的真实形态
+ * （`body.response_format` = compact_object，`image_size` 来自 normalize_enum.args[0]，
+ * `mime_type` 直取字段）。历史缺陷：保存期只认 `when.condition.field`、合成期遍历又排除
+ * 数组，两层错位导致禁用 imageSize 在合成期抛错、禁用 mimeType 静默删掉整个
+ * `body.response_format`。
+ */
+const buildNestedComputeSources = (): GenerationFamilyTemplateSources => ({
+  runtimeModel: asRaw({
+    model_id: 'nested-compute',
+    parameter_schema: {
+      schema_type: 'object',
+      fields: [
+        { field_key: 'aspectRatio', label: 'ar', component: 'select', enum_options: [{ value: 'auto' }, { value: '1:1' }], default_value: 'auto' },
+        { field_key: 'imageSize', label: 'is', component: 'select', enum_options: [{ value: '1K' }, { value: '2K' }], default_value: '1K' },
+        { field_key: 'mimeType', label: 'mt', component: 'select', enum_options: [{ value: 'image/jpeg' }], default_value: 'image/jpeg' },
+      ],
+      required_fields: [],
+      default_values: { aspectRatio: 'auto', imageSize: '1K', mimeType: 'image/jpeg' },
+      validation_rules: [],
+    },
+    runtime: {
+      payload_rules: {
+        'body.response_format': {
+          kind: 'compute',
+          operator: 'compact_object',
+          entries: {
+            type: { kind: 'literal', value: 'image' },
+            aspect_ratio: { kind: 'field', field_key: 'aspectRatio' },
+            // 字段引用在数组里，且是嵌套 compute。
+            image_size: {
+              kind: 'compute',
+              operator: 'normalize_enum',
+              args: [{ kind: 'field', field_key: 'imageSize' }],
+              options: { allowed_values: ['1K', '2K'], fallback: '1K' },
+            },
+            mime_type: {
+              kind: 'compute',
+              operator: 'coalesce',
+              args: [{ kind: 'field', field_key: 'mimeType' }],
+            },
+          },
+        },
+        'meta.imageSize': { kind: 'field', field_key: 'imageSize' },
+      },
+      schema_defaults: { aspectRatio: 'auto', imageSize: '1K', mimeType: 'image/jpeg' },
+    },
+  }),
+  node: asRaw({}),
+  localizationResources: T2I_SOURCES.localizationResources,
+});
+
+void test('禁用嵌套在 compute 规则里的字段：保存期可读拒绝，合成期不抛错不删目标', () => {
+  const sources = buildNestedComputeSources();
+  // 1) 保存期必须给出可读拒绝（而不是放行后在合成期炸掉）。
+  for (const fieldKey of ['imageSize', 'mimeType']) {
+    const violations = validateParameterOverrides(sources, overridesOf({
+      official: [{ field_key: fieldKey, enabled: false }],
+      custom: [],
+    }));
+    const codes = violations.map((violation) => violation.code);
+    assert.ok(
+      codes.includes('disabled_field_referenced'),
+      `${fieldKey} 参与请求构造，禁用必须在保存期被拒绝，实际：${JSON.stringify(codes)}`,
+    );
+    // 拒绝文案必须说清后果并给可行指引（不出现内部术语）。
+    const message = violations.find((violation) => violation.code === 'disabled_field_referenced')?.message ?? '';
+    assert.ok(message.includes('参与决定生成请求怎么发送'), `拒绝文案必须说明原因：${message}`);
+    assert.ok(message.includes('请'), `拒绝文案必须给指引：${message}`);
+    // 2) 合成期不得发生：保存期已拒绝 → applyParameterOverrides 前置校验直接抛错。
+    assert.throws(
+      () => applyParameterOverrides(sources, overridesOf({ official: [{ field_key: fieldKey, enabled: false }], custom: [] })),
+      /参数/,
+      `${fieldKey} 的禁用不得进入合成`,
+    );
+  }
+
+  // 3) 另一种「可安全裁剪」的形态：引用全部落在禁用字段自身，没有固化协议常量。
+  const prunable = asRaw({
+    model_id: 'prunable',
+    parameter_schema: {
+      schema_type: 'object',
+      fields: [
+        { field_key: 'seed', label: 's', component: 'text', default_value: '' },
+        { field_key: 'quality', label: 'q', component: 'select', enum_options: [{ value: 'auto' }], default_value: 'auto' },
+      ],
+      required_fields: [],
+      default_values: { seed: '', quality: 'auto' },
+      validation_rules: [],
+    },
+    runtime: {
+      payload_rules: {
+        'body.seed': {
+          kind: 'when',
+          condition: { op: 'truthy', field: 'seed' },
+          truthy: { kind: 'field', field_key: 'seed' },
+        },
+        'meta.seed': {
+          kind: 'compute',
+          operator: 'coalesce',
+          args: [{ kind: 'field', field_key: 'seed' }],
+        },
+        'body.quality': { kind: 'field', field_key: 'quality' },
+      },
+      schema_defaults: { seed: '', quality: 'auto' },
+    },
+  });
+  const prunableSources: GenerationFamilyTemplateSources = {
+    runtimeModel: prunable,
+    node: asRaw({}),
+    localizationResources: T2I_SOURCES.localizationResources,
+  };
+  const overrides = overridesOf({ official: [{ field_key: 'seed', enabled: false }], custom: [] });
+  assert.deepEqual(violationsOf(prunableSources, overrides), [], '只引用自身的字段可以安全禁用');
+  const output = applyParameterOverrides(prunableSources, overrides);
+  const rules = payloadRulesOf(output);
+  assert.equal(rules['body.seed'], undefined, '引用被禁用字段自身的目标被裁剪');
+  assert.equal(rules['meta.seed'], undefined, '嵌套在 compute.args 里的同一字段目标也被裁剪');
+  assert.ok(rules['body.quality'], '与前缀无关的目标必须保留');
+  assert.equal(fieldRecordOf(output, 'quality').field_key, 'quality');
+});
+
+void test('禁用任何字段都不得让整条规则键被静默删除（含协议常量与共享字段）', () => {
+  const sources = buildNestedComputeSources();
+  for (const fieldKey of ['imageSize', 'mimeType']) {
+    // 绕过保存期拒绝，直接探测合成期判据：必须抛错（fail loud），不得静默返回缺键结果。
+    assert.throws(
+      () => applyParameterOverrides(sources, overridesOf({ official: [{ field_key: fieldKey, enabled: false }], custom: [] })),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        // 不得是「合成期才发现的字段键悬空」——那说明保存期没拦住。
+        assert.ok(
+          !error.message.includes('invalid_payload_rule_field_key'),
+          `必须以可读原因拒绝，而不是合成期字段键悬空：${error.message}`,
+        );
+        return true;
+      },
+    );
+  }
+  // 合法的收窄覆盖不得破坏 response_format 结构。
+  const narrowed = applyParameterOverrides(sources, overridesOf({
+    official: [{ field_key: 'imageSize', enum_options: ['1K'] }],
+    custom: [],
+  }));
+  const narrowedRules = payloadRulesOf(narrowed);
+  assert.ok('body.response_format' in narrowedRules, '合法覆盖不得删掉整条 response_format');
+  assert.ok('meta.imageSize' in narrowedRules);
+});
+
+void test('真实 gemini 图像族：嵌套 compute 字段引用被保存期识别（族无关口径回归）', () => {
+  // 该族为自保在外层加了 `when truthy <field>` 守卫；即便去掉守卫（字段引用只留在
+  // compute.args 里），保存期也必须给出同样的可读拒绝——这才是根因修复的判据。
+  const sources = buildGeminiImageInteractionsV1BaseTemplateSources('gemini-nested-check', {
+    acceptedMediaSlots: [],
+  });
+  const responseFormat = asRaw(payloadRulesOf(sources)['body.response_format']);
+  const entries = asRaw(responseFormat.entries);
+  // 复刻「无守卫」形态：把 when 拆掉，直接留下被包裹的值规则。
+  const unguarded: JsonObject = { ...asRaw(responseFormat) };
+  const unguardedEntries: JsonObject = { ...entries };
+  for (const key of ['image_size', 'mime_type']) {
+    const guarded = asRaw(unguardedEntries[key]);
+    unguardedEntries[key] = guarded.truthy;
+  }
+  unguarded.entries = unguardedEntries;
+  const unguardedSources: GenerationFamilyTemplateSources = {
+    runtimeModel: asRaw({
+      ...asRaw(sources.runtimeModel),
+      runtime: asRaw({
+        ...asRaw(asRaw(sources.runtimeModel).runtime),
+        payload_rules: asRaw({
+          ...payloadRulesOf(sources),
+          'body.response_format': unguarded,
+        }),
+      }),
+    }),
+    node: sources.node,
+    localizationResources: sources.localizationResources,
+  };
+  for (const fieldKey of ['imageSize', 'mimeType']) {
+    const codes = violationsOf(unguardedSources, overridesOf({
+      official: [{ field_key: fieldKey, enabled: false }],
+      custom: [],
+    }));
+    assert.ok(
+      codes.includes('disabled_field_referenced'),
+      `无守卫形态下禁用 ${fieldKey} 仍必须被保存期拒绝，实际：${JSON.stringify(codes)}`,
+    );
+  }
+  // 合法覆盖照常工作。
+  assert.deepEqual(violationsOf(sources, overridesOf({
+    official: [{ field_key: 'imageSize', enum_options: ['1K'] }],
+    custom: [],
+  })), []);
 });

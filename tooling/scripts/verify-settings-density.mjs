@@ -73,33 +73,75 @@ const GAP_JS = `(() => {
   return best;
 })()`;
 
-// 指标②：分栏容器人工垫高。容器 = 首个子树含「添加服务商」按钮的双子元素容器；
-// 垫高 = 容器 clientHeight − max(各列 scrollHeight)。
+// 指标②：分栏容器人工垫高。容器 = 显式标记 [data-settings-split] 的主从外框。
+//
+// 口径（2026-10-19 修订）：只量**并排**时的垫高。栏在窄窗换行成上下两行时（flex-wrap），
+// 容器高度由「上行 + 下行」相加，此时「容器高 − 单列内容高」不再是垫高而是两行总高，
+// 旧口径会在换行形态下恒报红（实测 46px，实为第二行高度）。换行形态按「无人工垫高」判定：
+// 换行本身是内容驱动的，写死高度才叫垫高。
 const SPLIT_JS = `(() => {
-  const root = document.getElementById('providers');
-  if (!root) return { error: 'providers 锚点不存在（当前不在设置页？）' };
-  let split = null;
-  for (const el of root.querySelectorAll('*')) {
-    const kids = [...el.children];
-    if (kids.length < 2) continue;
-    if ((kids[0].textContent || '').includes('添加服务商')) { split = el; break; }
-  }
-  if (!split) return { error: '主从分栏容器未找到' };
+  const split = document.querySelector('[data-settings-split]');
+  if (!split) return { error: '主从分栏容器未找到（缺 [data-settings-split] 标记）' };
+  const rects = [...split.children].map((c) => c.getBoundingClientRect());
+  if (rects.length < 2) return { error: '主从分栏子列不足 2 个' };
+  const wrapped = rects[1].top > rects[0].bottom - 2;
   const cols = [...split.children].map((c) => c.scrollHeight);
+  if (wrapped) return { excess: 0, wrapped, boxH: split.clientHeight, cols };
   const excess = Math.round(split.clientHeight - Math.max(...cols));
-  return { excess, boxH: split.clientHeight, cols };
+  return { excess, wrapped, boxH: split.clientHeight, cols };
 })()`;
 
-// 指标③④：行承载（visual-design §8.6）。行容器 = 详情里含 <input> 的 bg-elevated 行（第一个）。
+// 指标③④：行承载（visual-design §8.6）。行容器 = 模型表格行（[data-model-row]）。
+//
+// 选择器（2026-10-19 修订）：原为 `#providers .bg-elevated` 且含 input。模型清单改表格后，
+// 行是 <tr>、不带 .bg-elevated，行内编辑输入框只在「点开编辑」时才出现——旧选择器会取到 0 行
+// → 记 SKIP → **门禁显示通过而实际没量**。改用显式标记，并把「稳态下无输入框」按表格行的
+// 真实形态判定（内距 + 同高档对表格行另有口径）。
 const ROW_JS = `(() => {
-  const rows = [...document.querySelectorAll('#providers .bg-elevated')].filter((el) => el.querySelector('input'));
-  if (rows.length === 0) return { skip: '无含行内编辑排的模型行（retired 塌缩或纯自建行）' };
+  const rows = [...document.querySelectorAll('#providers [data-model-row]')];
+  if (rows.length === 0) return { skip: '详情里没有模型行（当前服务商无模型 / 未选中）' };
   const row = rows[0];
   const cs = getComputedStyle(row);
-  const bottoms = [...row.querySelectorAll('input, button')].map((el) => el.getBoundingClientRect().bottom);
-  if (bottoms.length < 2) return { skip: '行内控件不足 2 个' };
-  const maxDiff = Math.round((Math.max(...bottoms) - Math.min(...bottoms)) * 10) / 10;
-  return { pt: cs.paddingTop, pb: cs.paddingBottom, pl: cs.paddingLeft, pr: cs.paddingRight, maxBottomDiff: maxDiff, rowH: Math.round(row.getBoundingClientRect().height) };
+  const cells = [...row.querySelectorAll('td')];
+  // 同行控件（星标 / ⋯ 按钮 / 行内编辑输入框）底边差 ≤1px 即同高档（律一）。
+  //
+  // 排除「chip 内微动作」：visual-design §8.6 律一末条明确把 24px 级 icon-only 微动作
+  // 排除在同高档之外（独立微档语义，命中区 ≥24px）。InfoHint 就是这个形态（图标 14 + 命中区 24），
+  // 它与 28px 的星标 / ⋯ 本来就是两个档，算进来会得到假的不齐。
+  // 判据取计算后的高度：≤24px 视为微档（而不是按 aria-label 尾词，文案会变、尺寸不会）。
+  const isMicroAction = (el) => el.getBoundingClientRect().height <= 24.5;
+  const peers = [...row.querySelectorAll('input, button')].filter((el) => !isMicroAction(el));
+  const bottoms = peers.map((el) => el.getBoundingClientRect().bottom);
+  const controls = peers.map((el) => ({
+    tag: el.tagName.toLowerCase(),
+    h: +el.getBoundingClientRect().height.toFixed(1),
+  }));
+  const maxDiff = bottoms.length >= 2
+    ? Math.round((Math.max(...bottoms) - Math.min(...bottoms)) * 10) / 10
+    : null;
+  // 表格行的「呼吸档」不是 padding：行是 <tr>、单元格靠行高 + 垂直居中承载留白。
+  // 量「控件到行上下边的最小距离」（= 有效呼吸），口径等价于律二的「垂直 ≥8px」，
+  // 只是载体从内距换成行高分配（52 行高 + 28 控件 → 上下各 12px）。
+  const rowRect = row.getBoundingClientRect();
+  const allControls = [...row.querySelectorAll('input, button')];
+  const gapTop = allControls.length
+    ? Math.round(Math.min(...allControls.map((el) => el.getBoundingClientRect().top - rowRect.top)))
+    : null;
+  const gapBottom = allControls.length
+    ? Math.round(Math.min(...allControls.map((el) => rowRect.bottom - el.getBoundingClientRect().bottom)))
+    : null;
+  const cell = cells[0] ?? row;
+  const cellCs = getComputedStyle(cell);
+  return {
+    pt: gapTop === null ? '0px' : gapTop + 'px',
+    pb: gapBottom === null ? '0px' : gapBottom + 'px',
+    pl: cellCs.paddingLeft,
+    pr: cellCs.paddingRight,
+    maxBottomDiff: maxDiff,
+    rowH: Math.round(rowRect.height),
+    controls,
+    gapSource: 'row-centered',
+  };
 })()`;
 
 // 指标⑤⑥⑦：商店「管理自定义 Agent 目录」弹层行承载（visual-design §8.6）。
@@ -235,7 +277,10 @@ for (let i = 0; i < 20; i++) {
 // 确保设置页激活（主侧栏「设置」项；已在设置页则跳过）。
 // 注意：侧栏按钮内部是「图标+文字」同层，无纯文本叶子，safeClick 的 leafText 定位不适用——
 // 改为 aside 内按按钮全文精确匹配 + 真实鼠标点击。
-const onSettings = await cdp.evalJs(`!!document.getElementById('providers') && !!document.getElementById('update')`);
+// 分区成页后同一时刻只渲染一个分区页面，**不能**用「#providers 与 #update 同时存在」判定
+// 是否在设置页（2026-10-19 前的旧判定，改结构后会恒假 → 每次都被当成「不在设置页」重进）。
+// 新判定：在不在设置页看分区导航是否存在；再看当前分区是不是服务商页。
+const onSettings = await cdp.evalJs(`!!document.querySelector('nav[aria-label="设置分区"]')`);
 if (!onSettings) {
   const pos = await cdp.evalJs(`(() => {
     const btn = [...document.querySelectorAll('aside button')]
@@ -254,6 +299,28 @@ if (!onSettings) {
   await sleep(600);
 }
 
+// 切到「服务商」分区页（分区成页后必须显式切换；深链 hash 可能指向别的分区，
+// 且冷启动落地页与上一个会话的分区无关）。用真实鼠标点击，与人工操作同路径。
+const onProvidersPage = await cdp.evalJs(`!!document.getElementById('providers')`);
+if (!onProvidersPage) {
+  const pos = await cdp.evalJs(`(() => {
+    const nav = document.querySelector('nav[aria-label="设置分区"]');
+    if (!nav) return null;
+    const btn = [...nav.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === '服务商');
+    if (!btn) return null;
+    btn.scrollIntoView({ block: 'center' });
+    const r = btn.getBoundingClientRect();
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+  })()`);
+  if (!pos) {
+    console.error('分区导航未找到「服务商」项。');
+    cdp.close();
+    process.exit(2);
+  }
+  await cdp.clickAt(pos.x, pos.y);
+  await sleep(700);
+}
+
 // 等服务商数据加载（连接列表来自 backend，冷启动有异步窗口）
 let hasData = false;
 for (let i = 0; i < 30; i++) {
@@ -269,23 +336,34 @@ if (!hasData) {
   process.exit(2);
 }
 
-// 若无选中项则点首个服务商卡（详情空态会让指标②失真），等详情标题渲染
-const needSelect = await cdp.evalJs(
-  `[...document.querySelectorAll('#providers [role="button"][aria-pressed]')].filter(e => e.getAttribute('aria-pressed') === 'true').length === 0`,
+// 选一个**带模型**的服务商再量（2026-10-19）。
+//
+// 两道前提缺一不可：① 详情必须渲染（空态会让指标②失真）；② 详情里必须**有模型行**——
+// 指标③④ 量的是模型行，选到一家零模型的服务商时两项会记 SKIP，门禁看起来「通过」而实际没量。
+// 原逻辑只在「未选中」时点第一张卡；分区成页后首条会被自动选中，于是永远停在一家
+// 可能没有模型的服务商上（实测就撞上了：选中项 0 模型 → ③④ SKIP）。
+const needPick = await cdp.evalJs(
+  `document.querySelectorAll('#providers [data-model-row]').length === 0`,
 );
-if (needSelect) {
+if (needPick) {
+  // 优先点带「已添加 N 个模型」且 N>0 的卡；没有就退回落第一张（此时 ③④ 只能 SKIP）
   const pos = await cdp.evalJs(`(() => {
-    const card = document.querySelector('#providers [role="button"][aria-pressed]');
-    if (!card) return null;
+    const cards = [...document.querySelectorAll('#providers [role="button"][aria-pressed]')];
+    if (cards.length === 0) return null;
+    const withModels = cards.find((c) => /已添加 [1-9][0-9]* 个模型/.test(c.textContent || ''));
+    const card = withModels ?? cards[0];
     card.scrollIntoView({ block: 'nearest' });
     const r = card.getBoundingClientRect();
-    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), picked: !!withModels };
   })()`);
   if (pos) {
     await cdp.clickAt(pos.x, pos.y);
     for (let i = 0; i < 15; i++) {
-      if (await cdp.evalJs(`!!document.querySelector('#providers h4')`)) break;
+      if (await cdp.evalJs(`document.querySelectorAll('#providers [data-model-row]').length > 0`)) break;
       await sleep(300);
+    }
+    if (!pos.picked) {
+      console.warn('[warn] 没有带模型的服务商可量：指标③④ 将记 SKIP（门禁本次未覆盖行承载）');
     }
   }
 }
@@ -413,14 +491,16 @@ const checks = [
     // SKIP 不计失败、不计入分母：行没有行内编辑排（retired 塌缩或纯自建行）时无混排可言
     label: rowSkipped
       ? `行内同排控件底边差：SKIP（${m3.skip}）`
-      : `行内同排控件底边差 ${m3.maxBottomDiff}px（目标 ≤${MAX_BOTTOM_DIFF}px，行高 ${m3.rowH}px）`,
-    pass: rowSkipped || m3.maxBottomDiff <= MAX_BOTTOM_DIFF,
+      : m3.maxBottomDiff === null
+        ? `行内同排控件底边差：行高 ${m3.rowH}px，但行内控件不足 2 个`
+        : `行内同排控件底边差 ${m3.maxBottomDiff}px（${(m3.controls || []).map((c) => c.tag + c.h).join('/')}，目标 ≤${MAX_BOTTOM_DIFF}px，行高 ${m3.rowH}px）`,
+    pass: rowSkipped || (m3.maxBottomDiff !== null && m3.maxBottomDiff <= MAX_BOTTOM_DIFF),
     skip: rowSkipped,
   },
   {
     label: rowSkipped
       ? `行承载容器呼吸档：SKIP（${m3.skip}）`
-      : `行承载容器内边距 pt/pb ${m3.pt}/${m3.pb}（目标 ≥${MIN_PAD_Y}px）pl/pr ${m3.pl}/${m3.pr}（目标 ≥${MIN_PAD_X}px）`,
+      : `行承载容器内边距（首单元格）pt/pb ${m3.pt}/${m3.pb}（目标 ≥${MIN_PAD_Y}px）pl/pr ${m3.pl}/${m3.pr}（目标 ≥${MIN_PAD_X}px）`,
     pass: rowSkipped || rowPadOk,
     skip: rowSkipped,
   },

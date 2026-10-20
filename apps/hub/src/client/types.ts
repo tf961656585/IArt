@@ -46,8 +46,6 @@ import type {
   ProviderConnectionListResponse,
   ProviderConnectionResponse,
   ProviderConnectionCredentialResponse,
-  ModelDeploymentListResponse,
-  ModelDeploymentResponse,
   ActiveRouteMapResponse,
   ActiveRouteResponse,
   ExecutableModelCatalogResponse,
@@ -202,23 +200,15 @@ export interface HubApiClient {
   setProviderConnectionCredential(connectionId: string, value: string): Promise<ProviderConnectionCredentialResponse>;
   removeProviderConnectionCredential(connectionId: string): Promise<ProviderConnectionCredentialResponse>;
   setProviderConnectionLifecycle(connectionId: string, lifecycle: 'enabled' | 'disabled' | 'retired'): Promise<ProviderConnectionResponse>;
-  listModelDeployments(modelId: string | undefined, signal: AbortSignal | undefined): Promise<ModelDeploymentListResponse>;
   /**
-   * ModelDeployment 只服务**已装能力包模型**的接入（spec 03 §6.1：自建模型是服务商作用域单记录，
-   * 不产生 Deployment）。接入即设为当前使用：该步骤由调用方在创建后经 setActiveRoute 完成。
+   * active 接入目标清单（`model_id → 记录 id`）。
+   *
+   * 模型只有用户记录一种载体（spec 03 §6.1，2026-10-19）：添加模型时会话内即写入 active，
+   * Hub 只读这份投影判断「当前使用」。不再有接入载体的增删方法——模型的增删走
+   * `createCustomChatModel` / `createCustomGenerationModel` 与各自的删除方法。
    */
-  createModelDeployment(payload: {
-    model_id: string;
-    connection_id: string;
-    remote_model_id: string;
-  }): Promise<ModelDeploymentResponse>;
-  updateModelDeployment(deploymentId: string, payload: {
-    connection_id?: string;
-    remote_model_id?: string;
-  }): Promise<ModelDeploymentResponse>;
-  deleteModelDeployment(deploymentId: string): Promise<{ ok: true }>;
   listActiveRoutes(signal: AbortSignal | undefined): Promise<ActiveRouteMapResponse>;
-  setActiveRoute(modelId: string, deploymentId: string | null): Promise<ActiveRouteResponse>;
+  setActiveRoute(modelId: string, recordId: string | null): Promise<ActiveRouteResponse>;
   listExecutableModelCatalog(signal: AbortSignal | undefined): Promise<ExecutableModelCatalogResponse>;
   listChatModelCatalog(signal: AbortSignal | undefined): Promise<ChatModelCatalogResponse>;
   listThinkingTiers(signal: AbortSignal | undefined): Promise<ThinkingTierPoolResponse>;
@@ -241,7 +231,7 @@ export interface HubApiClient {
   listCustomGenerationModels(signal: AbortSignal | undefined): Promise<CustomGenerationModelListResponse>;
   createCustomGenerationModel(payload: CustomGenerationModelCreateBody): Promise<CustomGenerationModelResponse>;
   /**
-   * 修改声明：`supports_reference_image` 整体替换；`parameter_overrides` 缺省 = 不变，
+   * 修改声明：`accepted_media_slots` 整体替换；`parameter_overrides` 缺省 = 不变，
    * 出现 = 整体替换（语义由 contracts 的 UpdateBodySchema 钉死）。
    */
   updateCustomGenerationModel(modelId: string, payload: CustomGenerationModelUpdateBody): Promise<CustomGenerationModelResponse>;

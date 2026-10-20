@@ -1,4 +1,3 @@
-.model-assets/packages/
 node_modules/
 dist/
 tsconfig.tsbuildinfo
@@ -57,3 +56,14 @@ apps/workers/upload/
 
 # skill 目录本地构建产物（skill-catalog-build.mjs，不入库）
 .skill-dist/
+
+# Python 缓存（运行技能脚本产生）
+__pycache__/
+*.pyc
+
+# ppt-builder 示例运行产物（examples/demo.py 生成，不入源）
+skills/ppt-builder/examples/*.pptx
+skills/ppt-builder/examples/*_QA.txt
+skills/ppt-builder/examples/image_requests.json
+skills/ppt-builder/examples/images/
+skills/ppt-builder/examples/assets/

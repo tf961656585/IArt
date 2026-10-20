@@ -15,7 +15,6 @@ import {
   resolveAppVersion,
   resolveBackendEntry,
   resolveEditorStaticRoot,
-  ROOT_DIR,
   toErrorMessage,
   type DesktopEnv,
 } from "./desktop-shell-utils.cjs";
@@ -50,13 +49,14 @@ export type RuntimeControllerOptions = {
 export type RuntimeController = ReturnType<typeof createRuntimeController>;
 
 /**
- * 将模型能力包目录注入 backend 子进程 env。
+ * 将模型能力包目录注入 backend 子进程 env（**退役中**：模型包不再是模型来源）。
  *
- * 模型能力包只随软件安装包内置分发（Resources/model-assets，由 backend 的
- * resolveModelPackagesRoot 默认探测命中），无远端热更新通道：
- * - 优先级 0a（最高）：开发者手动设置 IART_MODEL_ASSET_PACKAGES_DIR → 不覆盖，dev env 生效
- * - 优先级 0b（仅 dev）：dev 模式（!app.isPackaged）自动指向仓库 .model-assets/packages → 注入 env
- * - 打包模式：不注入，backend 走默认探测命中内置目录
+ * 模型唯一来源是用户模型记录（spec 03 PC-15），backend 的 `resolveModelPackagesRoot` 已不再
+ * 探测仓库/安装包目录，因此这里也不再自动指向任何仓库内包目录：dev 与打包态行为一致，
+ * 都不注入。唯一保留的是开发者显式设置 `IART_MODEL_ASSET_PACKAGES_DIR` 的场景（模型包构建工具、
+ * 依赖真实夹具的排查），该值原样透传。
+ *
+ * 待「模型能力包」子系统整体删除时，本函数与其调用点一并退场。
  *
  * `isPackaged` 作为参数注入（来自 `app.isPackaged`），使该决策函数可在脱离 Electron 运行时的单测中验证。
  */
@@ -64,29 +64,15 @@ export const injectModelAssetPackagesDir = (
   env: DesktopEnv,
   isPackaged: boolean,
 ): void => {
-  // 优先级 0a：开发者手动设置的 env 不被覆盖
-  if (env.IART_MODEL_ASSET_PACKAGES_DIR !== undefined) {
-    appendUpdaterLog("debug", "model-asset: dev env override wins, skip injecting packages dir", {
-      envValue: env.IART_MODEL_ASSET_PACKAGES_DIR,
+  if (env.IART_MODEL_ASSET_PACKAGES_DIR === undefined) {
+    appendUpdaterLog("debug", "model-asset: packages dir not injected (model source is user records)", {
+      isPackaged,
     });
     return;
   }
-
-  // 优先级 0b：dev 模式自动指向仓库 .model-assets/packages，
-  // 避免开发态依赖打包态内置目录。
-  if (!isPackaged) {
-    const repoPackagesDir = path.join(ROOT_DIR, ".model-assets", "packages");
-    if (fs.existsSync(repoPackagesDir)) {
-      env.IART_MODEL_ASSET_PACKAGES_DIR = repoPackagesDir;
-      appendUpdaterLog("info", "model-asset: dev mode, using repo packages dir", {
-        repoPackagesDir,
-      });
-      return;
-    }
-    appendUpdaterLog("warn", "model-asset: dev mode but repo packages dir missing, will probe default", {
-      repoPackagesDir,
-    });
-  }
+  appendUpdaterLog("debug", "model-asset: explicit packages dir kept", {
+    envValue: env.IART_MODEL_ASSET_PACKAGES_DIR,
+  });
 };
 
 /**

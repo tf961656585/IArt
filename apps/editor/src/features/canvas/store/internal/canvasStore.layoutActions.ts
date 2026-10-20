@@ -2,9 +2,10 @@ import { computeAutoLayout } from '../../layout/autoLayout';
 import type { AutoLayoutResult } from '../../layout/autoLayoutTypes';
 import { applyLayoutInputOrder } from '../../layout/layoutPrimitives';
 import { bboxTopLeft } from '../../layout/containerArrangement';
+import { resolveContainerOverlaps } from '../../layout/containerOverlap';
 import type { EffectiveSizeSources } from '../../utils/effectiveSize';
 import { DEFAULT_NODE_SIZE, resolveEffectiveSizeByNodeId } from '../../utils/effectiveSize';
-import { buildNodeOccupancyRects } from '../../utils/nodeOccupancy';
+import { buildNodeOccupancyRects, buildCanvasSizeSources } from '../../utils/nodeOccupancy';
 import {
   searchFreeBlockPosition,
   type PlacementCell,
@@ -141,7 +142,7 @@ const waitForMeasuredConvergence = async (
 export const createCanvasLayoutActions = (
   set: CanvasStoreSet,
   get: CanvasStoreGet,
-): Pick<NodeGraphActions, 'autoLayout' | 'autoLayoutWithPreMeasure'> => {
+): Pick<NodeGraphActions, 'autoLayout' | 'autoLayoutWithPreMeasure' | 'layoutContainers'> => {
   /**
    * 执行全局整理核心逻辑（不含预挂载测量编排）。
    * 异步：ELK 布局引擎是异步的。
@@ -340,6 +341,67 @@ export const createCanvasLayoutActions = (
           state.ui.preLayoutMeasuring = false;
         });
       }
+    },
+
+    layoutContainers: async () => {
+      const { nodeGraph } = get();
+      if (nodeGraph === null) return null;
+
+      const sizeSources = buildCanvasSizeSources(get());
+      const snapGrid = normalizeNodeGraphSettings(nodeGraph.settings).snapGrid;
+      // 只把最外层容器当整体：组；无宿主组的独立 Agent 容器。组内 Agent 容器随宿主组移动。
+      const topLevelContainerIds = nodeGraph.nodes
+        .filter(
+          (node) =>
+            isContainerNode(node) &&
+            !(typeof node.groupId === 'string' && node.groupId.length > 0),
+        )
+        .map((node) => node.id);
+
+      const relocations = resolveContainerOverlaps({
+        nodes: nodeGraph.nodes,
+        sizeSources,
+        snapGrid,
+        containerIds: topLevelContainerIds,
+      });
+      if (relocations.length === 0) {
+        return { positions: {}, changedCount: 0 };
+      }
+
+      const nodeById = new Map(nodeGraph.nodes.map((node) => [node.id, node] as const));
+      const moves: Array<{ id: string; position: NodePosition }> = [];
+      const positions: Record<string, NodePosition> = {};
+      for (const relocation of relocations) {
+        for (const memberId of relocation.memberIds) {
+          const member = nodeById.get(memberId);
+          if (member === undefined) continue;
+          const next = {
+            x: member.position.x + relocation.delta.x,
+            y: member.position.y + relocation.delta.y,
+          };
+          moves.push({ id: memberId, position: next });
+          positions[memberId] = next;
+        }
+        moves.push({
+          id: relocation.containerId,
+          position: relocation.containerTargetPosition,
+        });
+        positions[relocation.containerId] = relocation.containerTargetPosition;
+      }
+
+      // 单次批量位置写入 = 单条原子历史；展开态容器 position 由成员派生重算。
+      get().updateNodePositionsBatch(moves);
+
+      const graphAfter = get().nodeGraph;
+      if (graphAfter !== null) {
+        for (const nodeId of Object.keys(positions)) {
+          const node = graphAfter.nodes.find((candidate) => candidate.id === nodeId);
+          if (node !== undefined) {
+            positions[nodeId] = { x: node.position.x, y: node.position.y };
+          }
+        }
+      }
+      return { positions, changedCount: moves.length };
     },
   };
 };

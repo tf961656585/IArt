@@ -7,9 +7,12 @@ import { useHubStore } from '../../client/store/hub-store';
 /**
  * 首次指引欢迎面（docs/hub/首次指引-design.md §3/§4，2026-09-24 拍板方案 A）。
  *
- * 触发判定（§4.2）：零服务商且零模型 && 未看过指引 && 判定请求全部成功。
- * - 配置状态消费既有事实源（GET /api/provider-connections、GET /api/model-deployments），
- *   不自建第二套判定（IA §9.1）；任一请求失败不显示（宁缺勿误，对齐 unknown 不误报口径）。
+ * 触发判定（§4.2）：零服务商 && 未看过指引 && 判定请求全部成功。
+ * - 配置状态消费既有事实源（GET /api/provider-connections），不自建第二套判定（IA §9.1）；
+ *   任一请求失败不显示（宁缺勿误，对齐 unknown 不误报口径）。
+ * - 2026-10-19 起判据由「零服务商且零模型」改为「零服务商」：模型必须归属某条服务商连接
+ *   （没有连接就不可能有模型），第二个条件恒真、只是把一次请求白算进触发判定；而部署载体
+ *   退场后「零模型」也没有独立数据源可查了。
  * - 「已看过」记忆走 GET/PUT /api/onboarding-state（config/onboarding-state.json，
  *   独立小文件）；点「以后再说」/关闭写标记，本会话立即消失、之后启动不再出现。
  * - 帮助中心「重新查看首次指引」走 replayRequest 通道：仅当次重开，不反转已看标记。
@@ -30,7 +33,7 @@ const GUIDE_STEPS: readonly GuideStepsData[] = [
   },
   {
     title: '添加模型',
-    desc: '在这个服务商的详情里点「添加模型」，软件自带的直接勾选；软件没有的，切到「自定义接口的模型」自己定义。',
+    desc: '在这个服务商的详情里点「添加模型」，填上模型 ID 和接口类型就行。',
   },
   {
     title: '回画布创作',
@@ -59,21 +62,19 @@ export function FirstRunGuide() {
     const controller = new AbortController();
 
     const evaluate = async (): Promise<void> => {
-      // 三路并行：配置状态两条既有端点 + 已看标记。
-      const [connectionsResult, deploymentsResult, onboardingResult] = await Promise.allSettled([
+      // 两路并行：配置状态一条既有端点 + 已看标记。
+      const [connectionsResult, onboardingResult] = await Promise.allSettled([
         api.listProviderConnections(controller.signal),
-        api.listModelDeployments(undefined, controller.signal),
         api.getOnboardingState(controller.signal),
       ]);
       if (cancelled) return;
       // 任一判定信号不可得 → 不显示（宁缺勿误；对齐「unknown 不误报未就绪」口径）。
-      if (connectionsResult.status !== 'fulfilled' || deploymentsResult.status !== 'fulfilled' || onboardingResult.status !== 'fulfilled') {
+      if (connectionsResult.status !== 'fulfilled' || onboardingResult.status !== 'fulfilled') {
         return;
       }
       const noConnections = connectionsResult.value.connections.length === 0;
-      const noDeployments = deploymentsResult.value.deployments.length === 0;
       const notDismissed = onboardingResult.value.state.guideDismissed === false;
-      if (noConnections && noDeployments && notDismissed) {
+      if (noConnections && notDismissed) {
         setOpen(true);
       }
     };

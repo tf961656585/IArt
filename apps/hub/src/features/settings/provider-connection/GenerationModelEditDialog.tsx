@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import {
   Button,
-  Checkbox,
   Dialog,
   DialogContent,
   DialogFooter,
@@ -11,19 +10,29 @@ import {
 import type {
   CustomGenerationModel,
   FamilyTemplateParameterDescriptor,
+  GenerationMediaSlotId,
   ParameterOverrides,
 } from '@iart/contracts';
+import { ADAPTER_REGISTRY } from '@iart/contracts';
+import {
+  effectiveMediaSlots,
+  GenerationMediaSlotChecklist,
+  useGenerationMediaSlots,
+} from './GenerationMediaSlotFields';
 import {
   GenerationOverridesSection,
   useGenerationOverridesSection,
 } from './GenerationOverridesSection';
 
 /**
- * 修改一个已声明的生成模型（docs/custom-providers/生成模型参数高级自定义-design.md §3.4）。
+ * 修改一个已添加的生成模型（docs/custom-providers/生成模型参数高级自定义-design.md §3.4）。
  *
- * 弹层 = 参数编辑器 + 「支持参考图」开关：能改的就是 UpdateBody 承载的两样——参考图支持
- * 与参数覆盖（出现即整体替换）。编辑器初始值回填声明的现有覆盖；没展开高级区就保存时，
- * 覆盖原样写回，行为等于只改了参考图开关。
+ * 弹层 = 参数编辑器 + 素材位逐项勾选：能改的就是 UpdateBody 承载的两样——素材位清单与
+ * 参数覆盖（出现即整体替换）。编辑器初始值回填记录的现有覆盖；没展开高级区就保存时，
+ * 覆盖原样写回。
+ *
+ * **接口类型只读**：`family_adapter_id` 创建后不可变（契约如此，换族等于换一个模型），
+ * 所以这里不给下拉，只按该族的族能力渲染素材位勾选——能改的只有「这个模型接受其中哪些」。
  *
  * 入口长在服务商详情里该模型自己的行上（记录即接入，记录在哪一行就在哪个服务商详情里）；
  * 模型 ID 是身份不提供改名（改名等于换一个模型，已建引用会指向不存在的模型），只读展示。
@@ -40,7 +49,8 @@ const advancedBlockedHint = (advancedOpen: boolean): string =>
     : '高级参数还有没改好的地方，展开「高级参数自定义」按红字提示改。';
 
 export type GenerationModelEditPayload = {
-  supportsReferenceImage: boolean;
+  /** 整体替换：该模型接受的素材位清单（按该族能力逐项勾选的结果） */
+  acceptedMediaSlots: GenerationMediaSlotId[];
   /** 出现即整体替换（UpdateBody 契约口径）；保存未改动的覆盖等于原样写回 */
   parameterOverrides: ParameterOverrides;
 };
@@ -53,7 +63,7 @@ export function GenerationModelEditDialog({
   onSubmit,
 }: {
   entry: CustomGenerationModel;
-  /** 拉取族模板参数描述（展开「高级参数自定义」时调用；由调用方注入，弹层自己不碰网络） */
+  /** 拉取族模板参数描述（素材位与「高级参数自定义」共用一次装载；由调用方注入，弹层自己不碰网络） */
   loadParameterTemplate: () => Promise<FamilyTemplateParameterDescriptor>;
   /**
    * 上一次写入的失败原因，显示在表单底部。
@@ -66,7 +76,13 @@ export function GenerationModelEditDialog({
   onSubmit: (payload: GenerationModelEditPayload) => Promise<boolean>;
   onClose: () => void;
 }) {
-  const [supportsReferenceImage, setSupportsReferenceImage] = useState(entry.supports_reference_image);
+  // 接口类型只读：族能力按记录自带的 family_adapter_id 拉取，回填记录里已勾的素材位
+  const mediaSlots = useGenerationMediaSlots({
+    familyAdapterId: entry.family_adapter_id,
+    familyDisplayName: ADAPTER_REGISTRY[entry.family_adapter_id].display_name,
+    loadDescriptor: () => loadParameterTemplate(),
+    initialSelected: entry.accepted_media_slots,
+  });
   const [busy, setBusy] = useState(false);
   const overrides = useGenerationOverridesSection(loadParameterTemplate, entry.parameter_overrides);
   /** 提交被参数提示拦过一次：提示要留在弹层里，改好一处就撤掉 */
@@ -74,6 +90,8 @@ export function GenerationModelEditDialog({
 
   const submit = (): void => {
     if (busy) return;
+    // 素材位还没读到（loading/failed）时保存等于猜一份清单，拦在提交前
+    if (mediaSlots.blocked) return;
     // 客户端可判定的必然失败提交前拦下；拦不住的剩余理由由后端拒绝并原样透进弹层
     if (overrides.issues.length > 0) {
       setAdvancedBlocked(true);
@@ -82,7 +100,7 @@ export function GenerationModelEditDialog({
     setAdvancedBlocked(false);
     setBusy(true);
     void onSubmit({
-      supportsReferenceImage,
+      acceptedMediaSlots: effectiveMediaSlots(mediaSlots),
       parameterOverrides: overrides.value,
     })
       .then((saved) => {
@@ -104,15 +122,15 @@ export function GenerationModelEditDialog({
             <span className="break-all text-xs text-muted-foreground">{entry.model_id}</span>
           </div>
 
-          <label htmlFor="generation-edit-supports-reference-image" className="flex cursor-pointer items-center gap-2 text-xs">
-            <Checkbox
-              id="generation-edit-supports-reference-image"
-              checked={supportsReferenceImage}
-              onCheckedChange={(checked) => setSupportsReferenceImage(checked === true)}
-              aria-label="支持参考图"
-            />
-            <span>支持参考图</span>
-          </label>
+          {/* 接口类型创建后不可变：只读出展示名，不给下拉（换族等于换一个模型） */}
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium">接口类型</span>
+            <span className="text-xs text-muted-foreground">
+              {ADAPTER_REGISTRY[entry.family_adapter_id].display_name}
+            </span>
+          </div>
+
+          <GenerationMediaSlotChecklist state={mediaSlots} />
 
           <GenerationOverridesSection state={overrides} />
 
@@ -126,7 +144,7 @@ export function GenerationModelEditDialog({
 
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={onClose}>取消</Button>
-          <Button type="button" disabled={busy} onClick={submit}>
+          <Button type="button" disabled={busy || mediaSlots.blocked} onClick={submit}>
             保存
           </Button>
         </DialogFooter>

@@ -1,279 +1,246 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
 import test from "node:test";
 
 import { derivePortDataTypeFromComponent } from "@iart/contracts/model-asset-contract/port-data-type-mapping";
-import { resetBackendConfigForTest } from "../local-server/config-store.cts";
-import { loadModelPackageCatalog } from "../local-server/model-package-catalog.cts";
+import { GENERATION_FAMILY_TEMPLATE_REGISTRY } from "../local-server/generation-family-templates.registry.cts";
+import { isObjectRecord } from "../local-server/model-package-catalog.shared.cts";
+import {
+  projectAllReadyFamilies,
+  projectFamilyTemplate,
+  type ProjectedFamilyTemplate,
+} from "../local-server/__tests__/family-template-projection-test-helpers";
 
-// 公共中转端点是运行时用户配置事实（用户自带语义，spec
-// docs/runtime/public-relay-capability.md）：测试自置占位端点并重载后端配置单例，
-// 保证测试不依赖开发机 .env / 本机 backend.json（干净环境与 CI 同样成立）。
-process.env["IART_PUBLIC_UPLOAD_CLOUDFLARE_IMAGE_PUBLIC_URL_ENDPOINT"] = "https://relay.example.com/upload";
-process.env["IART_PUBLIC_UPLOAD_SELF_HOSTED_IMAGE_PUBLIC_URL_ENDPOINT"] = "https://image-relay.example.com/api/upload";
-resetBackendConfigForTest();
-
-interface LegacyPortRaw {
-  id: string | undefined;
-  data_type: string | undefined;
-  field_key: string | undefined;
-}
+/**
+ * 端口推导等价性：`node_definition.input_ports` 与 `parameter_schema` 推导结果必须一致。
+ *
+ * 两条路径并存是历史事实——族的 `input_ports` 由模板逐位显式声明（多数族），而
+ * `data_source` 为 `connection`/`both` 的字段还会再推导出一份端口。投影管线把两者合并，
+ * 本用例钉住合并语义：
+ *
+ * 1. **覆盖**：显式 `input_ports` 的每个 `field_key` 都必须在投影端口里出现（模板写了端口
+ *    却因字段缺失被静默丢掉，等于创作面少一个可接入位）；
+ * 2. **上界**：投影端口数恰好等于 `显式集合 ∪ 可推导集合`（不许多推、也不许少推）；
+ * 3. **推导规则**：走推导路径的端口，`data_type` / `required` / `multiple` / `id` 逐项符合
+ *    `derivePortDataTypeFromComponent` 与字段声明。
+ *
+ * 2026-10-20 起样本来源由磁盘上的真实包改为**族模板产出的 sources**（模型能力包退场）：
+ * 投影管线本身保留且仍是模型进目录的唯一通道，样本换成它现在的真实输入。
+ */
 
 interface RuntimeFieldRaw {
-  field_key: string | undefined;
+  field_key: string;
   data_source: string | undefined;
   component: string | undefined;
   required: boolean | undefined;
-  maxFiles: number | undefined;
+  max_files: number | undefined;
 }
 
-const isString = (value: unknown): value is string => typeof value === "string";
-const isBoolean = (value: unknown): value is boolean =>
-  typeof value === "boolean";
-const isFiniteNumber = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value);
-
-const toLegacyPort = (raw: unknown): LegacyPortRaw | undefined => {
-  if (raw === null || raw === undefined || typeof raw !== "object") {
-    return undefined;
-  }
-  const record = raw as Record<string, unknown>;
-  return {
-    id: isString(record["id"]) ? record["id"] : undefined,
-    data_type: isString(record["data_type"]) ? record["data_type"] : undefined,
-    field_key: isString(record["field_key"]) ? record["field_key"] : undefined,
-  };
-};
-
 const toRuntimeField = (raw: unknown): RuntimeFieldRaw | undefined => {
-  if (raw === null || raw === undefined || typeof raw !== "object") {
-    return undefined;
-  }
-  const record = raw as Record<string, unknown>;
-  const componentProps =
-    record["component_props"] !== undefined &&
-    record["component_props"] !== null &&
-    typeof record["component_props"] === "object"
-      ? (record["component_props"] as Record<string, unknown>)
-      : undefined;
-  const maxFiles =
-    componentProps !== undefined && isFiniteNumber(componentProps["maxFiles"])
-      ? componentProps["maxFiles"]
-      : undefined;
+  if (!isObjectRecord(raw)) return undefined;
+  const fieldKey = raw["field_key"];
+  if (typeof fieldKey !== "string" || fieldKey.length === 0) return undefined;
+  const componentProps = isObjectRecord(raw["component_props"])
+    ? raw["component_props"]
+    : undefined;
+  const maxFiles = componentProps?.["maxFiles"];
   return {
-    field_key: isString(record["field_key"]) ? record["field_key"] : undefined,
-    data_source: isString(record["data_source"])
-      ? record["data_source"]
-      : undefined,
-    component: isString(record["component"]) ? record["component"] : undefined,
-    required: isBoolean(record["required"]) ? record["required"] : undefined,
-    maxFiles,
+    field_key: fieldKey,
+    data_source:
+      typeof raw["data_source"] === "string" ? raw["data_source"] : undefined,
+    component: typeof raw["component"] === "string" ? raw["component"] : undefined,
+    required: typeof raw["required"] === "boolean" ? raw["required"] : undefined,
+    max_files:
+      typeof maxFiles === "number" && Number.isFinite(maxFiles)
+        ? maxFiles
+        : undefined,
   };
 };
 
-const findRepoRoot = (start: string): string => {
-  let current = start;
-  for (let i = 0; i < 8; i += 1) {
-    if (fs.existsSync(path.join(current, "pnpm-workspace.yaml"))) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    current = parent;
+/** 读模板 sources 里显式声明的输入端口 field_key（未经投影的原始声明）。 */
+const declaredInputPortFieldKeys = (sources: {
+  node: Record<string, unknown>;
+}): Set<string> => {
+  const ports = sources.node["input_ports"];
+  const keys = new Set<string>();
+  if (!Array.isArray(ports)) return keys;
+  for (const port of ports) {
+    if (!isObjectRecord(port)) continue;
+    const fieldKey = port["field_key"];
+    if (typeof fieldKey === "string" && fieldKey.length > 0) keys.add(fieldKey);
   }
-  throw new Error(`unable_to_locate_repo_root_from:${start}`);
+  return keys;
 };
 
-void test("逐包验证：45 个模型包推导后的 input_ports 与推导规则一致，且覆盖旧 field_key 集合", () => {
-  const repoRoot = findRepoRoot(__dirname);
-  const packageRoot = path.join(repoRoot, ".model-assets", "packages");
-  assert.ok(
-    fs.existsSync(packageRoot),
-    `packages_root_missing:${packageRoot}`,
+/** 读模板 sources 里 `parameter_schema.fields`（收窄为可判字段）。 */
+const runtimeFieldsOf = (sources: { runtimeModel: Record<string, unknown> }): RuntimeFieldRaw[] => {
+  const schema = sources.runtimeModel["parameter_schema"];
+  if (!isObjectRecord(schema)) return [];
+  const fields = schema["fields"];
+  if (!Array.isArray(fields)) return [];
+  const result: RuntimeFieldRaw[] = [];
+  for (const field of fields) {
+    const normalized = toRuntimeField(field);
+    if (normalized !== undefined) result.push(normalized);
+  }
+  return result;
+};
+
+/**
+ * 逐族核对一份投影的端口推导等价性。
+ *
+ * `declaredKeys` / `runtimeFields` 取自**模板 sources**（投影前的原始声明），投影取自管线，
+ * 两侧对照才有意义——拿投影同时当输入与期望会退化成恒真。
+ */
+const assertPortDerivationParity = ({
+  familyAdapterId,
+  projected,
+  declaredKeys,
+  runtimeFields,
+}: {
+  familyAdapterId: string;
+  projected: ProjectedFamilyTemplate;
+  declaredKeys: ReadonlySet<string>;
+  runtimeFields: RuntimeFieldRaw[];
+}): void => {
+  const { projection } = projected;
+  const modelId = projection.model_id;
+  const fieldByKey = new Map(runtimeFields.map((field) => [field.field_key, field]));
+  const derivedKeys = new Set(
+    runtimeFields
+      .filter(
+        (field) =>
+          field.data_source === "connection" || field.data_source === "both",
+      )
+      .map((field) => field.field_key),
   );
 
-  const previous = process.env["IART_MODEL_ASSET_PACKAGES_DIR"];
-  process.env["IART_MODEL_ASSET_PACKAGES_DIR"] = packageRoot;
-  try {
-    const catalog = loadModelPackageCatalog({ baseDir: repoRoot });
-    assert.equal(
-      catalog.diagnostics.length,
-      0,
-      `unexpected diagnostics: ${JSON.stringify(catalog.diagnostics)}`,
+  const projectionFieldKeys = new Set(
+    projection.ports.inputs.map((port) => port.field_key),
+  );
+
+  // 1. 覆盖：显式声明的每个 field_key 都必须在投影结果里
+  for (const declaredKey of declaredKeys) {
+    assert.ok(
+      projectionFieldKeys.has(declaredKey),
+      `declared_input_port_missing_in_projection:${familyAdapterId}:${declaredKey}`,
     );
+  }
 
-    const packageDirs = fs
-      .readdirSync(packageRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort();
+  // 2. 上界：投影端口集合 = 显式集合 ∪ 可推导集合
+  const expectedKeys = new Set<string>(declaredKeys);
+  for (const key of derivedKeys) expectedKeys.add(key);
+  assert.equal(
+    projection.ports.inputs.length,
+    expectedKeys.size,
+    `port_count_mismatch:${familyAdapterId}:${modelId} actual=${String(projection.ports.inputs.length)} expected=${String(expectedKeys.size)}`,
+  );
 
-    // variant 聚合后，变体包不再有独立顶层 projection，而是通过 variantModelToMain
-    // 反向索引解析到组壳投影。因此不再断言 projections.length === packageDirs.length，
-    // 而是断言每个包目录都能解析到投影（顶层或变体组反向索引）。
-    const resolveProjectionForPackage = (packageId: string) => {
-      const direct = catalog.projections.find((p) => p.package_id === packageId);
-      if (direct !== undefined) return direct;
-      const variantEntry = catalog.variantModelToMain.get(packageId);
-      if (variantEntry !== undefined) return variantEntry.projection;
-      return undefined;
-    };
-
-    let comparedPackages = 0;
-    for (const packageId of packageDirs) {
-      const projection = resolveProjectionForPackage(packageId);
-      assert.ok(
-        projection !== undefined,
-        `projection_missing:${packageId}`,
-      );
-
-      const manifestPath = path.join(packageRoot, packageId, "manifest.json");
-      const manifestRaw = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
-        node_definition: { relative_path: string };
-        entry_model: { relative_path: string };
-      };
-      const nodeDefPath = path.join(
-        packageRoot,
-        packageId,
-        manifestRaw.node_definition.relative_path,
-      );
-      const nodeDefRaw = JSON.parse(
-        fs.readFileSync(nodeDefPath, "utf-8"),
-      ) as { input_ports: unknown[] };
-      const legacyPortsRaw = Array.isArray(nodeDefRaw.input_ports)
-        ? nodeDefRaw.input_ports
-        : [];
-      const legacyPorts = legacyPortsRaw
-        .map(toLegacyPort)
-        .filter((port): port is LegacyPortRaw => port !== undefined);
-      const legacyFieldKeys = new Set(
-        legacyPorts
-          .map((p) => p.field_key)
-          .filter((key): key is string => key !== undefined),
-      );
-
-      const runtimePath = path.join(
-        packageRoot,
-        packageId,
-        manifestRaw.entry_model.relative_path,
-      );
-      const runtimeRaw = JSON.parse(
-        fs.readFileSync(runtimePath, "utf-8"),
-      ) as { parameter_schema: { fields: unknown[] } | undefined };
-      const runtimeFields = Array.isArray(
-        runtimeRaw.parameter_schema !== undefined
-          ? runtimeRaw.parameter_schema.fields
-          : undefined,
-      )
-        ? (runtimeRaw.parameter_schema as { fields: unknown[] }).fields
-            .map(toRuntimeField)
-            .filter((f): f is RuntimeFieldRaw => f !== undefined)
-        : [];
-
-      const fieldByKey = new Map<string, RuntimeFieldRaw>();
-      for (const field of runtimeFields) {
-        if (field.field_key !== undefined) {
-          fieldByKey.set(field.field_key, field);
-        }
-      }
-      const derivedFieldKeys = new Set(
-        runtimeFields
-          .filter(
-            (f) =>
-              f.field_key !== undefined &&
-              (f.data_source === "connection" || f.data_source === "both"),
-          )
-          .map((f) => {
-            const key = f.field_key;
-            if (key === undefined) {
-              throw new Error("unreachable_field_key_undefined");
-            }
-            return key;
-          }),
-      );
-
-      const projectionPorts = projection.ports.inputs;
-      const projectionFieldKeys = new Set(
-        projectionPorts.map((p) => p.field_key),
-      );
-
-      // 1. 覆盖旧 field_key 集合：旧 input_ports 的每个 field_key 都必须在推导结果中
-      for (const legacyKey of legacyFieldKeys) {
-        assert.ok(
-          projectionFieldKeys.has(legacyKey),
-          `legacy_field_key_missing_in_projection:${packageId}:${legacyKey}`,
-        );
-      }
-
-      // 2. 推导端口集合不超过 (legacy ∪ data_source 字段)；同时也必须包含 data_source 集合
-      const expectedKeys = new Set<string>(legacyFieldKeys);
-      for (const key of derivedFieldKeys) {
-        expectedKeys.add(key);
-      }
-      assert.equal(
-        projectionPorts.length,
-        expectedKeys.size,
-        `port_count_mismatch:${packageId} actual=${projectionPorts.length} expected=${expectedKeys.size}`,
-      );
-      for (const key of derivedFieldKeys) {
-        assert.ok(
-          projectionFieldKeys.has(key),
-          `data_source_field_missing_in_projection:${packageId}:${key}`,
-        );
-      }
-
-      // 3. 对 data_source 推导路径的端口：data_type / required / multiple / id 应来自推导规则
-      for (const port of projectionPorts) {
-        if (!derivedFieldKeys.has(port.field_key)) {
-          // 走 legacy 兼容路径的端口，跳过推导规则断言
-          continue;
-        }
-        const field = fieldByKey.get(port.field_key);
-        assert.ok(
-          field !== undefined,
-          `derived_port_field_missing:${packageId}:${port.field_key}`,
-        );
-        if (field.component !== undefined) {
-          const expectedType = derivePortDataTypeFromComponent(field.component);
-          assert.equal(
-            port.data_type,
-            expectedType,
-            `derived_data_type_mismatch:${packageId}:${port.field_key} expected=${expectedType} actual=${port.data_type}`,
-          );
-        }
-        const expectedRequired = field.required === true;
-        assert.equal(
-          port.required,
-          expectedRequired,
-          `derived_required_mismatch:${packageId}:${port.field_key} expected=${String(expectedRequired)} actual=${String(port.required)}`,
-        );
-        const expectedMultiple =
-          field.maxFiles !== undefined && field.maxFiles > 1;
-        assert.equal(
-          port.multiple,
-          expectedMultiple,
-          `derived_multiple_mismatch:${packageId}:${port.field_key} expected=${String(expectedMultiple)} actual=${String(port.multiple)}`,
-        );
-        assert.equal(
-          port.id,
-          port.field_key,
-          `derived_port_id_should_equal_field_key:${packageId}:${port.field_key} actual=${port.id}`,
-        );
-      }
-      comparedPackages += 1;
+  // 3. 推导规则：走推导路径的端口逐项符合字段声明
+  for (const port of projection.ports.inputs) {
+    if (!derivedKeys.has(port.field_key)) {
+      // 走显式声明路径的端口，跳过推导规则断言
+      continue;
     }
-
-    assert.equal(
-      comparedPackages,
-      packageDirs.length,
-      `not_all_packages_compared: ${comparedPackages} vs ${packageDirs.length}`,
+    const field = fieldByKey.get(port.field_key);
+    assert.ok(
+      field !== undefined,
+      `derived_port_field_missing:${familyAdapterId}:${port.field_key}`,
     );
-  } finally {
-    if (previous === undefined) {
-      delete process.env["IART_MODEL_ASSET_PACKAGES_DIR"];
-    } else {
-      process.env["IART_MODEL_ASSET_PACKAGES_DIR"] = previous;
+    if (field.component !== undefined) {
+      assert.equal(
+        port.data_type,
+        derivePortDataTypeFromComponent(field.component),
+        `derived_data_type_mismatch:${familyAdapterId}:${port.field_key}`,
+      );
+    }
+    assert.equal(
+      port.required,
+      field.required === true,
+      `derived_required_mismatch:${familyAdapterId}:${port.field_key}`,
+    );
+    assert.equal(
+      port.multiple,
+      field.max_files !== undefined && field.max_files > 1,
+      `derived_multiple_mismatch:${familyAdapterId}:${port.field_key}`,
+    );
+    assert.equal(
+      port.id,
+      port.field_key,
+      `derived_port_id_should_equal_field_key:${familyAdapterId}:${port.field_key}`,
+    );
+  }
+};
+
+void test("逐族验证：族模板产出的 input_ports 与推导规则一致，且覆盖显式声明集合", () => {
+  const registry = GENERATION_FAMILY_TEMPLATE_REGISTRY;
+  let comparedFamilies = 0;
+  // 「有素材位字段」的族计数：这些族的端口集合非空，推导语义才真正被检查到。
+  let familiesWithPorts = 0;
+
+  for (const [familyAdapterId, entry] of Object.entries(registry)) {
+    if (entry.status !== "ready") continue;
+
+    // 每族各跑两种形态：不接受任何素材位（空端口侧）与接受全部素材位（满端口侧）。
+    // 只跑满形态会漏掉「模板无条件声明端口、但素材位不该有」这类错误。
+    for (const acceptedMediaSlots of [[], entry.supportsMediaSlots]) {
+      const sources = entry.buildBaseSources(`declared-${familyAdapterId}-parity`, {
+        acceptedMediaSlots,
+      });
+      const projected = projectFamilyTemplate({
+        familyAdapterId,
+        buildBaseSources: entry.buildBaseSources,
+        supportsMediaSlots: entry.supportsMediaSlots,
+        acceptedMediaSlots,
+      });
+      assertPortDerivationParity({
+        familyAdapterId,
+        projected,
+        declaredKeys: declaredInputPortFieldKeys(sources),
+        runtimeFields: runtimeFieldsOf(sources),
+      });
+      comparedFamilies += 1;
+      if (projected.projection.ports.inputs.length > 0) familiesWithPorts += 1;
+    }
+  }
+
+  assert.ok(comparedFamilies > 0, "至少要有 1 个 ready 族参与端口等价性核对");
+  // 全族都没有输入端口时，「覆盖显式声明集合」退化成空集合恒真——必须至少有一次非空。
+  assert.ok(
+    familiesWithPorts > 0,
+    "至少要有 1 个族产出非空输入端口（否则端口等价性没有被真正检查）",
+  );
+});
+
+void test("全部 ready 族逐族投影：端口推导等价性全族覆盖", () => {
+  const projected = projectAllReadyFamilies(GENERATION_FAMILY_TEMPLATE_REGISTRY);
+  assert.equal(
+    projected.size,
+    Object.values(GENERATION_FAMILY_TEMPLATE_REGISTRY).filter(
+      (entry) => entry.status === "ready",
+    ).length,
+    "投影结果必须覆盖全部 ready 族",
+  );
+  for (const [familyAdapterId, built] of projected) {
+    assert.equal(
+      built.packageId,
+      `declared-${familyAdapterId}`,
+      "虚拟包身份必须按族派生（本地化命名空间不撞车）",
+    );
+    assert.equal(
+      built.localizationBundle.namespace,
+      `model-asset/${built.packageId}`,
+      "本地化命名空间必须与虚拟包身份同源",
+    );
+    // 每个投影端口都必须能在参数表单里找到同名 field_key（投影管线的一致性校验已强制，
+    // 这里再钉一次是因为端口是创作面可接入位的唯一来源）。
+    const fieldKeys = new Set(
+      built.projection.parameter_schema.fields.map((field) => field.field_key),
+    );
+    for (const port of built.projection.ports.inputs) {
+      assert.ok(
+        fieldKeys.has(port.field_key),
+        `port_field_key_not_in_parameter_schema:${familyAdapterId}:${port.field_key}`,
+      );
     }
   }
 });

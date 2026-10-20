@@ -560,6 +560,12 @@ const executeCanvasLayout = async (
   // --order 去重保序（首次出现为准）；空数组视为未指定
   const orderIds = [...new Set(command.order ?? [])];
 
+  if (command.scope === 'containers') {
+    if (command.columns !== undefined || orderIds.length > 0) return buildErrorResponse('canvas.layout', requestId, 'command_rejected', 'scope=containers 不支持 --columns/--order：容器按整组平移，不重排成员。');
+    const result = await store.layoutContainers();
+    return result === null ? buildErrorResponse('canvas.layout', requestId, 'command_rejected', '无法整理组间布局，请稍后重试。') : readFinalPositions(requestId, Object.keys(result.positions));
+  }
+
   if (command.scope === 'all') {
     // columns 语义对齐（spec §5.3「均映射列数语义」/ CLI-032）：scope=all 与 group 同语义，
     // --columns 透传给布局引擎（缺省单列，默认行为不变）。

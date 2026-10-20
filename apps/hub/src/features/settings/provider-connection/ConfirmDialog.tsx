@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Button, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@iart/ui';
 
 /**
- * Provider/Deployment 管理专用确认弹窗（危险操作二次确认）。
+ * 服务商与模型管理专用确认弹窗（危险操作二次确认）。
  * 复用 @iart/ui Dialog，替换 Electron renderer 不支持的 window.confirm。
  * 父层经 onResolve 收到用户决定：true=确认 / false=取消（ESC/关闭按钮视为取消）。
  */

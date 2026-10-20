@@ -17,7 +17,7 @@ export interface SettingsSectionProps {
   description?: string;
   /** 右上角操作槽（如刷新按钮） */
   action?: ReactNode;
-  /** 启用可折叠能力（低频高级配置子单元使用，如 ModelDeployment） */
+  /** 启用可折叠能力（低频高级配置子单元使用，如生成模型的参数覆盖） */
   collapsible?: boolean;
   /** 可折叠时的初始展开态（默认 true） */
   defaultOpen?: boolean;

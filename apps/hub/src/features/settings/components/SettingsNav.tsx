@@ -2,11 +2,14 @@ import { CloudUpload, Globe, Palette, RefreshCw, Server, SlidersHorizontal, Term
 import { Button, cn } from '@iart/ui';
 
 /**
- * 设置页左侧锚点导航（spec docs/hub/hub-information-architecture.md §5.2）。
- * 列出全部两个一级分区的子单元（通用 6 + 服务商与模型 1），
- * 按分区分组、spec §5.1/§7.2 顺序排列。点击滚动定位由 SettingsTab 的 onSelect 处理，
- * 激活态由 SettingsTab 的 IntersectionObserver 反向同步。
- * 视觉与 Hub 主侧边栏同源（spec §5.2：ghost 按钮 + 选中态令牌 + 图标色）。
+ * 设置页左侧分区导航（spec docs/hub/hub-information-architecture.md §5.2）。
+ *
+ * 一个导航项 = 一个页面：点击后右侧只渲染该子单元，不再把全部子单元串成一条长滚动。
+ * 激活态由「当前显示的是哪个分区」直接决定（SettingsTab 的 sectionId），不由滚动位置推断——
+ * 滚动推断会让导航说谎（高亮项与屏幕上占多数的分区可以不一致）。
+ *
+ * 列出全部两个一级分区的子单元（通用 6 + 服务商与模型 1），按 spec §5.1/§7.2 顺序排列，
+ * 按分区分组。视觉与 Hub 主侧边栏同源（spec §5.2：ghost 按钮 + 选中态令牌 + 图标色）。
  */
 
 export interface SettingsNavItem {
@@ -20,7 +23,7 @@ export interface SettingsNavGroup {
   items: SettingsNavItem[];
 }
 
-/** 全部子单元按分区与 spec §5.1/§7.2 顺序排列（id 即锚点目标 element id / 深链 hash） */
+/** 全部子单元按分区与 spec §5.1/§7.2 顺序排列（id 即页面 id / 深链 hash） */
 export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   {
     label: '通用设置',
@@ -41,16 +44,22 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
 
 export const SETTINGS_SECTION_IDS: ReadonlyArray<string> = SETTINGS_NAV_GROUPS.flatMap((g) => g.items.map((i) => i.id));
 
+/** 默认分区：无深链、无待处理锚点时的落地页。 */
+export const DEFAULT_SETTINGS_SECTION_ID = 'appearance';
+
 interface SettingsNavProps {
-  /** 当前激活的子单元 id */
+  /** 当前显示的分区 id */
   activeId: string;
-  /** 点击锚点项回调（由 SettingsTab 实现滚动定位） */
+  /** 点击导航项回调（由 SettingsTab 切换分区并更新 hash） */
   onSelect: (id: string) => void;
 }
 
 export function SettingsNav({ activeId, onSelect }: SettingsNavProps) {
   return (
-    <nav className="flex w-52 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border p-2">
+    <nav
+      aria-label="设置分区"
+      className="flex w-48 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border p-2"
+    >
       {SETTINGS_NAV_GROUPS.map((group) => (
         <div key={group.label} className="flex flex-col gap-1">
           <div className="px-2 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -63,6 +72,7 @@ export function SettingsNav({ activeId, onSelect }: SettingsNavProps) {
               <Button
                 key={item.id}
                 variant="ghost"
+                aria-current={active ? 'page' : undefined}
                 className={cn('justify-start gap-2', active && 'bg-accent text-accent-foreground')}
                 onClick={() => onSelect(item.id)}
               >

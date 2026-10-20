@@ -21,10 +21,6 @@ import {
   setConnectionCredential,
 } from '../provider-connection/connection-store.cts';
 import {
-  clearCacheForTest as clearDeploymentCache,
-  createDeployment,
-} from '../provider-connection/deployment-store.cts';
-import {
   clearCacheForTest as clearActiveRouteCache,
   setActiveDeployment,
 } from '../provider-connection/active-route-store.cts';
@@ -32,6 +28,10 @@ import {
   addCustomChatModel,
   clearCacheForTest as clearCustomModelCache,
 } from '../provider-connection/custom-chat-model-store.cts';
+import {
+  addCustomGenerationModel,
+  clearCacheForTest as clearCustomGenerationModelCache,
+} from '../provider-connection/custom-generation-model-store.cts';
 import { setCredentialForConnection } from '../provider-connection/credential-store.cts';
 
 /**
@@ -247,65 +247,6 @@ const createHarness = () => {
   return { client, sent };
 };
 
-/** 最小可提交生成模型包：输出 image、http_formal_task 驱动、提交端点指向挂起上游。 */
-const writeGenerationPackage = (packageRoot: string): void => {
-  const packageDir = path.join(packageRoot, 'seam-image-pkg');
-  fs.mkdirSync(path.join(packageDir, 'locales'), { recursive: true });
-  const writeJson = (filePath: string, value: unknown): void => {
-    fs.writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf-8');
-  };
-  writeJson(path.join(packageDir, 'manifest.json'), {
-    package_id: 'seam-image-pkg',
-    entry_model: { model_id: GENERATION_MODEL_ID, relative_path: 'runtime_model.json' },
-    node_definition: { relative_path: 'node_definition.json' },
-    resources: [],
-    locales: [
-      { locale: 'zh-CN', relative_path: 'locales/zh-CN.json' },
-      { locale: 'en', relative_path: 'locales/en.json' },
-    ],
-  });
-  // 本地化词典必须覆盖全部字段标签（缺键 = bad_package，整包被拒载）。
-  writeJson(path.join(packageDir, 'locales', 'zh-CN.json'), { Prompt: 'Prompt' });
-  writeJson(path.join(packageDir, 'locales', 'en.json'), { Prompt: 'Prompt' });
-  writeJson(path.join(packageDir, 'node_definition.json'), {
-    node_type: 'model',
-    group_key: 'seam-cancel',
-    input_ports: [],
-    output_ports: [],
-  });
-  writeJson(path.join(packageDir, 'runtime_model.json'), {
-    model_id: GENERATION_MODEL_ID,
-    provider_id: 'openai',
-    capability: {
-      input_modalities: ['text'],
-      output_modalities: ['image'],
-      supports_async_task: false,
-    },
-    parameter_schema: {
-      // 加载器要求至少一个字段；prompt 由生成工具顶层承载（提交体单独投影），
-      // 不进参数合并层，因此 required_fields 留空（否则执行侧必填校验误报缺 prompt）。
-      fields: [{ field_key: 'prompt', label: 'Prompt', component: 'textarea', required: true }],
-      required_fields: [],
-      default_values: {},
-    },
-    runtime: {
-      provider_id: 'openai',
-      execution_driver: 'http_formal_task',
-      // 组装器的端点来源是 payload api 块 / runtime.api_defaults（非 request_strategy.endpoint）。
-      api_defaults: { endpoint: '/v1/test', method: 'POST', contentType: 'application/json' },
-    },
-    request_strategy: {
-      request_stage: 'submit',
-      protocol: 'http',
-      endpoint: '/v1/test',
-      method: 'POST',
-      header_rules: [],
-      body_rules: [],
-      query_rules: [],
-    },
-    result_rule: { mode: 'sync', submit_response_id_path: '/id' },
-  });
-};
 
 const createOpenedProject = (projectName: string) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cancel-seam-'));
@@ -339,15 +280,11 @@ const createOpenedProject = (projectName: string) => {
  */
 const setupTest = async (t: TestContext) => {
   const previousRoot = process.env['IART_STORAGE_ROOT'];
-  const previousPackagesDir = process.env['IART_MODEL_ASSET_PACKAGES_DIR'];
   const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cancel-seam-storage-'));
-  const packagesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cancel-seam-packages-'));
-  writeGenerationPackage(packagesDir);
   process.env['IART_STORAGE_ROOT'] = storageRoot;
-  process.env['IART_MODEL_ASSET_PACKAGES_DIR'] = packagesDir;
   const clearCaches = (): void => {
     clearConnectionCache();
-    clearDeploymentCache();
+    clearCustomGenerationModelCache();
     clearActiveRouteCache();
     clearCustomModelCache();
   };
@@ -396,7 +333,7 @@ const setupTest = async (t: TestContext) => {
   assert.equal(chatRecord.ok, true, 'custom chat model record should be created');
   assert.equal(setActiveDeployment(CHAT_MODEL_ID, chatRecord.model.record_id), chatRecord.model.record_id);
 
-  // 生成链路种子：连接（openai-image-v1）→ 凭证 → 部署 → active route。
+  // 生成链路种子：连接 → 凭证 → 用户生成模型记录（openai-image-v1 族模板）→ active route。
   const generationConnection = createConnection({
     display_name: 'seam-gen-upstream',
     base_url: GENERATION_CONNECTION_BASE_URL,
@@ -404,12 +341,15 @@ const setupTest = async (t: TestContext) => {
   const generationCredential = await setCredentialForConnection(generationConnection.connection_id, GENERATION_CREDENTIAL);
   assert.ok(generationCredential, 'generation credential should be written');
   setConnectionCredential(generationConnection.connection_id, generationCredential.credentialRef, generationCredential.version, true);
-  const generationDeployment = createDeployment({
+  const generationRecord = addCustomGenerationModel({
     model_id: GENERATION_MODEL_ID,
     connection_id: generationConnection.connection_id,
+    family_adapter_id: 'openai-image-v1',
     remote_model_id: 'remote-seam-image',
   });
-  assert.equal(setActiveDeployment(GENERATION_MODEL_ID, generationDeployment.deployment_id), generationDeployment.deployment_id);
+  assert.equal(generationRecord.ok, true, 'custom generation model record should be created');
+  if (!generationRecord.ok) throw new Error('generation record seed failed');
+  assert.equal(setActiveDeployment(GENERATION_MODEL_ID, generationRecord.model.record_id), generationRecord.model.record_id);
 
   t.after(() => {
     setBackendIpcTestHandler(null);
@@ -417,10 +357,7 @@ const setupTest = async (t: TestContext) => {
     clearCaches();
     if (previousRoot === undefined) delete process.env['IART_STORAGE_ROOT'];
     else process.env['IART_STORAGE_ROOT'] = previousRoot;
-    if (previousPackagesDir === undefined) delete process.env['IART_MODEL_ASSET_PACKAGES_DIR'];
-    else process.env['IART_MODEL_ASSET_PACKAGES_DIR'] = previousPackagesDir;
     fs.rmSync(storageRoot, { recursive: true, force: true });
-    fs.rmSync(packagesDir, { recursive: true, force: true });
   });
   return { ...harness, projectPath: project.projectPath };
 };

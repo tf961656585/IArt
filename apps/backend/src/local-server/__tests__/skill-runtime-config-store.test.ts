@@ -12,9 +12,9 @@ import {
   clearCacheForTest as clearConnectionCache,
 } from '../provider-connection/connection-store.cts';
 import {
-  createDeployment,
-  clearCacheForTest as clearDeploymentCache,
-} from '../provider-connection/deployment-store.cts';
+  addCustomGenerationModel,
+  clearCacheForTest as clearCustomGenerationModelCache,
+} from '../provider-connection/custom-generation-model-store.cts';
 import {
   setActiveDeployment,
   clearCacheForTest as clearActiveRouteCache,
@@ -28,9 +28,9 @@ import {
 } from '../skill-runtime/skill-runtime-config-store.cts';
 
 /**
- * skill 运行时配置的来源是「gpt-image-2 的 active deployment」——与任务主链同一套凭证链
+ * skill 运行时配置的来源是「gpt-image-2 的 active 接入目标」——与任务主链同一套凭证链
  * （ExecutionSnapshot → CredentialLease）。因此本测试不再用全局密钥槽位准备数据，
- * 而是建一个真实的「服务商连接 + 凭证 + 模型部署 + active 路由」。
+ * 而是建一个真实的「服务商连接 + 凭证 + 模型记录 + active 路由」。
  */
 
 const SKILL_MODEL_ID = 'gpt-image-2';
@@ -48,7 +48,7 @@ type RuntimeConfigJson = {
 
 const resetStores = (): void => {
   clearConnectionCache();
-  clearDeploymentCache();
+  clearCustomGenerationModelCache();
   clearActiveRouteCache();
 };
 
@@ -82,8 +82,14 @@ const withIsolatedRoots = (t: test.TestContext): { skillDir: string } => {
   return { skillDir };
 };
 
-/** 建 enabled 连接 + 凭证 + 该模型部署，并设为 active。 */
-const seedActiveDeployment = async (): Promise<void> => {
+/**
+ * 建 enabled 连接 + 凭证 + 该模型的用户记录，并设为 active。
+ *
+ * 2026-10-19 起模型只有用户记录一种载体（spec 03 §6.1 / PC-14）：记录本身即接入目标
+ * （`record_id`），不再有独立的接入对象可建。断言保护的行为不变——skill 运行时配置的端点与
+ * 密钥来自该模型的 active 接入目标。
+ */
+const seedActiveModelRecord = async (): Promise<void> => {
   const connection = createConnection({
     display_name: 'byok-test',
     base_url: CONNECTION_BASE_URL,
@@ -91,16 +97,19 @@ const seedActiveDeployment = async (): Promise<void> => {
   const credential = await setCredentialForConnection(connection.connection_id, CREDENTIAL_VALUE);
   assert.ok(credential, 'credential should be stored');
   setConnectionCredential(connection.connection_id, credential.credentialRef, credential.version, true);
-  const deployment = createDeployment({
+  const record = addCustomGenerationModel({
     model_id: SKILL_MODEL_ID,
     connection_id: connection.connection_id,
     remote_model_id: SKILL_MODEL_ID,
+    family_adapter_id: 'openai-image-v1',
   });
-  const active = setActiveDeployment(SKILL_MODEL_ID, deployment.deployment_id);
-  assert.equal(active, deployment.deployment_id, 'active deployment should be set');
+  assert.equal(record.ok, true, 'generation model record should be created');
+  if (!record.ok) return;
+  const active = setActiveDeployment(SKILL_MODEL_ID, record.model.record_id);
+  assert.equal(active, record.model.record_id, 'active access target should be set');
 };
 
-void test('skill-runtime-config-store: 无 active deployment 时返回 null 且不写文件', async (t) => {
+void test('skill-runtime-config-store: 无 active 接入目标时返回 null 且不写文件', async (t) => {
   const { skillDir } = withIsolatedRoots(t);
 
   assert.equal(await buildSkillRuntimeConfig(39000), null);
@@ -110,7 +119,7 @@ void test('skill-runtime-config-store: 无 active deployment 时返回 null 且�
 
 void test('skill-runtime-config-store: 端点与密钥来自 gpt-image-2 的服务商连接', async (t) => {
   const { skillDir } = withIsolatedRoots(t);
-  await seedActiveDeployment();
+  await seedActiveModelRecord();
 
   await writeSkillRuntimeConfig(39000);
 

@@ -4,13 +4,12 @@ import { useState } from 'react';
 
 import type {
   CustomGenerationModel,
-  ModelDeployment,
   ProviderConnection,
 } from '@iart/contracts';
 import { ProviderSection } from '../../ProviderSection';
 import { createHubApiClient } from '../../../../client/api/hub-api';
 import { createHubHttpClient } from '../../../../client/adapters/http-client';
-import { countDeploymentsByConnection } from '../invalidity';
+import { countModelsByConnection } from '../invalidity';
 import type {
   ProviderConnectionData,
   ProviderNotice,
@@ -36,16 +35,6 @@ const generationConnection: ProviderConnection = {
   has_credential: true,
   lifecycle: 'enabled',
   revision: 1,
-  created_at: '2026-09-24T00:00:00.000Z',
-  updated_at: '2026-09-24T00:00:00.000Z',
-};
-
-/** 已装能力包模型在本服务商下的接入（自建记录不产生 Deployment，spec 03 §6.1） */
-const existingDeployment: ModelDeployment = {
-  deployment_id: 'up_dep_gen1',
-  model_id: 'gpt-image-1',
-  connection_id: generationConnection.connection_id,
-  remote_model_id: 'gpt-image-1',
   created_at: '2026-09-24T00:00:00.000Z',
   updated_at: '2026-09-24T00:00:00.000Z',
 };
@@ -122,6 +111,8 @@ const familyTemplateDescriptor = {
     },
   ],
   reserved_wire_names: ['model', 'prompt', 'input', 'n'],
+  // 2026-10-19 起表单按该族能力逐项渲染素材位勾选（openai 族只有参考图一位）
+  supports_media_slots: ['reference_image'],
 };
 
 /**
@@ -144,14 +135,14 @@ const stubFetch = ({ failCreate = false, failDeterministic = false, failTemplate
           return jsonResponse({ message: '已经添加过这个模型了' }, 409);
         }
         if (failDeterministic) {
-          // 确定性拒绝（写入侧校验，如命名空间护栏）：message 是后端写给用户读的可操作原因
-          return jsonResponse({ message: '这个模型 ID 只能用于图像模型' }, 400);
+          // 确定性拒绝（写入侧校验，如素材位超出该族能力）：message 是后端写给用户读的可操作原因
+          return jsonResponse({ message: '这个接口类型不接受「参考图」这类素材' }, 400);
         }
         const declared = JSON.parse(String(init.body)) as {
           model_id: string;
           connection_id: string;
           remote_model_id?: string;
-          supports_reference_image?: boolean;
+          accepted_media_slots?: unknown;
         };
         return jsonResponse({
           model: {
@@ -160,7 +151,7 @@ const stubFetch = ({ failCreate = false, failDeterministic = false, failTemplate
             connection_id: declared.connection_id,
             remote_model_id: declared.remote_model_id ?? declared.model_id,
             family_adapter_id: 'openai-image-v1',
-            supports_reference_image: declared.supports_reference_image === true,
+            accepted_media_slots: Array.isArray(declared.accepted_media_slots) ? declared.accepted_media_slots : [],
             parameter_overrides: { official: [], custom: [] },
             created_at: '2026-09-24T00:00:00.000Z',
           },
@@ -169,7 +160,7 @@ const stubFetch = ({ failCreate = false, failDeterministic = false, failTemplate
       if (url.includes('/api/custom-generation-models/') && init?.method === 'PUT') {
         const modelId = url.split('/api/custom-generation-models/')[1] ?? '';
         const body = JSON.parse(String(init.body)) as {
-          supports_reference_image: boolean;
+          accepted_media_slots: unknown[];
           parameter_overrides?: { official: unknown[]; custom: unknown[] };
         };
         return jsonResponse({
@@ -179,7 +170,7 @@ const stubFetch = ({ failCreate = false, failDeterministic = false, failTemplate
             connection_id: generationConnection.connection_id,
             remote_model_id: decodeURIComponent(modelId),
             family_adapter_id: 'openai-image-v1',
-            supports_reference_image: body.supports_reference_image,
+            accepted_media_slots: body.accepted_media_slots,
             parameter_overrides: body.parameter_overrides ?? { official: [], custom: [] },
             created_at: '2026-09-24T00:00:00.000Z',
           },
@@ -198,10 +189,8 @@ const stubFetch = ({ failCreate = false, failDeterministic = false, failTemplate
 
 /** 数据源 + 提示条状态：提示是分区自己持有的状态，桩里也要能变，否则成功提示断言看不到东西。 */
 function Harness({
-  deployments = [],
   customGenerationModels = [],
 }: {
-  deployments?: ModelDeployment[];
   /** 自己添加的生成模型：模型行按记录渲染，删除入口只挂在记录行上 */
   customGenerationModels?: CustomGenerationModel[];
 }) {
@@ -209,11 +198,10 @@ function Harness({
   stateRef.current = {
     api: createHubApiClient(createHubHttpClient(BASE, WRITE_TOKEN)),
     connections: [generationConnection],
-    deployments,
     activeRoutes: {},
-    activeDeploymentIds: new Set(),
+    activeRecordIds: new Set(),
     connectionById: new Map([[generationConnection.connection_id, generationConnection]]),
-    deploymentCountByConnection: countDeploymentsByConnection(deployments),
+    modelCountByConnection: countModelsByConnection(customGenerationModels),
     catalog: [],
     chatCatalog: [],
     catalogUnavailable: false,
@@ -228,7 +216,8 @@ function Harness({
     saveAgentDefaultModel: async () => undefined,
     generationDefaultModelId: null,
     saveGenerationDefaultModel: async () => undefined,
-    loading: false,
+    loadState: 'ready',
+    loadError: null,
     notice,
     setNotice,
     reload: async () => undefined,
@@ -236,14 +225,29 @@ function Harness({
   return <ProviderSection />;
 }
 
+/** 在左侧服务商栏里点选某一家（详情头也会显示同一名字，故定位收窄到栏内） */
+const selectProviderInRail = (name: string): void => {
+  const rail = screen.getByRole('group', { name: '服务商列表' });
+  const card = within(rail)
+    .queryAllByRole('button')
+    .find((el) => (el.textContent ?? '').includes(name));
+  if (!card) throw new Error(`服务商栏里没有「${name}」`);
+  fireEvent.click(card);
+};
+
 const openDetail = (
   overrides: Partial<ProviderConnectionData> = {},
 ): void => {
   render(<Harness {...overrides} />);
-  fireEvent.click(screen.getByText('我的绘图服务'));
+  selectProviderInRail('我的绘图服务');
 };
 
 const dialog = () => within(screen.getByRole('dialog', { name: '添加模型到「我的绘图服务」' }));
+
+/** 打开某一行模型的「⋯」菜单（2026-10-19 起行内动作收进菜单） */
+const openRowMenu = (modelId: string): void => {
+  fireEvent.keyDown(screen.getByRole('button', { name: `「${modelId}」的操作` }), { key: 'Enter' });
+};
 
 const editDialog = () => within(screen.getByRole('dialog', { name: '修改「my-image-model」的模型配置' }));
 
@@ -262,6 +266,13 @@ const chooseFamilyAdapter = (): void => {
   fireEvent.click(screen.getByRole('option', { name: 'OpenAI Image' }));
 };
 
+/** 等素材位能力读完：勾选框出现才算放行提交（读不到能力时不猜清单）。 */
+const waitForMediaSlots = async (): Promise<void> => {
+  await waitFor(() => {
+    expect(dialog().getByRole('checkbox', { name: '参考图' })).toBeInTheDocument();
+  });
+};
+
 /** 与真实列表响应同形（contracts 的 CustomGenerationModelSchema 在客户端 parse 它） */
 const declaredRecord: CustomGenerationModel = {
   model_id: 'my-image-model',
@@ -269,7 +280,7 @@ const declaredRecord: CustomGenerationModel = {
   connection_id: generationConnection.connection_id,
   remote_model_id: 'my-image-model',
   family_adapter_id: 'openai-image-v1',
-  supports_reference_image: true,
+  accepted_media_slots: ['reference_image'],
   parameter_overrides: { official: [], custom: [] },
   created_at: '2026-09-24T00:00:00.000Z',
 };
@@ -293,7 +304,11 @@ describe('生成族服务商：添加模型提交流', () => {
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
     chooseFamilyAdapter();
     fireEvent.change(dialog().getByLabelText('服务商那边的模型 ID'), { target: { value: 'remote-name' } });
-    fireEvent.click(dialog().getByRole('checkbox', { name: '支持参考图' }));
+    // 素材位按所选族能力渲染（openai 族只有「参考图」），读到之后才放行提交
+    await waitFor(() => {
+      expect(dialog().getByRole('checkbox', { name: '参考图' })).toBeInTheDocument();
+    });
+    fireEvent.click(dialog().getByRole('checkbox', { name: '参考图' }));
     fireEvent.click(dialog().getByRole('button', { name: '添加' }));
 
     await waitFor(() => {
@@ -309,10 +324,10 @@ describe('生成族服务商：添加模型提交流', () => {
       connection_id: generationConnection.connection_id,
       remote_model_id: 'remote-name',
       family_adapter_id: 'openai-image-v1',
-      supports_reference_image: true,
+      accepted_media_slots: ['reference_image'],
     });
-    // active 接入由后端在创建内写入：不再有 createModelDeployment / setActiveRoute 跟进
-    expect(fetchFn.mock.calls.some(([input]) => String(input).includes('/api/model-deployments'))).toBe(false);
+    // active 接入由后端在创建内写入：没有第二次写入（也不再有任何接入载体端点的调用——
+    // /api/model-deployments 已随部署载体退场删除）
     expect(fetchFn.mock.calls.some(([input]) => String(input).includes('/api/active-routes'))).toBe(false);
   });
 
@@ -323,6 +338,9 @@ describe('生成族服务商：添加模型提交流', () => {
     openAddModelDialog();
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
     chooseFamilyAdapter();
+    await waitFor(() => {
+      expect(dialog().getByRole('checkbox', { name: '参考图' })).not.toBeChecked();
+    });
     fireEvent.click(dialog().getByRole('button', { name: '添加' }));
 
     await waitFor(() => {
@@ -330,7 +348,7 @@ describe('生成族服务商：添加模型提交流', () => {
         model_id: 'my-image-model',
         connection_id: generationConnection.connection_id,
         family_adapter_id: 'openai-image-v1',
-        supports_reference_image: false,
+        accepted_media_slots: [],
       });
     });
   });
@@ -342,6 +360,7 @@ describe('生成族服务商：添加模型提交流', () => {
     openAddModelDialog();
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
     chooseFamilyAdapter();
+    await waitForMediaSlots();
     fireEvent.click(dialog().getByRole('button', { name: '添加' }));
 
     await waitFor(() => {
@@ -359,11 +378,12 @@ describe('生成族服务商：添加模型提交流', () => {
     openAddModelDialog();
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
     chooseFamilyAdapter();
+    await waitForMediaSlots();
     fireEvent.click(dialog().getByRole('button', { name: '添加' }));
 
     await waitFor(() => {
       expect(dialog().getByRole('alert')).toHaveTextContent(
-        '这个模型 ID 只能用于图像模型',
+        '这个接口类型不接受「参考图」这类素材',
       );
     });
     expect(screen.getByRole('dialog', { name: '添加模型到「我的绘图服务」' })).toBeInTheDocument();
@@ -376,6 +396,7 @@ describe('生成族服务商：添加模型提交流', () => {
     openAddModelDialog();
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
     chooseFamilyAdapter();
+    await waitForMediaSlots();
     fireEvent.click(dialog().getByRole('button', { name: '添加' }));
 
     // 用户的目标已经达成，写入只会撞上重名：提交前说清并指到修改入口
@@ -395,9 +416,10 @@ describe('生成族服务商：删除自建模型', () => {
 
   it('自己添加的生成模型行有「删除模型」：确认说明模型会消失及其影响，确认后发 DELETE', async () => {
     const fetchFn = stubFetch();
-    openDetail({ deployments: [existingDeployment], customGenerationModels: [declaredRecord] });
+    openDetail({ customGenerationModels: [declaredRecord] });
 
-    fireEvent.click(screen.getByRole('button', { name: '删除模型「my-image-model」' }));
+    openRowMenu('my-image-model');
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除模型' }));
 
     // 影响面写在确认文案里：模型本身将消失（从模型列表与画布生成里），不再有接入计数
     const confirmDelete = () => within(screen.getByRole('dialog', { name: '删除模型' }));
@@ -421,21 +443,15 @@ describe('生成族服务商：删除自建模型', () => {
 
   it('取消确认时不发删除请求', () => {
     const fetchFn = stubFetch();
-    openDetail({ deployments: [existingDeployment], customGenerationModels: [declaredRecord] });
+    openDetail({ customGenerationModels: [declaredRecord] });
 
-    fireEvent.click(screen.getByRole('button', { name: '删除模型「my-image-model」' }));
+    openRowMenu('my-image-model');
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除模型' }));
     fireEvent.click(within(screen.getByRole('dialog', { name: '删除模型' })).getByRole('button', { name: '取消' }));
 
     expect(fetchFn.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
   });
 
-  it('已装模型行（不在自建记录里）没有「删除模型」：没有记录可删，不提供必然失败的入口', () => {
-    stubFetch();
-    openDetail({ deployments: [existingDeployment] });
-
-    expect(screen.queryByRole('button', { name: '删除模型「gpt-image-1」' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^移除 / })).toBeInTheDocument();
-  });
 });
 
 describe('生成族服务商：添加时自定义参数（高级参数自定义）', () => {
@@ -474,7 +490,7 @@ describe('生成族服务商：添加时自定义参数（高级参数自定义�
         model_id: 'my-image-model',
         connection_id: generationConnection.connection_id,
         family_adapter_id: 'openai-image-v1',
-        supports_reference_image: false,
+        accepted_media_slots: [],
         parameter_overrides: {
           official: [
             { field_key: 'format', wire_name: 'image_format' },
@@ -513,32 +529,31 @@ describe('生成族服务商：添加时自定义参数（高级参数自定义�
     expect(alerts.join(' ')).toContain('高级参数还有没改好的地方');
   });
 
-  it('读不到参数描述：高级区显示一行原因，基础添加照常（请求体不带 parameter_overrides）', async () => {
+  it('读不到参数描述：素材位也无从判断，给一行原因并拦下添加（不猜一份清单落库）', async () => {
     const fetchFn = stubFetch({ failTemplate: true });
     openDetail();
 
     openAddModelDialog();
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
     chooseFamilyAdapter();
-    fireEvent.click(dialog().getByRole('button', { name: '高级参数自定义' }));
 
+    // 素材位能力与参数描述同源于族模板：读不到时两处各自给原因，添加被拦下
+    await waitFor(() => {
+      expect(
+        dialog().getByText('暂时读不到这个接口类型能用的素材。关掉这个窗口后点「刷新」再试。'),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(dialog().getByRole('button', { name: '高级参数自定义' }));
     await waitFor(() => {
       expect(dialog().getByText('暂时读不到可调的参数，这项设置用不了；收起再展开可以再试。其他设置不受影响。')).toBeInTheDocument();
     });
 
     fireEvent.click(dialog().getByRole('button', { name: '添加' }));
-    await waitFor(() => {
-      expect(bodyOf(fetchFn, '/api/custom-generation-models', 'POST')).toEqual({
-        model_id: 'my-image-model',
-        connection_id: generationConnection.connection_id,
-        family_adapter_id: 'openai-image-v1',
-        supports_reference_image: false,
-      });
-    });
+    expect(fetchFn.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
   });
 });
 
-describe('生成族服务商：编辑已添加模型（参数覆盖 + 参考图开关）', () => {
+describe('生成族服务商：编辑已添加模型（素材位 + 参数覆盖）', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -552,11 +567,45 @@ describe('生成族服务商：编辑已添加模型（参数覆盖 + 参考图�
     },
   };
 
+  it('接口类型只读、素材位可改：不出现接口类型下拉，取消勾选后保存按新清单整体替换', async () => {
+    const fetchFn = stubFetch();
+    openDetail({ customGenerationModels: [declaredRecord] });
+
+    openRowMenu('my-image-model');
+    fireEvent.click(screen.getByRole('menuitem', { name: '修改配置' }));
+
+    // 接口类型创建后不可变（换族等于换一个模型）：只读展示名，不给下拉
+    expect(editDialog().getByText('OpenAI Image')).toBeInTheDocument();
+    expect(editDialog().queryByLabelText('接口类型')).not.toBeInTheDocument();
+    expect(editDialog().queryByRole('combobox')).not.toBeInTheDocument();
+
+    // 素材位按该族能力渲染，并回填记录里已勾的那一位
+    await waitFor(() => {
+      expect(editDialog().getByRole('checkbox', { name: '参考图' })).toBeChecked();
+    });
+    fireEvent.click(editDialog().getByRole('checkbox', { name: '参考图' }));
+    expect(editDialog().getByRole('checkbox', { name: '参考图' })).not.toBeChecked();
+
+    fireEvent.click(editDialog().getByRole('button', { name: '保存' }));
+    await waitFor(() => {
+      const put = fetchFn.mock.calls.find(
+        ([input, init]) =>
+          String(input).includes('/api/custom-generation-models/my-image-model') && init?.method === 'PUT',
+      );
+      expect(put).toBeDefined();
+      expect(JSON.parse(String(put?.[1]?.body))).toEqual({
+        accepted_media_slots: [],
+        parameter_overrides: { official: [], custom: [] },
+      });
+    });
+  });
+
   it('自建记录行有「修改」：弹层回填现有覆盖，保存走 PUT 整体替换', async () => {
     const fetchFn = stubFetch();
-    openDetail({ deployments: [existingDeployment], customGenerationModels: [declaredWithOverrides] });
+    openDetail({ customGenerationModels: [declaredWithOverrides] });
 
-    fireEvent.click(screen.getByRole('button', { name: '修改「my-image-model」的配置' }));
+    openRowMenu('my-image-model');
+    fireEvent.click(screen.getByRole('menuitem', { name: '修改配置' }));
 
     // 展开高级区（默认收起），装载完成后再看回填
     fireEvent.click(editDialog().getByRole('button', { name: '高级参数自定义' }));
@@ -579,7 +628,7 @@ describe('生成族服务商：编辑已添加模型（参数覆盖 + 参考图�
       );
       expect(put).toBeDefined();
       expect(JSON.parse(String(put?.[1]?.body))).toEqual({
-        supports_reference_image: true,
+        accepted_media_slots: ['reference_image'],
         parameter_overrides: {
           official: [{ field_key: 'format', wire_name: 'image_format2' }],
           custom: [],
@@ -590,12 +639,5 @@ describe('生成族服务商：编辑已添加模型（参数覆盖 + 参考图�
       expect(screen.getByText('已保存「my-image-model」的模型配置')).toBeInTheDocument();
     });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-  });
-
-  it('已装模型行没有「修改」入口（参数表单在包定义里，不属于行内可改）', () => {
-    stubFetch();
-    openDetail({ deployments: [existingDeployment] });
-
-    expect(screen.queryByRole('button', { name: '修改「gpt-image-1」的配置' })).not.toBeInTheDocument();
   });
 });

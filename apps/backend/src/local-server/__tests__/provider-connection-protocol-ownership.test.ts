@@ -15,7 +15,6 @@ import {
   createConnection,
   setConnectionCredential,
 } from '../provider-connection/connection-store.cts';
-import { clearCacheForTest as clearDeploymentCache } from '../provider-connection/deployment-store.cts';
 import {
   clearCacheForTest as clearActiveRouteCache,
 } from '../provider-connection/active-route-store.cts';
@@ -33,18 +32,18 @@ import { setCredentialForConnection } from '../provider-connection/credential-st
  * 改写而来：原「跨族拒绝」场景改为放行断言。
  *
  * 覆盖：①归属拒绝三态（连接不存在/未启用/无凭证）；②对话记录挂任意连接放行、生成记录挂
- * 任意连接放行；③已装包模型接入任意连接放行（含跨族）、未知 model_id 与自建 model_id 仍拒绝。
+ * 任意连接放行（含跨族）。
  *
- * 包根指向仓库内已跟踪的源包目录（.model-assets/sources），不依赖本机安装状态。
+ * 2026-10-19 部署载体退场后，本文件删掉了原第③组（「已装包模型经 /api/model-deployments 接入
+ * 任意连接放行、未知 model_id 与自建 model_id 被拒」）：那组断言的正是部署载体的写入路径，
+ * 该路由已删除。它保护的行为——「连接不约束协议族、协议随模型走」——由第②组继续钉住，
+ * 且现在的载体是模型记录本身，覆盖范围不减。包根环境变量随之删除（不再有按包识别族的路径）。
  */
 
-const repoRoot = path.join(__dirname, '..', '..', '..', '..', '..');
-process.env['IART_MODEL_ASSET_PACKAGES_DIR'] = path.join(repoRoot, '.model-assets', 'sources');
 process.env['IART_PUBLIC_UPLOAD_CLOUDFLARE_IMAGE_PUBLIC_URL_ENDPOINT'] = 'https://relay.example.invalid/upload';
 
 const HUB_WRITE_TOKEN = 'c'.repeat(32);
 const CHAT_MODEL_ID = 'my-llm';
-const INSTALLED_GENERATION_MODEL_ID = 'gpt-image-2';
 const GENERATION_ADAPTER = 'openai-image-v1';
 const CHAT_ADAPTER = 'gemini-chat-v1';
 const CONNECTION_BASE_URL = 'https://byok.example.com/v1';
@@ -65,7 +64,7 @@ const startServer = async (t: test.TestContext): Promise<string> => {
   return `http://127.0.0.1:${address.port}`;
 };
 
-/** 每个测试用独立临时存储根 + Hub 写令牌，隔离连接 / 接入 / active 路由。 */
+/** 每个测试用独立临时存储根 + Hub 写令牌，隔离连接 / 模型记录 / active 路由。 */
 const withIsolatedEnv = (t: test.TestContext): void => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'protocol-ownership-'));
   const previousToken = process.env[HUB_LOCAL_WRITE_TOKEN_ENV];
@@ -73,7 +72,6 @@ const withIsolatedEnv = (t: test.TestContext): void => {
   process.env[HUB_LOCAL_WRITE_TOKEN_ENV] = HUB_WRITE_TOKEN;
   process.env['IART_STORAGE_ROOT'] = tempRoot;
   clearConnectionCache();
-  clearDeploymentCache();
   clearActiveRouteCache();
   t.after(() => {
     if (previousToken === undefined) {
@@ -87,7 +85,6 @@ const withIsolatedEnv = (t: test.TestContext): void => {
       process.env['IART_STORAGE_ROOT'] = previousRoot;
     }
     clearConnectionCache();
-    clearDeploymentCache();
     clearActiveRouteCache();
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
@@ -131,18 +128,6 @@ const createGenerationRecord = async (
   body: { model_id: string; connection_id: string; family_adapter_id: string },
 ): Promise<{ status: number; payload: JsonValue }> => {
   const response = await fetch(`${baseUrl}/api/custom-generation-models`, {
-    method: 'POST',
-    headers: writeHeaders(),
-    body: JSON.stringify(body),
-  });
-  return { status: response.status, payload: (await response.json()) as JsonValue };
-};
-
-const bindModel = async (
-  baseUrl: string,
-  body: { model_id: string; connection_id: string; remote_model_id: string },
-): Promise<{ status: number; payload: JsonValue }> => {
-  const response = await fetch(`${baseUrl}/api/model-deployments`, {
     method: 'POST',
     headers: writeHeaders(),
     body: JSON.stringify(body),
@@ -214,44 +199,4 @@ void test('协议归属模型级：对话记录与生成记录可挂任意连接
   assert.equal(generationModel['family_adapter_id'], GENERATION_ADAPTER);
 });
 
-void test('已装包模型接入任意连接放行（含跨族）；未知 model_id 与自建 model_id 仍拒绝', async (t) => {
-  withIsolatedEnv(t);
-  const baseUrl = await startServer(t);
-  const generationConnectionId = await seedConnection('gen');
-  const chatConnectionId = await seedConnection('chat');
-
-  // 已装包生成模型挂对话协议连接 → 放行（协议按模型正则解析，连接不约束族）
-  const crossFamily = await bindModel(baseUrl, {
-    model_id: INSTALLED_GENERATION_MODEL_ID,
-    connection_id: chatConnectionId,
-    remote_model_id: INSTALLED_GENERATION_MODEL_ID,
-  });
-  assert.equal(crossFamily.status, 200, '已装包模型可接入任意连接（跨族放行）');
-
-  // 同族连接同样放行
-  const sameFamily = await bindModel(baseUrl, {
-    model_id: INSTALLED_GENERATION_MODEL_ID,
-    connection_id: generationConnectionId,
-    remote_model_id: INSTALLED_GENERATION_MODEL_ID,
-  });
-  assert.equal(sameFamily.status, 200);
-
-  // 解析不出族（无已装包正则、无自建记录）→ 显式拒绝，不静默放行
-  const unknownModel = await bindModel(baseUrl, {
-    model_id: 'never-declared-model',
-    connection_id: generationConnectionId,
-    remote_model_id: 'upstream-unknown',
-  });
-  assert.equal(unknownModel.status, 400);
-  assert.match(String(unknownModel.payload['message']), /does not belong to any known installed model family/);
-
-  // 自建对话记录不走 ModelDeployment（记录即接入）→ 显式拒绝，防僵尸接入
-  const customViaDeployment = await bindModel(baseUrl, {
-    model_id: CHAT_MODEL_ID,
-    connection_id: chatConnectionId,
-    remote_model_id: 'upstream-any',
-  });
-  assert.equal(customViaDeployment.status, 400);
-  assert.match(String(customViaDeployment.payload['message']), /custom model record/);
-});
 

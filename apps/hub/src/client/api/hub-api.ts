@@ -7,14 +7,11 @@ import {
   ProviderConnectionListResponseSchema,
   ProviderConnectionResponseSchema,
   ProviderConnectionCredentialResponseSchema,
-  ModelDeploymentListResponseSchema,
-  ModelDeploymentResponseSchema,
   ActiveRouteMapResponseSchema,
   ActiveRouteResponseSchema,
   HubConfigResponseSchema,
   HubTaskListResponseSchema,
   HubUnknownResponseSchema,
-  ModelDeploymentOkResponseSchema,
   ProviderConnectionOkResponseSchema,
   ThinkingTierPoolResponseSchema,
   ThinkingTierRemovalResponseSchema,
@@ -43,7 +40,6 @@ export const HUB_API_ROUTES = Object.freeze({
   promptPresetById: '/api/prompt-presets/',
   tasks: '/api/tasks',
   providerConnections: '/api/provider-connections',
-  modelDeployments: '/api/model-deployments',
   activeRoutes: '/api/active-routes',
   executableModelCatalog: '/api/executable-model-catalog',
   chatModelCatalog: '/api/chat-model-catalog',
@@ -146,7 +142,7 @@ export const createHubApiClient = (http: HubHttpClient): HubApiClient => {
         signal,
       }));
     },
-    // ========== ProviderConnection / ModelDeployment（spec 03） ==========
+    // ========== ProviderConnection（spec 03） ==========
     listProviderConnections(signal) {
       return http.requestJson(HUB_API_ROUTES.providerConnections, requestOptions(ProviderConnectionListResponseSchema, {
         method: undefined,
@@ -210,43 +206,6 @@ export const createHubApiClient = (http: HubHttpClient): HubApiClient => {
         signal: undefined,
       }));
     },
-    listModelDeployments(modelId, signal) {
-      const query = modelId ? `?model_id=${encodeURIComponent(modelId)}` : '';
-      return http.requestJson(`${HUB_API_ROUTES.modelDeployments}${query}`, requestOptions(ModelDeploymentListResponseSchema, {
-        method: undefined,
-        body: undefined,
-        headers: undefined,
-        cache: 'no-store',
-        signal,
-      }));
-    },
-    createModelDeployment(payload) {
-      return http.requestJson(HUB_API_ROUTES.modelDeployments, requestOptions(ModelDeploymentResponseSchema, {
-        method: 'POST',
-        body: payload,
-        headers: undefined,
-        cache: undefined,
-        signal: undefined,
-      }));
-    },
-    updateModelDeployment(deploymentId, payload) {
-      return http.requestJson(`${HUB_API_ROUTES.modelDeployments}/${encodeURIComponent(deploymentId)}`, requestOptions(ModelDeploymentResponseSchema, {
-        method: 'PUT',
-        body: payload,
-        headers: undefined,
-        cache: undefined,
-        signal: undefined,
-      }));
-    },
-    deleteModelDeployment(deploymentId) {
-      return http.requestJson(`${HUB_API_ROUTES.modelDeployments}/${encodeURIComponent(deploymentId)}`, requestOptions(ModelDeploymentOkResponseSchema, {
-        method: 'DELETE',
-        body: undefined,
-        headers: undefined,
-        cache: undefined,
-        signal: undefined,
-      }));
-    },
     listActiveRoutes(signal) {
       return http.requestJson(HUB_API_ROUTES.activeRoutes, requestOptions(ActiveRouteMapResponseSchema, {
         method: undefined,
@@ -256,10 +215,10 @@ export const createHubApiClient = (http: HubHttpClient): HubApiClient => {
         signal,
       }));
     },
-    setActiveRoute(modelId, deploymentId) {
+    setActiveRoute(modelId, recordId) {
       return http.requestJson(`${HUB_API_ROUTES.activeRoutes}/${encodeURIComponent(modelId)}`, requestOptions(ActiveRouteResponseSchema, {
         method: 'PUT',
-        body: { deployment_id: deploymentId },
+        body: { deployment_id: recordId },
         headers: undefined,
         cache: undefined,
         signal: undefined,
@@ -379,7 +338,7 @@ export const createHubApiClient = (http: HubHttpClient): HubApiClient => {
      * 用户自建生成模型（GET/POST/PUT/DELETE /api/custom-generation-models，spec 03 §6.1）。
      *
      * 与对话侧 createCustomChatModel 同构，记录即接入：POST 一次写入能力属性与接入归属
-     * （active 接入由后端在创建内完成），不再串联 createModelDeployment 与 setActiveRoute。
+     * （active 接入由后端在创建内完成），不需要第二次写入。
      */
     listCustomGenerationModels(signal) {
       return http.requestJson(HUB_API_ROUTES.customGenerationModels, requestOptions(CustomGenerationModelListResponseSchema, {

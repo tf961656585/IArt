@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ADAPTER_REGISTRY,
   CHAT_PROTOCOL_ADAPTER_IDS,
   PROTOCOL_ADAPTER_IDS,
   ProviderConnectionSchema,
@@ -27,7 +28,9 @@ describe('协议适配器族分流', () => {
     expect(isChatProtocolAdapterId('gemini-image-interactions-v1')).toBe(false);
     expect(isChatProtocolAdapterId('seedance-2-0-v1')).toBe(false);
     expect(isChatProtocolAdapterId('veo-v1')).toBe(false);
-    expect(isChatProtocolAdapterId('kling-v1')).toBe(false);
+    expect(isChatProtocolAdapterId('kling-text2video-v1')).toBe(false);
+    expect(isChatProtocolAdapterId('kling-image2video-v1')).toBe(false);
+    expect(isChatProtocolAdapterId('kling-omni-video-v1')).toBe(false);
   });
 
   it('对话协议映射到执行层对话适配器；非对话协议返回 null（不静默回退）', () => {
@@ -37,7 +40,9 @@ describe('协议适配器族分流', () => {
     expect(resolveChatAdapterIdFromProtocolAdapter('gemini-chat-v1')).toBe('gemini');
 
     expect(resolveChatAdapterIdFromProtocolAdapter('openai-image-v1')).toBeNull();
-    expect(resolveChatAdapterIdFromProtocolAdapter('kling-v1')).toBeNull();
+    expect(resolveChatAdapterIdFromProtocolAdapter('kling-text2video-v1')).toBeNull();
+    expect(resolveChatAdapterIdFromProtocolAdapter('kling-image2video-v1')).toBeNull();
+    expect(resolveChatAdapterIdFromProtocolAdapter('kling-omni-video-v1')).toBeNull();
   });
 
   it('CHAT_PROTOCOL_ADAPTER_IDS 的每个对话协议都必须有执行层映射：漏配映射时本用例失败', () => {
@@ -45,6 +50,35 @@ describe('协议适配器族分流', () => {
     for (const id of CHAT_PROTOCOL_ADAPTER_IDS) {
       expect(resolveChatAdapterIdFromProtocolAdapter(id)).not.toBeNull();
     }
+  });
+
+  it('可灵三个适配器各自只声明自己的提交端点，共用同一组任务查询端点', () => {
+    // 可灵按官方三个提交端点拆成三个接口类型：端点即模型身份，不得把三个提交端点混在一个
+    // 适配器里（三者的请求体字段并不通用）。
+    expect(ADAPTER_REGISTRY['kling-text2video-v1'].relative_endpoints).toEqual({
+      textToVideo: '/text-to-video/kling-3.0',
+      taskById: '/tasks?task_ids={id}',
+      taskByExternalId: '/tasks?external_task_ids={id}',
+    });
+    expect(ADAPTER_REGISTRY['kling-image2video-v1'].relative_endpoints).toEqual({
+      imageToVideo: '/image-to-video/kling-3.0',
+      taskById: '/tasks?task_ids={id}',
+      taskByExternalId: '/tasks?external_task_ids={id}',
+    });
+    expect(ADAPTER_REGISTRY['kling-omni-video-v1'].relative_endpoints).toEqual({
+      omniVideo: '/omni-video/kling-3.0-omni',
+      taskById: '/tasks?task_ids={id}',
+      taskByExternalId: '/tasks?external_task_ids={id}',
+    });
+    for (const adapterId of ['kling-text2video-v1', 'kling-image2video-v1', 'kling-omni-video-v1'] as const) {
+      expect(ADAPTER_REGISTRY[adapterId].adapter_id).toBe(adapterId);
+      expect(ADAPTER_REGISTRY[adapterId].family).toBe('generation');
+      expect(ADAPTER_REGISTRY[adapterId].auth.kind).toBe('bearer');
+    }
+  });
+
+  it('ADAPTER_REGISTRY 的键集与 PROTOCOL_ADAPTER_IDS 完全一致（新增/删除适配器两边同步）', () => {
+    expect(Object.keys(ADAPTER_REGISTRY).sort()).toEqual([...PROTOCOL_ADAPTER_IDS].sort());
   });
 
   it('CHAT_PROTOCOL_ADAPTER_IDS 与 CHAT_PROTOCOL_TO_CHAT_ADAPTER 键集一致：映射不收录清单外的协议', () => {

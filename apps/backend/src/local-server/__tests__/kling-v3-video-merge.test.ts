@@ -1,34 +1,41 @@
 /**
- * kling-v3-video 合并包 payload 对比测试
+ * 可灵视频 payload 规则求值测试。
  *
- * 验证合并后的 kling-v3-video 包在不同模式下生成的 payload
- * 与原始独立包（kling-v3-text2video / kling-v3-image2video）一致。
+ * payload 断言本身是**内联 DSL 规则**（不读任何包/模板文件），验证 `evaluateRule` 在
+ * 文生视频 / 图生视频两种字段形态下的求值语义（endpoint 选择、meta.taskType、file/媒体引用、
+ * 归一化枚举、水印开关）。2026-10-20 模型能力包退场、包目录删除后，原先末尾那块「包现状」
+ * 核对改为**族模板现状**核对（见文件末）。
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import path from "node:path";
-
+import {
+  GENERATION_FAMILY_ADAPTER_IDS,
+  type GenerationFamilyAdapterId,
+} from "@iart/contracts";
 import { evaluateRule } from "../request-assembler-runtime.cts";
 import type { EvaluateState } from "../request-assembler-shared.cts";
 import { resetBackendConfigForTest } from "../config-store.cts";
-import { findProjectionByModelIdOrAlias } from "../model-package-catalog.cts";
+import {
+  KLING_IMAGE2VIDEO_V1_FAMILY_ADAPTER_ID,
+} from "../generation-family-templates.kling-image2video.cts";
+import {
+  KLING_OMNI_VIDEO_V1_FAMILY_ADAPTER_ID,
+} from "../generation-family-templates.kling-omni-video.cts";
+import {
+  KLING_TEXT2VIDEO_V1_FAMILY_ADAPTER_ID,
+} from "../generation-family-templates.kling-text2video.cts";
+import {
+  GENERATION_FAMILY_TEMPLATE_REGISTRY,
+  getFamilyTemplate,
+} from "../generation-family-templates.registry.cts";
+import { projectFamilyTemplate } from "./family-template-projection-test-helpers";
 
 // 公共中转端点是运行时用户配置事实（用户自带语义）：测试自置占位端点并重载
 // 后端配置单例，保证投影解析不依赖开发机 .env / 本机 backend.json。
 process.env["IART_PUBLIC_UPLOAD_CLOUDFLARE_IMAGE_PUBLIC_URL_ENDPOINT"] = "https://relay.example.com/upload";
 process.env["IART_PUBLIC_UPLOAD_SELF_HOSTED_IMAGE_PUBLIC_URL_ENDPOINT"] = "https://image-relay.example.com/api/upload";
 resetBackendConfigForTest();
-
-/**
- * 从测试文件位置向上导航到仓库根目录的 .model-assets/packages。
- * 测试文件在 apps/backend/src/local-server/__tests__/，
- * 所以需要向上 5 级到达项目根。
- */
-const REPO_PACKAGES_DIR = path.resolve(
-  process.cwd(),
-  ".model-assets", "packages",
-);
 
 const makeText2VideoState = (): EvaluateState => ({
   fields: {
@@ -314,50 +321,73 @@ void describe("kling-v3-video merged package: shared fields", () => {
   });
 });
 
-void describe("kling 包现状：text2video / image2video 独立包，无 kling-v3-video 合并包", () => {
-  const previousPackageRoot = process.env["IART_MODEL_ASSET_PACKAGES_DIR"];
+/**
+ * 可灵三族现状：文生视频 / 图生视频 / 全模态视频各自独立，没有「合并成单族」的形态。
+ *
+ * 历史：本块原本核对磁盘上的真实包（kling-v3-text2video / kling-v3-image2video 独立存在、
+ * kling-v3-video 合并包不存在）。2026-10-20 模型能力包退场、包目录删除后，同样的**事实**改由
+ * 族模板核对——三个接口类型各是一个独立族模板，用户模型记录一次只能选一个族，因此「合并族」
+ * 在契约层就不可表达（`GENERATION_FAMILY_ADAPTER_IDS` 无该键）。
+ *
+ * 这里经真实投影管线取三族投影，钉住「各自可独立成模、身份互不覆盖」。
+ */
+void describe("可灵族现状：text2video / image2video / omni-video 三族独立，无合并族", () => {
+  // 显式标注类型：注册表是 `Record<GenerationFamilyAdapterId, ...>`，用 string[] 索引会
+  // 隐式退化到 any（TS7053）。类型来源仍是 contracts 的值域，不在测试里放宽。
+  const KLING_ADAPTER_IDS: readonly GenerationFamilyAdapterId[] = [
+    KLING_TEXT2VIDEO_V1_FAMILY_ADAPTER_ID,
+    KLING_IMAGE2VIDEO_V1_FAMILY_ADAPTER_ID,
+    KLING_OMNI_VIDEO_V1_FAMILY_ADAPTER_ID,
+  ];
 
-  void it("kling-v3-video 合并包不存在（无 sources/packages 实现）", () => {
-    process.env["IART_MODEL_ASSET_PACKAGES_DIR"] = REPO_PACKAGES_DIR;
-    try {
-      const result = findProjectionByModelIdOrAlias("kling-v3-video");
-      assert.equal(result, undefined, "kling-v3-video 合并包未实现，不应可解析");
-    } finally {
-      if (previousPackageRoot !== undefined) {
-        process.env["IART_MODEL_ASSET_PACKAGES_DIR"] = previousPackageRoot;
-      } else {
-        delete process.env["IART_MODEL_ASSET_PACKAGES_DIR"];
-      }
-    }
+  void it("没有 kling-v3-video 合并族（接口类型值域里不存在）", () => {
+    assert.equal(
+      (GENERATION_FAMILY_ADAPTER_IDS as readonly string[]).includes("kling-v3-video"),
+      false,
+      "kling-v3-video 合并不在接口类型值域内，因此不可能有对应族模板",
+    );
+    assert.equal(
+      getFamilyTemplate("kling-v3-video"),
+      null,
+      "未登记的接口类型必须返回 null（不是命中某个默认族）",
+    );
   });
 
-  void it("kling-v3-text2video 是独立包，可按自身 model_id 解析", () => {
-    process.env["IART_MODEL_ASSET_PACKAGES_DIR"] = REPO_PACKAGES_DIR;
-    try {
-      const result = findProjectionByModelIdOrAlias("kling-v3-text2video");
-      assert.ok(result, "should find kling-v3-text2video by model_id");
-      assert.equal(result.projection.model_id, "kling-v3-text2video");
-    } finally {
-      if (previousPackageRoot !== undefined) {
-        process.env["IART_MODEL_ASSET_PACKAGES_DIR"] = previousPackageRoot;
-      } else {
-        delete process.env["IART_MODEL_ASSET_PACKAGES_DIR"];
-      }
+  void it("三族各自可独立成模，投影 model_id 与虚拟包身份互不覆盖", () => {
+    const seenModelIds = new Set<string>();
+    const seenPackageIds = new Set<string>();
+    for (const familyAdapterId of KLING_ADAPTER_IDS) {
+      const entry = GENERATION_FAMILY_TEMPLATE_REGISTRY[familyAdapterId];
+      assert.equal(entry.status, "ready", `${familyAdapterId} 必须已就绪`);
+      if (entry.status !== "ready") continue;
+
+      const projected = projectFamilyTemplate({
+        familyAdapterId,
+        buildBaseSources: entry.buildBaseSources,
+        supportsMediaSlots: entry.supportsMediaSlots,
+      });
+      assert.equal(projected.projection.model_id, `declared-${familyAdapterId}-test`);
+      assert.equal(projected.packageId, `declared-${familyAdapterId}`);
+      seenModelIds.add(projected.projection.model_id);
+      seenPackageIds.add(projected.packageId);
     }
+    assert.equal(seenModelIds.size, KLING_ADAPTER_IDS.length, "三族 model_id 不得互相覆盖");
+    assert.equal(seenPackageIds.size, KLING_ADAPTER_IDS.length, "三族虚拟包身份不得互相覆盖");
   });
 
-  void it("kling-v3-image2video 是独立包，可按自身 model_id 解析", () => {
-    process.env["IART_MODEL_ASSET_PACKAGES_DIR"] = REPO_PACKAGES_DIR;
-    try {
-      const result = findProjectionByModelIdOrAlias("kling-v3-image2video");
-      assert.ok(result, "should find kling-v3-image2video by model_id");
-      assert.equal(result.projection.model_id, "kling-v3-image2video");
-    } finally {
-      if (previousPackageRoot !== undefined) {
-        process.env["IART_MODEL_ASSET_PACKAGES_DIR"] = previousPackageRoot;
-      } else {
-        delete process.env["IART_MODEL_ASSET_PACKAGES_DIR"];
-      }
+  void it("三族投影都产出 video 输出端口（同一族系的结果形态）", () => {
+    for (const familyAdapterId of KLING_ADAPTER_IDS) {
+      const entry = GENERATION_FAMILY_TEMPLATE_REGISTRY[familyAdapterId];
+      if (entry.status !== "ready") continue;
+      const projected = projectFamilyTemplate({
+        familyAdapterId,
+        buildBaseSources: entry.buildBaseSources,
+        supportsMediaSlots: entry.supportsMediaSlots,
+      });
+      assert.ok(
+        projected.projection.ports.outputs.some((port) => port.data_type === "video"),
+        `${familyAdapterId} 必须产出 video 输出端口`,
+      );
     }
   });
 });

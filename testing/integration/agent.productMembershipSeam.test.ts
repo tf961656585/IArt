@@ -124,12 +124,14 @@ type BackendCredentialStoreModule = {
   ) => Promise<{ credentialRef: string; version: number } | null>;
 };
 
-type BackendDeploymentStoreModule = {
-  createDeployment: (input: {
+/** 用户生成模型记录（spec 03 §6.1 单一载体，2026-10-19）：record_id 即接入记录 id。 */
+type BackendCustomGenerationModelStoreModule = {
+  addCustomGenerationModel: (input: {
     model_id: string;
     connection_id: string;
-    remote_model_id: string;
-  }) => { deployment_id: string };
+    remote_model_id?: string;
+    family_adapter_id: string;
+  }) => { ok: boolean; model?: BackendCustomChatModelRecord };
   clearCacheForTest: () => void;
 };
 
@@ -162,9 +164,9 @@ type BackendModules = {
   projectMediaScope: BackendProjectMediaScopeModule;
   connectionStore: BackendConnectionStoreModule;
   credentialStore: BackendCredentialStoreModule;
-  deploymentStore: BackendDeploymentStoreModule;
   activeRouteStore: BackendActiveRouteStoreModule;
   customChatModelStore: BackendCustomChatModelStoreModule;
+  customGenerationModelStore: BackendCustomGenerationModelStoreModule;
 };
 
 /** Node realm 的 `Uint8Array` 构造器（jsdom 暴露的全局属另一 realm，tsx/esbuild 自检依赖）。 */
@@ -203,9 +205,6 @@ const loadBackendModules = async (): Promise<BackendModules> => {
       credentialStore: cjsRequireAs<BackendCredentialStoreModule>(
         scoped.require(sourcePath('provider-connection', 'credential-store.cts'), HELPER_FILE_PATH),
       ),
-      deploymentStore: cjsRequireAs<BackendDeploymentStoreModule>(
-        scoped.require(sourcePath('provider-connection', 'deployment-store.cts'), HELPER_FILE_PATH),
-      ),
       activeRouteStore: cjsRequireAs<BackendActiveRouteStoreModule>(
         scoped.require(
           sourcePath('provider-connection', 'active-route-store.cts'),
@@ -215,6 +214,12 @@ const loadBackendModules = async (): Promise<BackendModules> => {
       customChatModelStore: cjsRequireAs<BackendCustomChatModelStoreModule>(
         scoped.require(
           sourcePath('provider-connection', 'custom-chat-model-store.cts'),
+          HELPER_FILE_PATH,
+        ),
+      ),
+      customGenerationModelStore: cjsRequireAs<BackendCustomGenerationModelStoreModule>(
+        scoped.require(
+          sourcePath('provider-connection', 'custom-generation-model-store.cts'),
           HELPER_FILE_PATH,
         ),
       ),
@@ -571,7 +576,6 @@ beforeAll(async () => {
 
   // 隔离存储根 + 真实对话/生成两条链路的 store 种子（清缓存防跨用例残留）。
   modules.connectionStore.clearCacheForTest();
-  modules.deploymentStore.clearCacheForTest();
   modules.activeRouteStore.clearCacheForTest();
   modules.customChatModelStore.clearCacheForTest();
 
@@ -635,7 +639,9 @@ beforeAll(async () => {
     throw new Error('chat active route should be set');
   }
 
-  // 生成链路种子：连接 → 凭证 → 部署 → active route（连接不再承载接口类型，协议随模型记录走）。
+  // 生成链路种子：连接 → 凭证 → 用户生成模型记录 → active route（连接不再承载接口类型，
+  // 协议随模型记录走）。2026-10-19 起模型只有用户记录一种载体（spec 03 §6.1 / PC-14），
+  // 原经 createDeployment 播种的写法随部署载体退场失效——记录本身就是接入目标（record_id）。
   const generationConnection = modules.connectionStore.createConnection({
     display_name: 'seam-gen-upstream',
     base_url: GENERATION_CONNECTION_BASE_URL,
@@ -651,18 +657,22 @@ beforeAll(async () => {
     generationCredential.version,
     true,
   );
-  const generationDeployment = modules.deploymentStore.createDeployment({
+  const generationRecord = modules.customGenerationModelStore.addCustomGenerationModel({
     model_id: GENERATION_MODEL_ID,
     connection_id: generationConnection.connection_id,
     remote_model_id: 'remote-seam-image',
+    family_adapter_id: 'openai-image-v1',
   });
+  if (!generationRecord.ok || !generationRecord.model) {
+    throw new Error('generation model record should be created');
+  }
   if (
     modules.activeRouteStore.setActiveDeployment(
       GENERATION_MODEL_ID,
-      generationDeployment.deployment_id,
-    ) !== generationDeployment.deployment_id
+      generationRecord.model.record_id,
+    ) !== generationRecord.model.record_id
   ) {
-    throw new Error('generation active deployment should be set');
+    throw new Error('generation active access target should be set');
   }
 
   // Backend→Main 请求-响应 IPC 拦截：历史读取回空、runtime 事务回执并捕获落库行、任务事件回执。
@@ -721,7 +731,6 @@ afterAll(() => {
   upstreamRestore?.();
   backend?.ipcSender.setBackendIpcTestHandler(null);
   backend?.connectionStore.clearCacheForTest();
-  backend?.deploymentStore.clearCacheForTest();
   backend?.activeRouteStore.clearCacheForTest();
   backend?.customChatModelStore.clearCacheForTest();
   projectClose?.();

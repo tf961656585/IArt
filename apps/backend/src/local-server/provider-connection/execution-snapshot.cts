@@ -5,7 +5,11 @@ import {
   type BatchIntentSnapshot,
 } from '@iart/contracts';
 import { getConnection } from './connection-store.cts';
-import { getActiveDeploymentId, resolveActiveTarget, type ActiveRouteTarget } from './active-route-store.cts';
+import {
+  getActiveRoutes,
+  resolveActiveTargetRecord,
+  type ActiveRouteTarget,
+} from './active-route-store.cts';
 import { getAdapter } from '../protocol-adapter/adapter-registry.cts';
 import { getCredentialVersion } from './credential-store.cts';
 import * as loggingModule from '../logging.cts';
@@ -13,14 +17,14 @@ import * as loggingModule from '../logging.cts';
 /**
  * ExecutionSnapshot 构建器（spec 03 §8 / spec 45 §5.2）。
  *
- * - 派发时解析 active 接入记录（deployment 或自建模型记录，双查见 active-route-store），
- *   冻结模型协议·连接·Base URL·remote_model_id·凭据版本
- *   （2026-09-26 起协议归属模型级：adapter_id 按模型解析——自建记录自带协议字段、已装包
- *   模型按封闭族正则表；记录无协议即显式失败，2026-09-29 起连接不再承载接口类型预选）
+ * - 派发时解析 active 接入记录（只有模型记录一种载体，见 active-route-store），冻结模型协议·
+ *   连接·Base URL·remote_model_id·凭据版本
+ *   （2026-09-26 起协议归属模型级：adapter_id 只按模型记录自带的协议字段解析；记录无协议即
+ *   显式失败，2026-09-29 起连接不再承载接口类型预选，也不按 model_id 名称或正则推断）
  * - 未派发的任务读取当时 active，已开始请求的任务不漂移
  * - 远程受理后轮询/取消/结果只按同一快照
- * - `deployment_id` 语义为「active 接入记录 id」：已装包模型为 ModelDeployment id，
- *   自建模型为其模型记录 id（两类 id 同用 `up_dep_` 前缀）
+ * - `deployment_id` 语义为「active 接入记录 id」，即该模型的记录 id（字段名沿用，2026-10-19
+ *   部署载体退场后不再有第二种取值）
  */
 
 const normalizeModelId = (value: unknown): string =>
@@ -38,7 +42,15 @@ type BuildSnapshotResult =
 
 const ERROR_CODES_MAP = {
   NO_ACTIVE: 'no_active_deployment',
-  DEPLOYMENT_NOT_FOUND: 'deployment_not_found',
+  /**
+   * active 路由指向的接入记录找不到（记录的删除与 active route 清理之间被读到的瞬间）。
+   *
+   * 2026-10-19 由 `deployment_not_found` 改名：部署载体已退场，失败的语义是「接入目标不见了」，
+   * 与「没有 active 接入目标」（`no_active_deployment`）是两件事。`no_active_deployment` 的
+   * 取值沿用既有字符串——它已跨进程分发到任务记录与 Editor 文案表，改名会打断已落库的
+   * 历史任务记录；但它的**语义**已是「模型没有 active 接入目标」（spec 03 §9）。
+   */
+  ACCESS_TARGET_NOT_FOUND: 'access_target_not_found',
   CONNECTION_NOT_FOUND: 'connection_not_found',
   CONNECTION_NOT_ENABLED: 'connection_not_enabled',
   CREDENTIAL_MISSING: 'credential_missing',
@@ -54,24 +66,27 @@ const buildExecutionSnapshot = (params: {
   if (!modelId) {
     return { ok: false, code: ERROR_CODES_MAP.NO_ACTIVE, message: 'model_id is required' };
   }
-  const activeDeploymentId = getActiveDeploymentId(modelId);
-  if (!activeDeploymentId) {
-    loggingModule.logDebug('[execution-snapshot] no active deployment', { modelId });
-    return { ok: false, code: ERROR_CODES_MAP.NO_ACTIVE, message: `model ${modelId} has no active deployment` };
+  // 先读 active 路由**原始映射**（不先做存活性过滤）：这样「路由为空」与「路由指向的记录已不在」
+  // 是两条可分辨的失败，各有自己的原因码。若先走 getActiveDeploymentId（它会把 stale 映射折成
+  // null），下面那条 ACCESS_TARGET_NOT_FOUND 就永远不可达——一条永远不触发的判据比没有更糟。
+  const activeRecordId = getActiveRoutes()[modelId];
+  if (!activeRecordId) {
+    loggingModule.logDebug('[execution-snapshot] no active access target', { modelId });
+    return { ok: false, code: ERROR_CODES_MAP.NO_ACTIVE, message: `model ${modelId} has no active access target` };
   }
-  // 解析 active 接入记录（deployment 或自建模型记录，双查）：两类记录投影为同一形状
-  const access: ActiveRouteTarget | null = resolveActiveTarget(modelId);
+  // 解析 active 接入记录（两族模型记录两查，投影为同一形状）
+  const access: ActiveRouteTarget | null = resolveActiveTargetRecord(activeRecordId);
   if (!access) {
-    loggingModule.logDebug('[execution-snapshot] active access record not found', { modelId, activeDeploymentId });
-    return { ok: false, code: ERROR_CODES_MAP.DEPLOYMENT_NOT_FOUND, message: `active access record not found: ${activeDeploymentId}` };
+    loggingModule.logDebug('[execution-snapshot] active access record not found', { modelId, activeRecordId });
+    return { ok: false, code: ERROR_CODES_MAP.ACCESS_TARGET_NOT_FOUND, message: `active access record not found: ${activeRecordId}` };
   }
   if (access.model_id !== modelId) {
     loggingModule.logDebug('[execution-snapshot] access record model mismatch', { modelId, recordModelId: access.model_id });
-    return { ok: false, code: ERROR_CODES_MAP.DEPLOYMENT_NOT_FOUND, message: 'active access record model mismatch' };
+    return { ok: false, code: ERROR_CODES_MAP.ACCESS_TARGET_NOT_FOUND, message: 'active access record model mismatch' };
   }
   const connection = getConnection(access.connection_id);
   if (!connection) {
-    loggingModule.logDebug('[execution-snapshot] connection not found', { deploymentId: access.target_id, connectionId: access.connection_id });
+    loggingModule.logDebug('[execution-snapshot] connection not found', { recordId: access.target_id, connectionId: access.connection_id });
     return { ok: false, code: ERROR_CODES_MAP.CONNECTION_NOT_FOUND, message: `connection not found: ${access.connection_id}` };
   }
   if (connection.lifecycle !== 'enabled') {
@@ -82,9 +97,10 @@ const buildExecutionSnapshot = (params: {
     loggingModule.logDebug('[execution-snapshot] credential missing', { connectionId: connection.connection_id });
     return { ok: false, code: ERROR_CODES_MAP.CREDENTIAL_MISSING, message: 'connection credential missing' };
   }
-  // 协议由模型自带（2026-09-26 起协议归属模型级；2026-09-29 起连接不再承载接口类型预选）：
-  // 自建记录携带协议字段、已装包模型按 model_id 封闭族正则表在 active-route 解析时回填。
-  // 记录无协议即显式失败——连接遗留键不再是协议来源，连接默认预选从来不是协议事实源。
+  // 协议由模型记录自带（2026-09-26 起协议归属模型级；2026-09-29 起连接不再承载接口类型预选）：
+  // 两族记录的 schema 都要求协议字段必填，active route 投影因此恒有值。下面这次判空是执行边界的
+  // 兜底（记录被外部改坏时不静默放行），不是「未命中原生正则」的分支——那类解析已随部署载体
+  // 退场消失（spec 03 §8：不存在按 model_id 名称或正则推断协议）。
   const modelProtocolAdapterId = access.protocol_adapter_id;
   if (!modelProtocolAdapterId) {
     loggingModule.logDebug('[execution-snapshot] model protocol unresolved (record has no protocol adapter)', {
@@ -105,7 +121,7 @@ const buildExecutionSnapshot = (params: {
   }
   const remoteModelId = access.remote_model_id.trim();
   if (!remoteModelId) {
-    loggingModule.logDebug('[execution-snapshot] remote_model_id missing', { deploymentId: access.target_id });
+    loggingModule.logDebug('[execution-snapshot] remote_model_id missing', { recordId: access.target_id });
     return { ok: false, code: ERROR_CODES_MAP.REMOTE_MODEL_MISSING, message: 'access record remote_model_id missing' };
   }
   // 解析 endpoint：base_url + adapter relative endpoint（冻结版本与连接，前瞻占位）
@@ -120,6 +136,11 @@ const buildExecutionSnapshot = (params: {
     if (adapter.adapter_id === 'gemini-image-interactions-v1') return rel.interactions ?? '/v1beta/interactions';
     if (adapter.adapter_id === 'seedance-2-0-v1') return rel.tasks ?? '/api/v3/contents/generations/tasks';
     if (adapter.adapter_id === 'veo-v1') return rel.predictLongRunning ?? '/v1beta/models/{model}:predictLongRunning';
+    // 可灵三个提交端点各是一个适配器（2026-10-19 拆分）：各自取自己的提交端点作占位，
+    // 不落到「首个可用相对路径」——三条目都带查询端点，靠顺序取到的值不可读。
+    if (adapter.adapter_id === 'kling-text2video-v1') return rel.textToVideo ?? '/text-to-video/kling-3.0';
+    if (adapter.adapter_id === 'kling-image2video-v1') return rel.imageToVideo ?? '/image-to-video/kling-3.0';
+    if (adapter.adapter_id === 'kling-omni-video-v1') return rel.omniVideo ?? '/omni-video/kling-3.0-omni';
     // fallback：取首个可用相对路径
     const first = Object.values(rel).find((v): v is string => typeof v === 'string' && Boolean(v.trim()));
     return first ?? '/v1/images/generations';

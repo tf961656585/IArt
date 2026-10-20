@@ -178,7 +178,7 @@ async function resolveApiConfig(
   const snapshotResult = buildExecutionSnapshot({ modelId: modelAssetId });
   if (!snapshotResult.ok) {
     throw new Error(
-      `chat model has no usable active deployment: ${modelAssetId} (${snapshotResult.code})`,
+      `chat model has no usable active access target: ${modelAssetId} (${snapshotResult.code})`,
     );
   }
   const { snapshot } = snapshotResult;

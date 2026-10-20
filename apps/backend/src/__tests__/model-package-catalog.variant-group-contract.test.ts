@@ -8,6 +8,7 @@ import {
   listBindableModelsForApiKeyPolicy,
   loadModelPackageCatalog,
 } from "../local-server/model-package-catalog.cts";
+import { GENERATION_FAMILY_TEMPLATE_REGISTRY } from "../local-server/generation-family-templates.registry.cts";
 
 const writeJson = (filePath: string, value: unknown) => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -259,44 +260,55 @@ void test("变体组契约：组内结构不一致时降级为独立展示并留
   });
 });
 
-void test("模型能力包：source 与 package 均不残留已退役的变体字段", () => {
-  const repoRoot = path.join(__dirname, "..", "..", "..", "..");
-  const roots = [
-    path.join(repoRoot, ".model-assets", "sources"),
-    path.join(repoRoot, ".model-assets", "packages"),
-  ];
+/**
+ * 已退役变体字段不得回流。
+ *
+ * 2026-10-20 起样本来源由仓库真实包目录（源与产物两侧）改为**族模板产出的 sources**：
+ * 包目录已整体删除，模板是现在唯一生产 sources 的地方。不变量本身不变——
+ * `variant_label` / `variant_default`（display 内）与 `modelSnapshot`（runtime_model 顶层）
+ * 都已退役，变体组机制只用 `variant_group` + `variant_order`；回流会让投影侧读到已删语义。
+ */
+void test("族模板产出的 sources 不残留已退役的变体字段", () => {
+  let checkedFamilies = 0;
 
-  for (const root of roots) {
-    const packageIds = fs
-      .readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-    assert.ok(packageIds.length > 0, `empty_package_root:${root}`);
+  for (const [familyAdapterId, entry] of Object.entries(
+    GENERATION_FAMILY_TEMPLATE_REGISTRY,
+  )) {
+    if (entry.status !== "ready") continue;
+    checkedFamilies += 1;
 
-    for (const packageId of packageIds) {
-      const runtimeModelPath = path.join(root, packageId, "runtime_model.json");
-      if (!fs.existsSync(runtimeModelPath)) continue;
-      const runtimeModel = JSON.parse(
-        fs.readFileSync(runtimeModelPath, "utf-8"),
-      ) as Record<string, unknown>;
+    // 空素材位与全素材位两种形态都查：变体字段若被写进某个素材分支，只有对应形态能暴露。
+    for (const acceptedMediaSlots of [[], entry.supportsMediaSlots]) {
+      const sources = entry.buildBaseSources(
+        `declared-${familyAdapterId}-variant`,
+        { acceptedMediaSlots },
+      );
+      const runtimeModel = sources.runtimeModel;
+      const displayRaw = runtimeModel["display"];
       const display =
-        runtimeModel["display"] !== null &&
-        runtimeModel["display"] !== undefined &&
-        typeof runtimeModel["display"] === "object"
-          ? (runtimeModel["display"] as Record<string, unknown>)
+        displayRaw !== null &&
+        displayRaw !== undefined &&
+        typeof displayRaw === "object"
+          ? (displayRaw as Record<string, unknown>)
           : {};
+
       assert.ok(
         !("variant_label" in display),
-        `variant_label_should_be_removed:${root}:${packageId}`,
+        `variant_label_should_be_removed:${familyAdapterId}`,
       );
       assert.ok(
         !("variant_default" in display),
-        `variant_default_should_be_removed:${root}:${packageId}`,
+        `variant_default_should_be_removed:${familyAdapterId}`,
       );
       assert.ok(
         !("modelSnapshot" in runtimeModel),
-        `modelSnapshot_should_be_removed:${root}:${packageId}`,
+        `modelSnapshot_should_be_removed:${familyAdapterId}`,
       );
     }
   }
+
+  assert.ok(
+    checkedFamilies > 0,
+    "至少要有 1 个 ready 族（否则本用例退化成空循环恒绿）",
+  );
 });

@@ -141,7 +141,7 @@ const executeHttpTask = async (
   );
 
   // ---- Provider 连接快照与租约（spec 03 §5/§8）----
-  // 通用 Provider 必须经 active deployment 解析并冻结 ExecutionSnapshot；无 active 时阻断。
+  // 通用 Provider 必须经 active 接入目标解析并冻结 ExecutionSnapshot；无 active 时阻断。
   let snapshot: ExecutionSnapshot | null = null;
   let lease: CredentialLease | null = null;
   let leaseValue: string | null = null;

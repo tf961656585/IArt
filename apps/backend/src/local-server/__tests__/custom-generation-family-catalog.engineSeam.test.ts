@@ -10,6 +10,7 @@ import {
   ExecutableModelCatalogResponseSchema,
   PromptDockBatchSubmitResponseSchema,
   TaskStateNotificationSchema,
+  type GenerationMediaSlotId,
   type TaskStateNotification,
 } from '@iart/contracts';
 import { createRequestHandler } from '../router.cts';
@@ -233,7 +234,7 @@ const setupTest = async (t: TestContext) => {
 };
 
 /** 单记录口径：能力属性 + 接入归属一次写入（openai-image-v1 连接 + 凭证）→ active route。 */
-const seedDeclarationAndRouting = async (params: { modelId: string; supportsReferenceImage: boolean }): Promise<void> => {
+const seedDeclarationAndRouting = async (params: { modelId: string; acceptedMediaSlots: GenerationMediaSlotId[] }): Promise<void> => {
   const connection = createConnection({
     display_name: 'seam-declared-upstream',
     base_url: CONNECTION_BASE_URL,
@@ -246,7 +247,7 @@ const seedDeclarationAndRouting = async (params: { modelId: string; supportsRefe
     connection_id: connection.connection_id,
     remote_model_id: REMOTE_MODEL_ID,
     family_adapter_id: 'openai-image-v1',
-    supports_reference_image: params.supportsReferenceImage,
+    accepted_media_slots: params.acceptedMediaSlots,
   });
   assert.equal(added.ok, true, 'declaration should be accepted by the real store');
   assert.equal(setActiveDeployment(params.modelId, added.model.record_id), added.model.record_id);
@@ -254,7 +255,7 @@ const seedDeclarationAndRouting = async (params: { modelId: string; supportsRefe
 
 void test('接缝：自建生成模型经族模板进入可执行目录并走通提交→执行→产物主链（t2i）', async (t) => {
   const { projectPath } = await setupTest(t);
-  await seedDeclarationAndRouting({ modelId: DECLARED_MODEL_ID, supportsReferenceImage: false });
+  await seedDeclarationAndRouting({ modelId: DECLARED_MODEL_ID, acceptedMediaSlots: [] });
   const baseUrl = await startServer(t);
   const capture = installNotificationCapture();
   const upstream = installSucceedingUpstreamStub({ generationBaseUrl: CONNECTION_BASE_URL });
@@ -354,9 +355,9 @@ void test('接缝：自建生成模型经族模板进入可执行目录并走通
   assert.ok(succeeded.mediaAssets.length > 0, 'succeeded notification must carry media assets');
 });
 
-void test('接缝：声明勾选支持参考图时能力投影含图像输入（catalog 层）', async (t) => {
+void test('接缝：声明勾选参考图素材位时能力投影含图像输入（catalog 层）', async (t) => {
   await setupTest(t);
-  await seedDeclarationAndRouting({ modelId: DECLARED_REF_MODEL_ID, supportsReferenceImage: true });
+  await seedDeclarationAndRouting({ modelId: DECLARED_REF_MODEL_ID, acceptedMediaSlots: ['reference_image'] });
   const baseUrl = await startServer(t);
 
   const catalogPayload = await fetchJson(baseUrl, '/api/executable-model-catalog');
@@ -365,7 +366,7 @@ void test('接缝：声明勾选支持参考图时能力投影含图像输入（
   assert.ok(entry, 'reference-capable declared model must appear in the executable catalog');
   assert.ok(
     entry.capability.input_modalities.includes('image'),
-    'supports_reference_image declaration must project image input capability',
+    'reference_image media slot must project image input capability',
   );
   assert.equal(entry.capability.supports_reference_media, true);
   assert.ok(

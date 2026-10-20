@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { HubConfigResponse, ProxyMode } from '@iart/contracts';
 import { useHubRuntime } from '../../components/providers/HubAppProvider';
+import { useDebouncedCommit } from './components/useDebouncedCommit';
 import { validateHttpUrlInput } from './url-validation';
 
 /**
@@ -25,7 +26,6 @@ export function useNetworkProxy() {
   const [proxyUrl, setProxyUrl] = useState('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const applySettings = useCallback((payload: HubConfigResponse | null | undefined): void => {
     if (!payload) return;
     const config = payload.config;
@@ -86,20 +86,20 @@ export function useNetworkProxy() {
     [applySettings, settingsFeature],
   );
 
-  const debouncedPersist = useCallback(
-    (mode: ProxyMode, url: string): void => {
-      if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = setTimeout(() => {
-        void persist(mode, url);
-      }, 300);
-    },
-    [persist],
-  );
+  // 挂起值经 ref 读取：切换分区会卸载本页，卸载时钩子冲出挂起提交，
+  // 用的是最后一次输入值而不是渲染时闭包里的旧值。
+  const pendingRef = useRef<{ mode: ProxyMode; url: string }>({ mode: 'system', url: '' });
+  pendingRef.current = { mode: proxyMode, url: proxyUrl };
+  const debouncedPersist = useDebouncedCommit(() => {
+    const { mode, url } = pendingRef.current;
+    void persist(mode, url);
+  });
 
   const changeProxyMode = useCallback(
     (mode: ProxyMode): void => {
       setProxyMode(mode);
-      debouncedPersist(mode, proxyUrl);
+      pendingRef.current = { mode, url: proxyUrl };
+      debouncedPersist();
     },
     [debouncedPersist, proxyUrl],
   );
@@ -107,16 +107,11 @@ export function useNetworkProxy() {
   const changeProxyUrl = useCallback(
     (value: string): void => {
       setProxyUrl(value);
-      debouncedPersist(proxyMode, value);
+      pendingRef.current = { mode: proxyMode, url: value };
+      debouncedPersist();
     },
     [debouncedPersist, proxyMode],
   );
-
-  useEffect(() => {
-    return () => {
-      if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current);
-    };
-  }, []);
 
   return {
     proxyMode,

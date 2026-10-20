@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { HubConfigResponse } from '@iart/contracts';
 import { useHubRuntime } from '../../components/providers/HubAppProvider';
+import { useDebouncedCommit } from './components/useDebouncedCommit';
 
 /**
  * 运行策略子域 React 版操作 hook。逻辑与 vanilla 侧 createSettingsController
@@ -29,7 +30,6 @@ export function useRunPolicy() {
   const [expandInlineParamsOnStartup, setExpandInlineParamsOnStartup] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // wheel 处理在组件里以原生 listener（passive:false）挂一次，值经 ref 镜像读取，避免闭包过期
   const maxBatchTasksRef = useRef(String(DEFAULT_MAX_BATCH_TASKS));
   const syncMaxBatchTasksRef = (value: string): void => {
@@ -73,13 +73,11 @@ export function useRunPolicy() {
     }
   }, [applySettings, expandInlineParamsOnStartup, maxBatchTasks, settingsFeature]);
 
-  /** 表单变更触发 debounce 300ms 自动保存（等价 vanilla debouncedSave） */
-  const debouncedSave = useCallback((): void => {
-    if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      void saveSettings();
-    }, 300);
-  }, [saveSettings]);
+  /** 表单变更触发 debounce 300ms 自动保存（等价 vanilla debouncedSave）。
+      分区成页后切页会卸载本页，钩子在卸载时冲出挂起提交，避免改动静默丢失。 */
+  const debouncedSave = useDebouncedCommit(() => {
+    void saveSettings();
+  });
 
   /** wheel 调整 maxBatchTasks：shift 步长 5，否则 1，最小 1，空值按 30 起算（经 ref 读取当前值） */
   const handleMaxBatchTasksWheel = useCallback((event: WheelEvent): void => {
@@ -112,13 +110,6 @@ export function useRunPolicy() {
     },
     [debouncedSave],
   );
-
-  /** 卸载时清理挂起的 debounce 定时器 */
-  useEffect(() => {
-    return () => {
-      if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current);
-    };
-  }, []);
 
   return {
     maxBatchTasks,

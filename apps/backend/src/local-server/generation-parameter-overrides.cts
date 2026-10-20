@@ -1,4 +1,5 @@
 import {
+  GENERATION_MEDIA_SLOT_IDS,
   GENERATION_WIRE_NAME_PATTERN,
   cloneJsonValue,
   type CustomParameterField,
@@ -11,6 +12,7 @@ import { isObjectRecord } from './model-package-catalog.shared.cts';
 import type { LocaleResources } from './model-package-catalog.localization.cts';
 import { validateParameterSchema } from './model-package-catalog.parameter-schema.cts';
 import { validatePayloadRuleFieldKeysForParts } from './model-package-catalog.payload-rule-validation.cts';
+import { classifyDisabledFieldTargets } from './model-package-catalog.payload-rule-references.cts';
 import type { JsonObject } from './model-package-catalog.types.cts';
 import type { GenerationFamilyTemplateSources } from './generation-family-templates.cts';
 
@@ -26,7 +28,7 @@ import type { GenerationFamilyTemplateSources } from './generation-family-templa
  *   ④新增自定义字段 ⑤终检（现有投影校验器 + 本模块覆盖校验）。
  * - **族无关**：函数只消费 `GenerationFamilyTemplateSources` 的 JSON 形状
  *   （parameter_schema.fields / default_values / runtime.payload_rules / runtime.schema_defaults），
- *   适用性判定基于组件类型（select / imageSize / imageUpload），不写死 openai-image-v1 字段名。
+ *   适用性判定基于组件类型（select / imageSize / 素材位上传组件），不写死任何族的字段名。
  * - 空覆盖快速路径：official 与 custom 都为空时原样返回入参对象（同一引用），
  *   保证「无覆盖声明与现状行为完全一致」（S8）。
  */
@@ -40,12 +42,42 @@ export type ParameterOverrideViolation = {
 export const MAX_CUSTOM_PARAMETER_FIELDS = 8;
 
 /**
+ * 素材位字段的组件名（小写）：模板里承载素材输入的系统模态字段。
+ *
+ * 素材位归属由记录上的 `accepted_media_slots` 管控，参数层永不开放——这类字段既不能被
+ * 别名改写、也不能被禁用或改默认值。判定按**组件类型**而不是 `image` 这个字面量：
+ * 素材位词表里有图片、视频、音频等多种素材位，各族模板会用不同组件名承载，只认 `image`
+ * 会把其它族的素材字段误判成可覆盖。
+ */
+const MEDIA_SLOT_COMPONENTS: ReadonlySet<string> = new Set([
+  'imageupload',
+  'videoupload',
+  'audioupload',
+  'file',
+]);
+
+/**
+ * 某个组件名是否承载素材位（大小写不敏感）。
+ *
+ * 导出给族模板参数描述符的通用构建复用：素材位字段不出现在参数编辑器官方区（归属由记录上的
+ * `accepted_media_slots` 管控），判定必须与校验端同一份集合，不得在描述符侧另认一遍组件名。
+ */
+export const isMediaSlotComponentName = (component: string): boolean =>
+  MEDIA_SLOT_COMPONENTS.has(component.toLowerCase());
+
+/**
  * 系统注入/模态保留的发出键名：任何别名与自定义参数都不得占用。
  *
- * `model` 由 remote_model_id 注入；`prompt`/`input` 是提示词系统键；`image` 是参考图
- * 模态键（参考图归属由 supports_reference_image 管控，参数层永不开放）。
+ * `model` 由 remote_model_id 注入；`prompt`/`input` 是提示词系统键；素材位词表里的每个 id
+ * 都保留（它们会作为请求体键或 form 字段名出现，参数层永不开放）。素材位 id 从 contracts
+ * 的受控词表派生，不在这里另写一份清单——词表扩容时保留键自动跟随。
  */
-const SYSTEM_RESERVED_WIRE_NAMES: ReadonlySet<string> = new Set(['model', 'prompt', 'input', 'image']);
+const SYSTEM_RESERVED_WIRE_NAMES: ReadonlySet<string> = new Set([
+  'model',
+  'prompt',
+  'input',
+  ...GENERATION_MEDIA_SLOT_IDS,
+]);
 
 /** 空覆盖（与契约缺省同口径）：不改变模板的任何内容。 */
 export const EMPTY_PARAMETER_OVERRIDES: ParameterOverrides = { official: [], custom: [] };
@@ -162,35 +194,6 @@ export const collectWireNamesByFieldKey = (payloadRules: JsonObject | null): Map
     }
   }
   return wireNameByFieldKey;
-};
-
-/** 递归收集 payload_rules 中所有条件分支（kind='when' 的 condition）引用的字段键。 */
-const collectConditionFieldReferences = (value: unknown, refs: Set<string>): void => {
-  const record = readRecord(value);
-  if (record === null) return;
-  if (record.kind === 'when') {
-    const condition = readRecord(record.condition);
-    const field = condition === null ? null : readString(condition.field);
-    if (field !== null) refs.add(field);
-  }
-  for (const item of Object.values(record)) {
-    if (item !== null && typeof item === 'object') {
-      collectConditionFieldReferences(item, refs);
-    }
-  }
-};
-
-/** 判断一条规则树内是否引用了指定字段键（kind='field' 的 field_key，任意嵌套层级）。 */
-const ruleReferencesFieldKey = (rule: unknown, fieldKey: string): boolean => {
-  const record = readRecord(rule);
-  if (record === null) return false;
-  if (record.kind === 'field' && readString(record.field_key) === fieldKey) return true;
-  for (const item of Object.values(record)) {
-    if (item !== null && typeof item === 'object' && ruleReferencesFieldKey(item, fieldKey)) {
-      return true;
-    }
-  }
-  return false;
 };
 
 const collectScalarValues = (options: unknown): ParameterOverridesValue[] => {
@@ -387,10 +390,10 @@ export const validateParameterOverrides = (
       });
       continue;
     }
-    if (fieldFacts.component === 'imageupload') {
+    if (MEDIA_SLOT_COMPONENTS.has(fieldFacts.component)) {
       violations.push({
-        code: 'official_field_image_not_overridable',
-        message: '参考图不能关闭或修改：要不要用参考图，请在「支持参考图」开关里选择。',
+        code: 'official_field_media_slot_not_overridable',
+        message: `「${shownName}」是模型自带的素材输入，不能在这里关闭或修改。`,
       });
       continue;
     }
@@ -482,15 +485,18 @@ export const validateParameterOverrides = (
     }
   }
 
-  // 禁用字段被其他字段 visible_when 或 payload_rules 条件引用时拒绝（防止悬空引用）。
+  // 禁用字段被别的字段或请求构造规则引用时拒绝（防止悬空引用与请求体静默变形）。
+  // 判定口径与合成期裁剪**共用同一份实现**（model-package-catalog.payload-rule-references）：
+  // 保存期放行的禁用，合成期必然能安全裁剪；反之保存期拒绝，合成期根本不会发生。
   if (disabledFieldKeys.size > 0) {
-    const conditionRefs = new Set<string>();
-    if (facts.payloadRules !== null) {
-      collectConditionFieldReferences(facts.payloadRules, conditionRefs);
+    const { blockingTargets } = classifyDisabledFieldTargets(facts.payloadRules, disabledFieldKeys);
+    const referencedInBlockingTarget = new Set<string>();
+    for (const fieldKeys of blockingTargets.values()) {
+      for (const fieldKey of fieldKeys) referencedInBlockingTarget.add(fieldKey);
     }
     for (const key of disabledFieldKeys) {
       const disabledName = facts.fieldsByKey.get(key)?.displayName ?? key;
-      if (conditionRefs.has(key)) {
+      if (referencedInBlockingTarget.has(key)) {
         violations.push({
           code: 'disabled_field_referenced',
           message: `参数「${disabledName}」正在参与决定生成请求怎么发送，暂时不能关闭；如需简化参数，请改为修改它的选项或默认值。`,
@@ -662,7 +668,8 @@ export const applyParameterOverrides = (
   const aliasByFieldKey = new Map<string, string>();
   for (const entry of overrides.official) {
     const fieldFacts = facts.fieldsByKey.get(entry.field_key);
-    if (fieldFacts === undefined || fieldFacts.component === 'imageupload') continue;
+    // 素材位字段不参与合成：归属由记录上的 accepted_media_slots 管控（保存期已拒绝）。
+    if (fieldFacts === undefined || MEDIA_SLOT_COMPONENTS.has(fieldFacts.component)) continue;
     if (entry.enabled === false) {
       disabledFieldKeys.add(entry.field_key);
       continue;
@@ -672,7 +679,7 @@ export const applyParameterOverrides = (
     }
   }
 
-  // ① 禁用：移除字段 + default_values 键 + 所有引用该 field_key 的 payload_rules。
+  // ① 禁用：移除字段 + default_values 键 + 「只承载被禁用字段自身」的 payload_rules 目标。
   const keptFieldRecords: JsonObject[] = [];
   for (const rawField of rawFields) {
     const record = readRecord(rawField);
@@ -687,17 +694,20 @@ export const applyParameterOverrides = (
     delete defaultValues[key];
     delete schemaDefaults[key];
   }
+  // 裁剪判据与保存期拒绝判据共用同一份实现，不允许各写一份：保存期已拒绝「移除会改变请求
+  // 体契约」的禁用（blockingTargets 非空），这里能裁剪的都是安全目标。若仍出现不可裁剪目标，
+  // 说明保存期漏判——抛错兜底，绝不静默删掉整条目标（历史缺陷：`body.response_format`
+  // 因 mimeType 被禁用而整条消失，请求体缺字段、上游按默认档生成）。
+  const { prunableTargets, blockingTargets } = classifyDisabledFieldTargets(payloadRules, disabledFieldKeys);
+  if (blockingTargets.size > 0) {
+    throw new Error(
+      `parameter_overrides_disabled_field_referenced: ${[...blockingTargets.keys()].join('; ')}`,
+    );
+  }
   const prunedRules: JsonObject = {};
   for (const [targetPath, rule] of Object.entries(payloadRules)) {
     if (rule === undefined || rule === null) continue;
-    let referencesDisabled = false;
-    for (const key of disabledFieldKeys) {
-      if (ruleReferencesFieldKey(rule, key)) {
-        referencesDisabled = true;
-        break;
-      }
-    }
-    if (referencesDisabled) continue;
+    if (prunableTargets.has(targetPath)) continue;
     prunedRules[targetPath] = rule;
   }
 

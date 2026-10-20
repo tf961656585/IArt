@@ -114,6 +114,11 @@
         "note": "通知条关闭 ×钮（横幅宿主场景完整定义）"
       },
       {
+        "file": "apps/hub/src/features/settings/provider-connection/ModelTable.tsx",
+        "condition": "①",
+        "note": "表格行内「服务商模型 ID」只读触发器（单元格的组成件：点击进入该单元格的行内编辑，视觉语义由行与单元格承载；hover/focus 由行宿主定义）"
+      },
+      {
         "file": "apps/editor/src/features/canvas/components/nodes/AgentNode.tsx",
         "condition": "②",
         "note": "AGENT_BUTTON_CLASS 24×24 chip 钮 + LOD 气泡钮（节点宿主样式体系完整定义）"

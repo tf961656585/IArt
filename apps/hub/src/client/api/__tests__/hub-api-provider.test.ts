@@ -4,8 +4,13 @@ import { createHubApiClient } from '../hub-api';
 import { createHubHttpClient } from '../../adapters/http-client';
 
 /**
- * hub-api ProviderConnection / ModelDeployment / 可执行目录方法的
+ * hub-api ProviderConnection / active route / 可执行目录方法的
  * 请求构造 + 响应 schema parse 单测（spec 03 §4/§5/§6 + spec 45 §3）。
+ *
+ * 2026-10-19 部署载体退场：`listModelDeployments` / `createModelDeployment` /
+ * `updateModelDeployment` / `deleteModelDeployment` 四个客户端方法与对应的
+ * `/api/model-deployments` 端点一并删除（spec 03 §12 PC-14），本文件里的模型接入 PUT 用例
+ * 随之退场——它保护的「deployment 体只透传两个字段」已没有对应实现。
  */
 
 const WRITE_TOKEN = 'a'.repeat(32);
@@ -37,18 +42,24 @@ const okConnection = {
   updated_at: '2026-08-20T09:00:00.000Z',
 };
 
-const okDeployment = {
-  deployment_id: 'up_dep_test1',
-  model_id: 'gpt-image-1',
-  connection_id: 'up_conn_test1',
-  remote_model_id: 'banana-pro',
-  created_at: '2026-08-20T08:00:00.000Z',
-  updated_at: '2026-08-20T09:00:00.000Z',
-};
-
-describe('hub api provider/deployment 边界', () => {
+describe('hub api provider 边界', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('active route PUT：只透传 deployment_id（接入目标即记录 id），并带写令牌', async () => {
+    const fetchFn = fetchMock(async () => jsonResponse({ model_id: 'my-llm', deployment_id: 'up_dep_rec1' }));
+
+    const api = createHubApiClient(createHubHttpClient(BASE, WRITE_TOKEN));
+    const result = await api.setActiveRoute('my-llm', 'up_dep_rec1');
+
+    expect(result.deployment_id).toBe('up_dep_rec1');
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit | undefined];
+    expect(url).toBe(`${BASE}/api/active-routes/my-llm`);
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({ deployment_id: 'up_dep_rec1' });
+    const headers = init?.headers as Record<string, string> | undefined;
+    expect(headers?.[HUB_LOCAL_WRITE_TOKEN_HEADER]).toBe(WRITE_TOKEN);
   });
 
   it('setProviderConnectionLifecycle PUT lifecycle 端点并 parse connection', async () => {
@@ -76,19 +87,6 @@ describe('hub api provider/deployment 边界', () => {
     expect(init?.method).toBe('DELETE');
     const headers = init?.headers as Record<string, string> | undefined;
     expect(headers?.[HUB_LOCAL_WRITE_TOKEN_HEADER]).toBe(WRITE_TOKEN);
-  });
-
-  it('updateModelDeployment PUT 端点只透传 connection_id/remote_model_id 并 parse deployment', async () => {
-    const fetchFn = fetchMock(async () => jsonResponse({ deployment: { ...okDeployment, remote_model_id: 'banana-pro-v2', connection_id: 'up_conn_2' } }));
-
-    const api = createHubApiClient(createHubHttpClient(BASE, WRITE_TOKEN));
-    const result = await api.updateModelDeployment('up_dep_test1', { connection_id: 'up_conn_2', remote_model_id: 'banana-pro-v2' });
-
-    expect(result.deployment.connection_id).toBe('up_conn_2');
-    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit | undefined];
-    expect(url).toBe(`${BASE}/api/model-deployments/up_dep_test1`);
-    expect(init?.method).toBe('PUT');
-    expect(JSON.parse(String(init?.body))).toEqual({ connection_id: 'up_conn_2', remote_model_id: 'banana-pro-v2' });
   });
 
   it('listExecutableModelCatalog GET 端点并 parse contracts 嵌套 models 数组', async () => {
@@ -233,19 +231,6 @@ describe('hub api provider/deployment 边界', () => {
 
     const api = createHubApiClient(createHubHttpClient(BASE, WRITE_TOKEN));
     await expect(api.listThinkingTiers(undefined)).rejects.toThrow();
-  });
-
-  it('更新模型接入：PUT 端点并 parse deployment（档位字段已随自建记录退役，接入体不再携带）', async () => {
-    const fetchFn = fetchMock(async () => jsonResponse({ deployment: { ...okDeployment, remote_model_id: 'banana-pro-v2' } }));
-
-    const api = createHubApiClient(createHubHttpClient(BASE, WRITE_TOKEN));
-    const updated = await api.updateModelDeployment('up_dep_test1', { remote_model_id: 'banana-pro-v2' });
-
-    expect(updated.deployment.remote_model_id).toBe('banana-pro-v2');
-    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit | undefined];
-    expect(url).toBe(`${BASE}/api/model-deployments/up_dep_test1`);
-    expect(init?.method).toBe('PUT');
-    expect(init?.body).toBe(JSON.stringify({ remote_model_id: 'banana-pro-v2' }));
   });
 
   it('自建对话模型：GET 列表、POST 添加（含接入归属与接口类型）、PUT 四字段整体替换、DELETE 删除并带写令牌', async () => {

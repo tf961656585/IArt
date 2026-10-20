@@ -8,12 +8,8 @@ import {
   type ExecutableModelFailureCode,
 } from '@iart/contracts';
 import * as loggingModule from './logging.cts';
-import { expandVariantGroupMembers, listBindableModelProjections } from './model-package-catalog.cts';
-import {
-  resolveModelFamilyAdapter,
-  type ClosedFamilyAdapterId,
-  type DeclaredGenerationFamily,
-} from './model-family-registry.cts';
+import { buildDeclaredGenerationProjection } from './generation-declaration-projection.cts';
+import { getFamilyTemplate } from './generation-family-templates.registry.cts';
 import { listCustomGenerationModels } from './provider-connection/custom-generation-model-store.cts';
 import {
   getActiveDeploymentId,
@@ -56,11 +52,10 @@ type ExecutabilityJudgement = {
  * 判定单个 model_id 当前的可执行性（spec 45 §3 / spec 03 §6）。
  *
  * 判定顺序与 spec 45 §3 一行对应，code 稳定可测试；不回退、不补选。
- * active 目标是「接入记录」双查形态（已装包 deployment 或自建模型记录，见
- * active-route-store）：两类记录投影为同一形状后走同一套连接/凭证/适配器判定。
- * 协议由模型自带（2026-09-26 起协议归属模型级；2026-09-29 起连接不再承载接口类型预选）：
- * 自建记录携带协议字段、已装包模型在 active-route 解析时按正则表回填；记录无协议即判
- * adapter_missing——连接遗留键不再是协议来源。
+ * active 目标是该模型的**用户模型记录**（spec 03 §6.2）：解析出记录后走连接/凭证/适配器判定。
+ * 协议由模型自带（2026-09-26 起协议归属模型级；2026-09-29 起连接不再承载接口类型预选），
+ * 取值就是记录上的协议字段；记录无协议即判 adapter_missing——不按 model_id 名称或正则推断，
+ * 连接遗留键也不再是协议来源。
  */
 const judgeExecutability = (modelId: string): ExecutabilityJudgement => {
   const activeDeploymentId = getActiveDeploymentId(modelId);
@@ -364,46 +359,34 @@ const projectCustomChatModelToCatalogItem = (model: {
 });
 
 /**
- * 可执行目录条目列表（spec 45 §1/§3）：只呈现已闭合生成族的模型——Seedance 2.5 契约未闭合、
- * 非生成族（TTS / 文本等）不进可提交目录。对话模型（用户自建声明）不走本入口。
+ * 可执行目录条目列表（spec 45 §1/§3、spec 03 §6.1/PC-15）：呈现哪些模型只有一个来源——
+ * **用户模型记录 × 该族模板的合成投影**。软件不内置任何具体模型，因此本函数不扫描模型包
+ * 目录、也不按 `model_id` 名称/正则推断族归属（AGENTS.md「禁止按名称推断适配器」）。
  *
- * 变体组壳先展开为成员 model_id 条目（expandVariantGroupMembers）：闭合族判定按成员身份
- * 进行，组内闭合成员各自成为独立条目，组壳身份不作为可执行条目输出。
+ * 准入判据只有一条：该记录的 `family_adapter_id` 指向一个**已就绪**的族模板
+ * （`getFamilyTemplate(...).status === 'ready'`）。族模板未就绪或未登记时，记录没有参数表单与
+ * 请求/结果规则，不构成可提交模型；对话族记录不走本入口（它只进 `/api/chat-model-catalog`）。
+ *
+ * 「没有记录就没有模型」：目录为空即模型为空，不存在任何绕过记录进入目录的路径。
  *
  * 消费方：GET /api/executable-model-catalog 路由与 agent 工具注册表（同一投影，不复制过滤口径）。
  */
-const isSeedance25 = (modelId: string): boolean =>
-  /^doubao-seedance-2-5/i.test(modelId) || /seedance[-_.]?2[-_.]?5/i.test(modelId);
-
-/** 「model_id → 声明族」映射（族常量事实源仍是 model-family-registry，声明查询经注入接入）。 */
-const buildDeclaredGenerationFamily = (): DeclaredGenerationFamily => {
-  const declared = new Map<string, ClosedFamilyAdapterId>();
-  for (const model of listCustomGenerationModels()) {
-    declared.set(model.model_id, model.family_adapter_id);
-  }
-  return declared;
-};
-
 const listExecutableCatalogEntries = (): ExecutableModelDirectoryEntry[] => {
   const entries: ExecutableModelDirectoryEntry[] = [];
-  const declaredGenerationFamily = buildDeclaredGenerationFamily();
-  for (const item of expandVariantGroupMembers(listBindableModelProjections({ baseDir: undefined }))) {
-    const modelId = item.modelId;
-    if (!modelId) continue;
-    if (isSeedance25(modelId)) {
-      loggingModule.logDebug('[model-catalog] exclude Seedance 2.5 (contract not closed)', { modelId });
-      continue;
-    }
-    // 族判定两来源（生成模型自建声明试点 §3.5）：正则命中（已装包）优先，其次声明族——
-    // 自建生成模型的合成投影经目录第二来源进入本循环，靠声明族通过闭合族筛选。
-    if (!resolveModelFamilyAdapter(modelId, declaredGenerationFamily)) {
-      // 非四类已闭合能力的模型（TTS / 对话 / 其他）不进通用 Provider 可提交目录。
-      loggingModule.logDebug('[model-catalog] skip model outside closed family', {
-        modelId,
+  for (const record of listCustomGenerationModels()) {
+    // 族模板就绪是唯一准入判据（契约值域已保证 family_adapter_id 合法，这里只判就绪与否）。
+    const template = getFamilyTemplate(record.family_adapter_id);
+    if (template === null || template.status !== 'ready') {
+      loggingModule.logDebug('[model-catalog] skip record whose family template is not ready', {
+        modelId: record.model_id,
+        familyAdapterId: record.family_adapter_id,
+        templateStatus: template === null ? 'unknown' : template.status,
       });
       continue;
     }
-    const entry = buildCatalogEntry(item);
+    const built = buildDeclaredGenerationProjection(record);
+    if (built === null) continue;
+    const entry = buildCatalogEntry({ modelId: record.model_id, projection: built.projection });
     if (entry !== null) entries.push(entry);
   }
   return entries;

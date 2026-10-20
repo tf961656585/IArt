@@ -4,51 +4,58 @@ import { buildModelConfigFromNodeProjection } from "@/client/config/modelAssetPr
 import type { ModelConfigEntry } from "@/client/config/models.config";
 import type { ModelResultExtractor } from "@/features/workspace/modelFormTypes";
 import type { SchemaFormDefinition } from "@/features/workspace/schema/types";
-import {
-  cloneModelAssetFixtureValue,
-  loadModelAssetPackageCatalogFixture,
-} from "./modelAssetPackageProjectionFixtures";
+import { cloneModelAssetFixtureValue } from "./projectionCloneFixtures";
+import { projectFamilyModel } from "./familyTemplateProjectionFixtures";
+
+/**
+ * 按 model_id 取一份**真实投影**（族模板 × 真实投影管线）。
+ *
+ * 历史：本文件原从包目录读真实包。能力包退场、包目录删除后，改为按
+ * 「这个 model_id 属于哪一族」投影出同语义的投影。`modelId` 原样作为声明身份传给投影，
+ * 因此测试里按 model_id 取用与断言标题的写法完全不变。
+ *
+ * 未登记的 id 直接抛错（不做兜底投影）：静默造一个空投影会让断言变成恒真。
+ */
+const FAMILY_BY_MODEL_ID: Record<string, string> = {
+  "gpt-image-2": "openai-image-v1",
+  "gpt-image-2-edit": "openai-image-v1",
+  "gemini-3-pro-image": "gemini-image-interactions-v1",
+  "gemini-3.1-flash-image": "gemini-image-interactions-v1",
+  "gemini-3.1-flash-lite-image": "gemini-image-interactions-v1",
+  "veo-3.1-generate-preview": "veo-v1",
+  "veo-3.1-fast-generate-preview": "veo-v1",
+  "veo-3.1-lite-generate-preview": "veo-v1",
+  "kling-v3-text2video": "kling-text2video-v1",
+  "kling-v3-image2video": "kling-image2video-v1",
+  "kling-v3-omni-video": "kling-omni-video-v1",
+  "doubao-seedance-1-5-pro-251215": "seedance-2-0-v1",
+  "doubao-seedance-2-0-260128": "seedance-2-0-v1",
+  "doubao-seedance-2-0-fast-260128": "seedance-2-0-v1",
+  "doubao-seedance-2-0-mini-260615": "seedance-2-0-v1",
+};
 
 const projectionCache = new Map<string, ModelAssetNodeProjection>();
-const aliasToMainCache = new Map<string, string>();
 
 const loadProjectionCache = (): void => {
   if (projectionCache.size > 0) {
     return;
   }
-
-  const catalog = loadModelAssetPackageCatalogFixture();
-  catalog.projections.forEach((projection) => {
-    projectionCache.set(projection.model_id, projection);
-    // 索引 alias → main model_id，模拟 Editor 运行时 buildLookup 的 alias 解析行为
-    const aliases = projection.runtime?.aliases;
-    if (Array.isArray(aliases)) {
-      for (const alias of aliases) {
-        if (typeof alias === "string" && alias && !aliasToMainCache.has(alias)) {
-          aliasToMainCache.set(alias, projection.model_id);
-        }
-      }
-    }
-  });
+  for (const [modelId, familyAdapterId] of Object.entries(FAMILY_BY_MODEL_ID)) {
+    projectionCache.set(
+      modelId,
+      projectFamilyModel({ familyAdapterId, modelId }).projection,
+    );
+  }
 };
 
 const requireProjection = (modelId: string): ModelAssetNodeProjection => {
   loadProjectionCache();
-  // 先按主 model_id 直接查找
   const direct = projectionCache.get(modelId);
   if (direct) {
     return cloneModelAssetFixtureValue(direct);
   }
-  // 再按 alias 查找（用于合并包兼容场景，如 gpt-image-2-edit → gpt-image-2）
-  const mainModelId = aliasToMainCache.get(modelId);
-  if (mainModelId) {
-    const viaAlias = projectionCache.get(mainModelId);
-    if (viaAlias) {
-      return cloneModelAssetFixtureValue(viaAlias);
-    }
-  }
   throw new Error(
-    `[test-fixture] projection not found for model_id=${modelId}`,
+    `[test-fixture] projection not found for model_id=${modelId}（未在 FAMILY_BY_MODEL_ID 登记所属族）`,
   );
 };
 

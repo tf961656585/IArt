@@ -24,6 +24,8 @@ import type { ExecutableModelFailureCode } from '@iart/contracts';
  */
 export const MODEL_FAILURE_MESSAGE: Readonly<Record<ExecutableModelFailureCode, string>> = {
   none: '',
+  // 原因码取值沿用 `no_active_deployment`（跨边界已分发，改名会打断历史数据与 Editor 文案表），
+  // 语义是「这个模型没有 active 接入目标」——2026-10-19 部署载体退场后不再指部署。
   no_active_deployment: '还没添加到服务商',
   connection_missing: '关联的服务商已不存在',
   connection_disabled: '服务商已停用',
@@ -34,14 +36,19 @@ export const MODEL_FAILURE_MESSAGE: Readonly<Record<ExecutableModelFailureCode, 
   deployment_invalid: '配置不完整',
 };
 
-/** 统计每个服务商被引用的接入数量（用于服务商卡片摘要与删除影响面提示）。 */
-export function countDeploymentsByConnection(
-  deployments: readonly { connection_id: string }[],
+/**
+ * 统计每个服务商名下有多少个模型（服务商卡片摘要与删除影响面提示用它）。
+ *
+ * 2026-10-19 起模型只有用户记录一种载体，因此计数只按记录归属数一次——不再有「接入数 + 记录数」
+ * 两个来源相加（部署载体退场，那个来源已不存在）。
+ */
+export function countModelsByConnection(
+  records: readonly { connection_id: string }[],
 ): ReadonlyMap<string, number> {
   const counts = new Map<string, number>();
-  for (const deployment of deployments) {
-    const current = counts.get(deployment.connection_id) ?? 0;
-    counts.set(deployment.connection_id, current + 1);
+  for (const record of records) {
+    const current = counts.get(record.connection_id) ?? 0;
+    counts.set(record.connection_id, current + 1);
   }
   return counts;
 }

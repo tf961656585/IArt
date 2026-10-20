@@ -1,7 +1,7 @@
 {
   "name": "iartstudio-frontend",
   "private": true,
-  "version": "0.6.3",
+  "version": "0.6.4",
   "engines": {
     "node": ">=22.0.0"
   },
@@ -24,7 +24,6 @@
     "lint": "node --max-old-space-size=6144 ./node_modules/eslint/bin/eslint.js . --max-warnings=0 --cache --cache-location node_modules/.cache/eslint/eslint-cache --cache-strategy content && pnpm guard:jsx-aschild-children && pnpm guard:code-file-lines",
     "diagnose:gates": "node ./tooling/scripts/diagnose-gates.mjs",
     "diagnose:model-catalog": "node --import tsx ./tooling/scripts/diagnose-model-catalog.mjs",
-    "lint:model-ports": "tsx tooling/scripts/validate-model-ports.ts",
     "guard:editor-remote-model-static-truth": "node ./tooling/scripts/guard-editor-remote-model-static-truth.mjs",
     "guard:jsx-aschild-children": "node ./tooling/scripts/guard-jsx-aschild-children.mjs",
     "guard:code-file-lines": "node ./tooling/scripts/guard-code-file-lines.mjs",
@@ -32,7 +31,6 @@
     "validate:filenames": "node ./tooling/scripts/validate-filenames.mjs",
     "check:sql-columns": "bash scripts/check-sql-columns.sh",
     "generate:model-discovery": "tsx tooling/scripts/generate-model-auto-discovery.ts",
-    "build:model-asset-packages": "pnpm --filter @iart/contracts build && pnpm --filter @iart/model-asset-runtime build && tsx tooling/scripts/build-model-asset-packages.ts",
     "validate:models": "tsx tooling/scripts/validate-model-index.ts",
     "typecheck": "pnpm typecheck:workspaces",
     "typecheck:workspaces": "tsc -p packages/contracts/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/contracts.tsbuildinfo && tsc -p packages/model-asset-runtime/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/model-asset-runtime.tsbuildinfo && tsc -p packages/domain/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/domain.tsbuildinfo && tsc -p packages/backend-sdk/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/backend-sdk.tsbuildinfo && tsc -p packages/utils/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/utils.tsbuildinfo && tsc -p apps/backend/tsconfig.typecheck.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/backend-typecheck.tsbuildinfo && tsc -p apps/desktop-shell/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/desktop-shell.tsbuildinfo && tsc -p apps/editor/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/editor.tsbuildinfo && tsc -p apps/hub/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/hub.tsbuildinfo && tsc -p tooling/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/tooling.tsbuildinfo",
@@ -43,7 +41,7 @@
     "test:scripts": "pnpm --filter @iart/contracts build && node --test ./tooling/scripts/__tests__/*.test.mjs",
     "test:backend": "node --import tsx --test \"apps/backend/src/**/__tests__/*.test.ts\"",
     "clean": "node ./tooling/scripts/clean.js",
-    "backend:dev": "pnpm abi:node -- --verify && pnpm --filter @iart/contracts build && pnpm --filter @iart/domain build && pnpm --filter @iart/utils build && pnpm build:model-asset-packages && pnpm --filter @iart/backend build && node ./apps/backend/dist/main.cjs",
+    "backend:dev": "pnpm abi:node -- --verify && pnpm --filter @iart/contracts build && pnpm --filter @iart/domain build && pnpm --filter @iart/utils build && pnpm --filter @iart/backend build && node ./apps/backend/dist/main.cjs",
     "desktop:dev": "pnpm check:preflight && pnpm desktop:run-built",
     "desktop:dev:debug": "node ./tooling/dev/desktop-dev-debug.mjs",
     "ensure:desktop-deps": "node ./tooling/dev/ensure-desktop-deps.mjs",
@@ -68,11 +66,11 @@
     "sqlite:prepare:x64": "node ./tooling/scripts/switch-abi.mjs --all --arch x64",
     "gen:ui": "hygen component ui",
     "gen:feature": "hygen component feature",
-    "build:desktop-runtime": "pnpm build:model-asset-packages && pnpm --filter @iart/backend build && pnpm --filter @iart/desktop-shell build && pnpm build:desktop-static",
+    "build:desktop-runtime": "pnpm --filter @iart/backend build && pnpm --filter @iart/desktop-shell build && pnpm build:desktop-static",
     "guard:no-internal-timeout": "node ./tooling/scripts/guard-no-internal-timeout.mjs",
     "guard:ipc-contract-parse": "node ./tooling/scripts/guard-ipc-contract-parse.mjs",
     "guard:contract-ownership": "node ./tooling/scripts/guard-contract-ownership.mjs",
-    "guard:public-relay-capabilities": "node ./tooling/scripts/guard-public-relay-capabilities.mjs",
+    "guard:public-relay-capabilities": "node --import tsx ./tooling/scripts/guard-public-relay-capabilities.mjs",
     "guard:no-runtime-json-leak": "node ./tooling/scripts/guard-no-runtime-json-leak.mjs",
     "guard:no-json-clone": "node ./tooling/scripts/guard-no-json-clone.mjs",
     "guard:desktop-runtime-deps": "node ./tooling/scripts/guard-desktop-runtime-deps.mjs",
@@ -87,7 +85,7 @@
     "guard:spec-test-linkage": "node ./tooling/scripts/guard-spec-test-linkage.mjs",
     "guard:media-input-source-kind-coverage": "node ./tooling/scripts/guard-media-input-source-kind-coverage.mjs",
     "guard:no-media-input-downgrade": "node ./tooling/scripts/guard-no-media-input-downgrade.mjs",
-    "guard:model-input-modalities": "node ./tooling/scripts/guard-model-input-modalities-consistency.mjs",
+    "guard:model-input-modalities": "node --import tsx ./tooling/scripts/guard-model-input-modalities-consistency.mjs",
     "guard:no-structural-fields-in-normalized-arguments": "node ./tooling/scripts/guard-no-structural-fields-in-normalized-arguments.mjs",
     "guard:nested-formdata-body-handled": "node ./tooling/scripts/guard-nested-formdata-body-handled.mjs",
     "guard:local-media-url-resolution": "node ./tooling/scripts/guard-local-media-url-resolution.mjs",
@@ -253,13 +251,6 @@
       "!**/*.map"
     ],
     "extraResources": [
-      {
-        "from": ".model-assets/packages",
-        "to": "model-assets",
-        "filter": [
-          "**/*"
-        ]
-      },
       {
         "from": "apps/backend/native-modules/better-sqlite3/electron/node_modules",
         "to": "app.asar.unpacked/apps/backend/native-modules/better-sqlite3/electron/node_modules",

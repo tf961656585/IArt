@@ -1,4 +1,4 @@
-// @spec: CLI-014, CLI-027, CLI-028, CLI-029, CLI-030
+// @spec: CLI-014, CLI-027, CLI-028, CLI-029, CLI-030, CLI-048
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -297,6 +297,23 @@ describe('CLI 命令请求判别联合（spec §5）', () => {
     }
   });
 
+  it('canvas.layout scope=containers 被契约接受（CLI-048）', () => {
+    expect(
+      CliCommandRequestSchema.safeParse({
+        command: 'canvas.layout',
+        project: PROJECT,
+        scope: 'containers',
+      }).success,
+    ).toBe(true);
+    expect(
+      CliProxyCommandSchema.safeParse({
+        command: 'canvas.layout',
+        request_id: 'req_containers',
+        scope: 'containers',
+      }).success,
+    ).toBe(true);
+  });
+
   it('非法值被拒绝', () => {
     const cases: Array<Record<string, unknown>> = [
       // 项目名净化：路径分隔符与点条目非法（spec §5.1）
@@ -309,7 +326,7 @@ describe('CLI 命令请求判别联合（spec §5）', () => {
       { command: 'generate', project: PROJECT, prompt: 'x', model: 'm', ref: [123] },
       { command: 'generate', project: PROJECT, prompt: 'x', model: 'm', arg: [{ key: 'k' }] },
       { command: 'generate', project: PROJECT, prompt: 'x', model: 'm', wait: 'yes' },
-      // canvas.layout：scope 只接受 all 或 { group }；columns 正整数
+      // canvas.layout：scope 只接受 all/containers 或 { group }；columns 正整数
       { command: 'canvas.layout', project: PROJECT, scope: 'group:abc' },
       { command: 'canvas.layout', project: PROJECT, scope: { group: '' } },
       { command: 'canvas.layout', project: PROJECT, scope: 'all', columns: 0 },

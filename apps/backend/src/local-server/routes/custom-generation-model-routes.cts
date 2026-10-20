@@ -4,6 +4,7 @@ import {
   CustomGenerationModelRemovalResponseSchema,
   CustomGenerationModelResponseSchema,
   CustomGenerationModelUpdateBodySchema,
+  type GenerationMediaSlotId,
   type ParameterOverrides,
 } from '@iart/contracts';
 import * as constantsModule from '../constants.cts';
@@ -20,7 +21,11 @@ import {
 } from '../provider-connection/custom-generation-model-store.cts';
 import { describeConnectionOwnershipError } from '../provider-connection/custom-model-ownership.cts';
 import { clearActiveDeployment, setActiveDeployment } from '../provider-connection/active-route-store.cts';
-import { buildOpenAiImageV1BaseTemplateSources, OPENAI_IMAGE_V1_FAMILY_ADAPTER_ID } from '../generation-family-templates.cts';
+import {
+  buildFamilyTemplateBaseSources,
+  checkFamilyMediaSlotSupport,
+  getFamilyTemplate,
+} from '../generation-family-templates.registry.cts';
 import {
   EMPTY_PARAMETER_OVERRIDES,
   validateParameterOverrides,
@@ -32,11 +37,12 @@ import {
  *
  * - GET    /api/custom-generation-models             已添加的自建生成模型记录
  * - POST   /api/custom-generation-models             一次写入完成添加 {model_id, connection_id, family_adapter_id, ...}
- * - PUT    /api/custom-generation-models/:modelId    改可改属性（supports_reference_image / parameter_overrides 整体替换）
+ * - PUT    /api/custom-generation-models/:modelId    改可改属性（accepted_media_slots / parameter_overrides 整体替换）
  * - DELETE /api/custom-generation-models/:modelId    删除记录（active route 由本路由级联清理）
  *
- * 2026-09-25 起「声明 + ModelDeployment 接入」合并为单记录：接入归属（connection_id +
- * remote_model_id）与能力属性一体。归属校验要求连接的协议族与 `family_adapter_id` 同族。
+ * 2026-09-25 起「声明 + 接入」合并为单记录：接入归属（connection_id +
+ * remote_model_id）与能力属性一体。归属校验只要求连接存在、启用、有凭证——连接不约束
+ * 协议族（2026-09-26 起协议归属模型级）。
  * 写入进 Hub write token 白名单（hub-local-write-policy）。POST 成功后由后端把该记录写入
  * active route（保持「添加即可用」的用户可见行为）。声明不承载协议语义，endpoint、请求规则
  * 与参数表单全部来自族模板（试点设计 C1；参数覆盖是受控例外，生成模型参数高级自定义设计
@@ -56,8 +62,8 @@ const splitPathname = (pathname: string): string[] => pathname.split('/').filter
 /**
  * 把请求体校验失败落到出错的那个字段上（与对话侧同一思路）。
  *
- * `model_id` 与 `supports_reference_image` 是用户填写的字段，提示要说清填什么；
- * `family_adapter_id` 由表单按所在连接的接口类型带上，校验失败只会来自直接调用方；
+ * `model_id` 与 `accepted_media_slots` 是用户填写的字段，提示要说清填什么；
+ * `family_adapter_id` 由表单按用户所选接口类型带上，校验失败只会来自直接调用方；
  * `parameter_overrides` 形状非法时给专指提示（语义级原因由覆盖校验器逐条给出）。
  */
 const describeBodyError = (issues: readonly { path: readonly PropertyKey[] }[]): string => {
@@ -68,8 +74,8 @@ const describeBodyError = (issues: readonly { path: readonly PropertyKey[] }[]):
   if (field === 'remote_model_id') {
     return '服务商那边的模型 ID 不能为空';
   }
-  if (field === 'supports_reference_image') {
-    return '参考图设置无效，请重试';
+  if (field === 'accepted_media_slots') {
+    return '素材设置无效，请重试';
   }
   if (field === 'family_adapter_id') {
     return '这个模型 ID 不能用在这类服务商上';
@@ -81,26 +87,77 @@ const describeBodyError = (issues: readonly { path: readonly PropertyKey[] }[]):
 };
 
 /**
+ * 写入侧的素材位 × 族能力一致性守卫（批次 2 遗留风险，批次 1 收口）。
+ *
+ * 契约只保证素材位在受控词表内，不保证「这个族的模板能表达这个素材位」——于是可以给文生视频族
+ * 勾上首帧图：记录写得进去、创作面照勾选呈现，直到提交才失败（「能选但一提交就失败」）。
+ * 判断依据是注册表条目的 `supportsMediaSlots`（与族模板同一份事实），不在路由里另列清单。
+ *
+ * 返回 null = 通过；否则返回可读原因。
+ */
+const describeMediaSlotViolation = (
+  familyAdapterId: string,
+  acceptedMediaSlots: readonly GenerationMediaSlotId[],
+): string | null => {
+  if (acceptedMediaSlots.length === 0) return null;
+  const support = checkFamilyMediaSlotSupport(familyAdapterId, acceptedMediaSlots);
+  if (support.kind === 'ok') return null;
+  if (support.kind === 'unknown_family') {
+    loggingModule.logDebug('[custom-generation-model-routes] media slot check: unknown family adapter id', {
+      familyAdapterId,
+    });
+    return '这个接口类型不能用于生成模型';
+  }
+  const entry = getFamilyTemplate(familyAdapterId);
+  if (entry !== null && entry.status === 'pending') {
+    // 模板未就绪的族：拒绝写入非空素材位。理由见本文件顶部「pending 族的写入口径」。
+    loggingModule.logDebug('[custom-generation-model-routes] media slot check: family template pending', {
+      familyAdapterId,
+      acceptedMediaSlots,
+    });
+    return '这个接口类型还在支持中，暂时不能设置素材输入；请先添加不接受素材的模型，或改用其他接口类型';
+  }
+  const unsupported = support.unsupportedMediaSlots.join('、');
+  loggingModule.logDebug('[custom-generation-model-routes] media slot check: unsupported media slots for family', {
+    familyAdapterId,
+    acceptedMediaSlots,
+    supportsMediaSlots: support.supportsMediaSlots,
+  });
+  return `这个接口类型不接受「${unsupported}」这类素材，请取消勾选后再保存`;
+};
+
+/**
  * 保存前的参数覆盖校验（生成模型参数高级自定义设计 §3.3「校验唯一实现」）。
  *
  * 与投影合成路径调用同一套 `validateParameterOverrides`；校验基线是**未应用覆盖**的
- * 基础族模板，且按本次将写入的 supports_reference_image 构建（它决定 image 字段与
- * edits 分支是否存在）。返回 null = 通过；否则返回逐条可读原因。
+ * 基础族模板，且按本次将写入的素材位清单构建（它决定素材位字段与对应请求分支是否存在）。
+ * 返回 null = 通过；否则返回逐条可读原因。
+ *
+ * 族分发走注册表：已就绪族用该族基础模板校验；未就绪族一律拒绝带覆盖的写入（该族没有模板，
+ * 无从判断覆盖是否成立，放行等于让必然失败的配置进运行时）。
  */
 const validateOverridesForFamily = (
   familyAdapterId: string,
   modelId: string,
-  supportsReferenceImage: boolean,
+  acceptedMediaSlots: readonly GenerationMediaSlotId[],
   overrides: ParameterOverrides,
 ): string[] | null => {
-  if (familyAdapterId !== OPENAI_IMAGE_V1_FAMILY_ADAPTER_ID) {
-    // 试点单族封闭：契约枚举只会放行 openai-image-v1；此处是扩族期的防御分支。
-    return overrides.official.length === 0 && overrides.custom.length === 0
-      ? null
-      : ['这个模型类型还不支持参数高级自定义'];
+  const hasOverrides = overrides.official.length > 0 || overrides.custom.length > 0;
+  if (!hasOverrides) return null;
+  const baseline = buildFamilyTemplateBaseSources(familyAdapterId, modelId, { acceptedMediaSlots });
+  if (baseline.kind === 'unknown') {
+    loggingModule.logDebug('[custom-generation-model-routes] overrides check: unknown family adapter id', {
+      familyAdapterId,
+    });
+    return ['这个接口类型不能用于生成模型'];
   }
-  const sources = buildOpenAiImageV1BaseTemplateSources(modelId, { supportsReferenceImage });
-  const violations = validateParameterOverrides(sources, overrides);
+  if (baseline.kind === 'pending') {
+    loggingModule.logDebug('[custom-generation-model-routes] overrides check: family template pending', {
+      familyAdapterId: baseline.familyAdapterId,
+    });
+    return ['这个接口类型还不支持参数高级自定义'];
+  }
+  const violations = validateParameterOverrides(baseline.sources, overrides);
   return violations.length === 0 ? null : violations.map((violation) => violation.message);
 };
 
@@ -133,10 +190,19 @@ const createCustomGenerationModelRoutes = (): RouteDefinition[] => [
         sendError(res, 400, ERROR_CODES.INVALID_CONFIG, ownershipError, corsHeaders);
         return;
       }
+      // 素材位 × 族能力一致性守卫（写入侧唯一实现，判断依据是族模板注册表的能力事实）
+      const mediaSlotError = describeMediaSlotViolation(
+        parsed.data.family_adapter_id,
+        parsed.data.accepted_media_slots ?? [],
+      );
+      if (mediaSlotError !== null) {
+        sendError(res, 400, ERROR_CODES.INVALID_CONFIG, mediaSlotError, corsHeaders);
+        return;
+      }
       const overrideErrors = validateOverridesForFamily(
         parsed.data.family_adapter_id,
         parsed.data.model_id,
-        parsed.data.supports_reference_image ?? false,
+        parsed.data.accepted_media_slots ?? [],
         parsed.data.parameter_overrides ?? EMPTY_PARAMETER_OVERRIDES,
       );
       if (overrideErrors !== null) {
@@ -148,20 +214,17 @@ const createCustomGenerationModelRoutes = (): RouteDefinition[] => [
         connection_id: parsed.data.connection_id,
         ...(parsed.data.remote_model_id === undefined ? {} : { remote_model_id: parsed.data.remote_model_id }),
         family_adapter_id: parsed.data.family_adapter_id,
-        ...(parsed.data.supports_reference_image === undefined
+        ...(parsed.data.accepted_media_slots === undefined
           ? {}
-          : { supports_reference_image: parsed.data.supports_reference_image }),
+          : { accepted_media_slots: parsed.data.accepted_media_slots }),
         ...(parsed.data.parameter_overrides === undefined
           ? {}
           : { parameter_overrides: parsed.data.parameter_overrides }),
       });
       if (!result.ok) {
-        if (result.reason === 'duplicate_installed_model') {
-          sendError(res, 409, 'conflict', '软件里已经有这个模型了，换一个模型 ID，或直接使用已装的这个模型', corsHeaders);
-          return;
-        }
-        if (result.reason === 'conflicts_with_other_generation_family') {
-          sendError(res, 409, 'conflict', '这个名字属于其他类型的生成模型，不能用作 OpenAI 图像模型的模型 ID，换一个模型 ID', corsHeaders);
+        if (result.reason === 'media_slot_not_supported_by_family') {
+          // store 侧守卫的可读原因原样透给用户（路由侧已先挡一次，这里是纵深防御）
+          sendError(res, 400, ERROR_CODES.INVALID_CONFIG, result.message, corsHeaders);
           return;
         }
         if (result.reason === 'duplicate_chat_record') {
@@ -172,7 +235,7 @@ const createCustomGenerationModelRoutes = (): RouteDefinition[] => [
           res,
           409,
           'conflict',
-          `软件里已经添加过「${parsed.data.model_id}」了。换一个模型 ID，或在模型列表里先删除它再重新添加。`,
+          `已经有「${parsed.data.model_id}」这个模型了。换一个模型 ID，或在模型列表里先删除它再重新添加。`,
           corsHeaders,
         );
         return;
@@ -220,12 +283,21 @@ const createCustomGenerationModelRoutes = (): RouteDefinition[] => [
           sendError(res, 404, ERROR_CODES.NOT_FOUND, '没有这个模型', corsHeaders);
           return;
         }
+        // 素材位 × 族能力一致性守卫（PUT 改的正是素材位，同一份判断）
+        const mediaSlotError = describeMediaSlotViolation(
+          existing.family_adapter_id,
+          parsed.data.accepted_media_slots,
+        );
+        if (mediaSlotError !== null) {
+          sendError(res, 400, ERROR_CODES.INVALID_CONFIG, mediaSlotError, corsHeaders);
+          return;
+        }
         // parameter_overrides 缺省 = 保持现有覆盖不变；出现 = 整体替换（契约口径）。
         if (parsed.data.parameter_overrides !== undefined) {
           const overrideErrors = validateOverridesForFamily(
             existing.family_adapter_id,
             existing.model_id,
-            parsed.data.supports_reference_image,
+            parsed.data.accepted_media_slots,
             parsed.data.parameter_overrides,
           );
           if (overrideErrors !== null) {
@@ -234,19 +306,25 @@ const createCustomGenerationModelRoutes = (): RouteDefinition[] => [
           }
         }
         const updated = updateCustomGenerationModel(modelId, {
-          supports_reference_image: parsed.data.supports_reference_image,
+          accepted_media_slots: parsed.data.accepted_media_slots,
           ...(parsed.data.parameter_overrides === undefined
             ? {}
             : { parameter_overrides: parsed.data.parameter_overrides }),
         });
-        if (updated === null) {
+        if (!updated.ok) {
+          if (updated.reason === 'media_slot_not_supported_by_family') {
+            // store 侧守卫的可读原因原样透给用户（路由侧已先挡一次，这里是纵深防御）
+            sendError(res, 400, ERROR_CODES.INVALID_CONFIG, updated.message, corsHeaders);
+            return;
+          }
+          // not_found / invalid_record 对用户是同一件事：这条记录改不成了
           sendError(res, 404, ERROR_CODES.NOT_FOUND, '没有这个模型', corsHeaders);
           return;
         }
         sendJson(
           res,
           200,
-          CustomGenerationModelResponseSchema.parse({ model: updated }),
+          CustomGenerationModelResponseSchema.parse({ model: updated.model }),
           NO_STORE_HEADERS(corsHeaders),
         );
         return;

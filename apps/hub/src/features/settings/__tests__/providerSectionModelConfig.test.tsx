@@ -4,8 +4,7 @@ import { useState } from 'react';
 
 import type {
   CustomChatModel,
-  ExecutableModelDirectoryEntry,
-  ModelDeployment,
+  CustomGenerationModel,
   ProviderConnection,
   ThinkingTierPool,
 } from '@iart/contracts';
@@ -13,7 +12,7 @@ import { ProviderSection } from '../ProviderSection';
 import { createHubApiClient } from '../../../client/api/hub-api';
 import { createHubHttpClient } from '../../../client/adapters/http-client';
 import { buildConfigUpdatePayload } from '../../../client/settings/config-update';
-import { countDeploymentsByConnection } from '../provider-connection/invalidity';
+import { countModelsByConnection } from '../provider-connection/invalidity';
 import type {
   ProviderConnectionData,
   ProviderNotice,
@@ -44,8 +43,8 @@ const connection: ProviderConnection = {
 };
 
 /**
- * 自建对话模型记录（记录即接入）：接口类型、能力值、档位与接入归属都在记录上，
- * 不再有并列的 ModelDeployment（对话族没有内置包）。
+ * 用户对话模型记录（记录即接入）：接口类型、能力值、档位与接入归属都在记录上。
+ * 2026-10-19 起它是模型唯一载体，不存在并列的第二类接入对象。
  */
 const customModel: CustomChatModel = {
   model_id: 'my-llm',
@@ -66,9 +65,8 @@ const tierPool: ThinkingTierPool = {
 };
 
 /**
- * 生成族服务商与它的已装包模型：与上面的对话服务商并存于同一份数据源，用来核对两种形态默认各归其行。
- * 协议适配器取 `openai-image-v1`（registry 里 family 为 generation），判族只认连接协议。
- * 已装包模型的接入载体仍是 ModelDeployment（自建模型记录不产生 Deployment，spec 03 §6.1）。
+ * 生成族服务商与它的用户生成模型记录：与上面的对话服务商并存于同一份数据源，用来核对两种形态
+ * 默认各归其行。行归属按记录所属连接判定（2026-10-19 起模型记录是唯一载体）。
  */
 const generationConnection: ProviderConnection = {
   ...connection,
@@ -77,28 +75,16 @@ const generationConnection: ProviderConnection = {
   protocol_adapter_id: 'openai-image-v1',
 };
 
-const generationDeployment: ModelDeployment = {
-  deployment_id: 'up_dep_gen1',
+/** 用户生成模型记录（两族记录同属一种对象「模型」，记录归属创建它的连接）。 */
+const generationRecord: CustomGenerationModel = {
   model_id: 'gpt-image-2',
+  record_id: 'up_dep_gen1',
   connection_id: generationConnection.connection_id,
   remote_model_id: 'gpt-image-2',
+  family_adapter_id: 'openai-image-v1',
+  accepted_media_slots: [],
+  parameter_overrides: { official: [], custom: [] },
   created_at: '2026-09-17T00:00:00.000Z',
-  updated_at: '2026-09-17T00:00:00.000Z',
-};
-
-/** 生成连接合并弹窗「软件自带的模型」区块的一条候选（已装能力包模型，尚未添加到本服务商） */
-const generationCandidate: ExecutableModelDirectoryEntry = {
-  model_id: 'second-image-model',
-  model_version: '1.0.0',
-  default_task_type: 'image',
-  capability: { input_modalities: ['text'], output_modalities: ['image'] },
-  parameter_schema: { fields: [], required_fields: [] },
-  deployment: {
-    has_active_deployment: false,
-    active_deployment_id: null,
-    deployable: false,
-    failure_code: 'no_active_deployment',
-  },
 };
 
 /** 被 mock 的数据源；用例的 Harness 每次渲染把它刷成当前值。 */
@@ -126,10 +112,9 @@ const jsonResponse = (body: unknown, status = 200): Response =>
 const stubFetch = (
   {
     failDelete = false,
-    failBind = false,
     failCreateProvider = false,
     conflictCreate = false,
-  }: { failDelete?: boolean; failBind?: boolean; failCreateProvider?: boolean; conflictCreate?: boolean } = {},
+  }: { failDelete?: boolean; failCreateProvider?: boolean; conflictCreate?: boolean } = {},
 ): FetchMock => {
   const mock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
     async (input, init) => {
@@ -207,12 +192,37 @@ const stubFetch = (
         }
         return jsonResponse({ models: [customModel] });
       }
-      if (url.includes('/api/model-deployments')) {
-        if (failBind && init?.method === 'POST') {
-          return jsonResponse({ error: { code: 'internal', message: '拒绝' } }, 500);
+      if (url.includes('/api/custom-generation-models')) {
+        if (conflictCreate && init?.method === 'POST') {
+          return jsonResponse({ message: '已经有这个模型了' }, 409);
         }
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          model_id?: string;
+          connection_id?: string;
+          remote_model_id?: string;
+          family_adapter_id?: string;
+          accepted_media_slots?: unknown;
+        };
         return jsonResponse({
-          deployment: { ...generationDeployment, deployment_id: init?.method === 'POST' ? 'up_dep_new1' : generationDeployment.deployment_id },
+          model: {
+            model_id: body.model_id ?? generationRecord.model_id,
+            record_id: 'up_dep_rec_new1',
+            connection_id: body.connection_id ?? generationConnection.connection_id,
+            remote_model_id: body.remote_model_id ?? body.model_id ?? generationRecord.model_id,
+            family_adapter_id: body.family_adapter_id ?? 'openai-image-v1',
+            accepted_media_slots: Array.isArray(body.accepted_media_slots) ? body.accepted_media_slots : [],
+            parameter_overrides: { official: [], custom: [] },
+            created_at: '2026-09-25T00:00:00.000Z',
+          },
+        });
+      }
+      if (url.includes('/api/generation-family-templates/')) {
+        // 素材位能力随描述符下发（2026-10-19）：openai 族只有参考图
+        return jsonResponse({
+          family_adapter_id: 'openai-image-v1',
+          official_fields: [],
+          reserved_wire_names: ['model', 'prompt', 'input'],
+          supports_media_slots: ['reference_image'],
         });
       }
       if (url.includes('/api/active-routes')) return jsonResponse({ model_id: 'gpt-image-2', deployment_id: 'up_dep_new1' });
@@ -229,11 +239,10 @@ function Harness({ overrides }: { overrides: Partial<ProviderConnectionData> }) 
   stateRef.current = {
     api: createHubApiClient(createHubHttpClient(BASE, WRITE_TOKEN)),
     connections: [connection],
-    deployments: [],
     activeRoutes: { 'my-llm': customModel.record_id },
-    activeDeploymentIds: new Set([customModel.record_id]),
+    activeRecordIds: new Set([customModel.record_id]),
     connectionById: new Map([[connection.connection_id, connection]]),
-    deploymentCountByConnection: new Map<string, number>(),
+    modelCountByConnection: countModelsByConnection([customModel]),
     catalog: [],
     chatCatalog: [],
     catalogUnavailable: false,
@@ -257,7 +266,8 @@ function Harness({ overrides }: { overrides: Partial<ProviderConnectionData> }) 
         buildConfigUpdatePayload({ generationDefaultModelId: modelId }),
       );
     },
-    loading: false,
+    loadState: 'ready',
+    loadError: null,
     notice,
     setNotice,
     reload: async () => undefined,
@@ -266,9 +276,32 @@ function Harness({ overrides }: { overrides: Partial<ProviderConnectionData> }) 
   return <ProviderSection />;
 }
 
+/**
+ * 打开某一行模型的「⋯」菜单（2026-10-19 起模型动作收进菜单）。
+ * 行内不再平铺「修改 / 移除 / 删除模型」，可达路径统一变成「先开行菜单，再点菜单项」。
+ */
+const openRowMenu = (modelId: string): void => {
+  fireEvent.keyDown(screen.getByRole('button', { name: `「${modelId}」的操作` }), { key: 'Enter' });
+};
+
+/** 打开服务商级「⋯」菜单（2026-10-19 起删除服务商 / 删除密钥 / 停用收进菜单） */
+const openProviderMenu = (): void => {
+  fireEvent.keyDown(screen.getByRole('button', { name: '服务商操作' }), { key: 'Enter' });
+};
+
+/** 在左侧服务商栏里点选某一家（详情头也会显示同一名字，故定位收窄到栏内） */
+const selectProviderInRail = (name: string): void => {
+  const rail = screen.getByRole('group', { name: '服务商列表' });
+  const card = within(rail)
+    .queryAllByRole('button')
+    .find((el) => (el.textContent ?? '').includes(name));
+  if (!card) throw new Error(`服务商栏里没有「${name}」`);
+  fireEvent.click(card);
+};
+
 const openDetail = (overrides: Partial<ProviderConnectionData> = {}): void => {
   render(<Harness overrides={overrides} />);
-  fireEvent.click(screen.getByText('我的网关'));
+  selectProviderInRail('我的网关');
 };
 
 /**
@@ -282,16 +315,16 @@ const openGenerationDetail = (overrides: Partial<ProviderConnectionData> = {}): 
     <Harness
       overrides={{
         connections: [connection, generationConnection],
-        deployments: [generationDeployment],
+        customGenerationModels: [generationRecord],
         activeRoutes: {
           'my-llm': customModel.record_id,
-          'gpt-image-2': generationDeployment.deployment_id,
+          'gpt-image-2': generationRecord.record_id,
         },
         ...overrides,
       }}
     />,
   );
-  fireEvent.click(screen.getByText('我的绘图服务'));
+  selectProviderInRail('我的绘图服务');
 };
 
 /** 模型配置弹层内的元素。确认弹层会叠在它上面，那时按标题取另一个（`confirmDialog`）。 */
@@ -352,8 +385,7 @@ describe('服务商详情：添加模型（一次写入）', () => {
       context_window_tokens: 128000,
       max_output_tokens: null,
     });
-    // active 接入由后端在创建内写入：不再有 createModelDeployment / setActiveRoute 跟进
-    expect(fetchFn.mock.calls.some(([input, init]) => String(input).includes('/api/model-deployments') && init?.method === 'POST')).toBe(false);
+    // active 接入由后端在创建内写入：没有第二次写入（接入载体端点已随部署载体退场删除）
     expect(fetchFn.mock.calls.some(([input, init]) => String(input).includes('/api/active-routes') && init?.method === 'PUT')).toBe(false);
   });
 
@@ -458,7 +490,8 @@ describe('服务商详情：修改已添加的模型', () => {
     const fetchFn = stubFetch();
     openDetail();
 
-    fireEvent.click(screen.getByRole('button', { name: '修改「my-llm」的配置' }));
+    openRowMenu('my-llm');
+    fireEvent.click(screen.getByRole('menuitem', { name: '修改配置' }));
     expect((dialog().getByLabelText('上下文窗口') as HTMLInputElement).value).toBe('300000');
     // 已启用列表按模型记录回填（顺序即创作面展示顺序）
     expect(dialog().getByRole('button', { name: '拖动排序「low」' })).toBeInTheDocument();
@@ -477,15 +510,16 @@ describe('服务商详情：修改已添加的模型', () => {
       enabled_thinking_tiers: ['low', 'medium'],
       default_thinking_tier: null,
     });
-    // 没有第二次写入：档位不再落接入（ModelDeployment 档位字段已退役）
-    expect(fetchFn.mock.calls.some(([input, init]) => String(input).includes('/api/model-deployments') && init?.method === 'PUT')).toBe(false);
+    // 没有第二次写入：档位随记录一次落库，不再有接入层可写
+    expect(fetchFn.mock.calls.some(([input, init]) => String(input).includes('/api/active-routes') && init?.method === 'PUT')).toBe(false);
   });
 
   it('连接已停用时改模型配置：提交前拦下并指向「启用」，不发写入请求', async () => {
     const fetchFn = stubFetch();
     openDetail({ connections: [{ ...connection, lifecycle: 'disabled' }] });
 
-    fireEvent.click(screen.getByRole('button', { name: '修改「my-llm」的配置' }));
+    openRowMenu('my-llm');
+    fireEvent.click(screen.getByRole('menuitem', { name: '修改配置' }));
     fireEvent.click(dialog().getByRole('button', { name: '保存' }));
 
     // 停用的连接上保存必然失败（后端要求 enabled），与添加一样提交前拦下、
@@ -534,7 +568,7 @@ describe('服务商详情：生成默认模型', () => {
     expect(screen.queryByRole('button', { name: /设为 Agent 默认模型$/ })).not.toBeInTheDocument();
 
     // 换成对话族服务商，同一屏里两种入口互换
-    fireEvent.click(screen.getByText('我的网关'));
+    selectProviderInRail('我的网关');
 
     expect(screen.getByRole('button', { name: '把「my-llm」设为 Agent 默认模型' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /设为生成默认模型$/ })).not.toBeInTheDocument();
@@ -556,9 +590,9 @@ describe('服务商详情：生成默认模型', () => {
 
   it('「取消默认」写的是 null，而不是不发这个字段', async () => {
     const fetchFn = stubFetch();
-    openGenerationDetail({ generationDefaultModelId: generationDeployment.model_id });
+    openGenerationDetail({ generationDefaultModelId: generationRecord.model_id });
 
-    fireEvent.click(screen.getByRole('button', { name: '取消「gpt-image-2」作为生成默认模型' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消「gpt-image-2」的默认' }));
 
     await waitFor(() => {
       expect(screen.getByText('已取消「gpt-image-2」的生成默认模型')).toBeInTheDocument();
@@ -566,14 +600,16 @@ describe('服务商详情：生成默认模型', () => {
     expect(bodyOf(fetchFn, '/api/config', 'PUT')).toEqual({ generationDefaultModelId: null });
   });
 
-  it('已设为生成默认的行：徽章、说明与「取消默认」都挂在那一行上', () => {
+  it('已设为生成默认的行：表格里有「生成默认」徽章、说明与按下的星标（默认列）', () => {
     stubFetch();
-    openGenerationDetail({ generationDefaultModelId: generationDeployment.model_id });
+    openGenerationDetail({ generationDefaultModelId: generationRecord.model_id });
 
     expect(screen.getByText('生成默认')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '「gpt-image-2」作为生成默认模型说明' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '取消「gpt-image-2」作为生成默认模型' })).toHaveTextContent(
-      '取消默认',
+    expect(screen.getByRole('button', { name: /作为生成默认模型说明$/ })).toBeInTheDocument();
+    // 默认位由星标承担（aria-pressed 表达当前状态），不再是一枚文字按钮
+    expect(screen.getByRole('button', { name: '取消「gpt-image-2」的默认' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
     );
   });
 });
@@ -587,7 +623,8 @@ describe('服务商详情：删除自建模型', () => {
     const fetchFn = stubFetch();
     openDetail();
 
-    fireEvent.click(screen.getByRole('button', { name: '修改「my-llm」的配置' }));
+    openRowMenu('my-llm');
+    fireEvent.click(screen.getByRole('menuitem', { name: '修改配置' }));
     fireEvent.click(dialog().getByRole('button', { name: '删除模型' }));
 
     // 影响面写在确认文案里：模型本身将消失（从模型列表与 Agent 里），不再有接入计数
@@ -614,7 +651,8 @@ describe('服务商详情：删除自建模型', () => {
     const fetchFn = stubFetch();
     openDetail();
 
-    fireEvent.click(screen.getByRole('button', { name: '修改「my-llm」的配置' }));
+    openRowMenu('my-llm');
+    fireEvent.click(screen.getByRole('menuitem', { name: '修改配置' }));
     fireEvent.click(dialog().getByRole('button', { name: '删除模型' }));
     fireEvent.click(confirmDialog('删除模型').getByRole('button', { name: '取消' }));
 
@@ -626,7 +664,8 @@ describe('服务商详情：删除自建模型', () => {
     stubFetch({ failDelete: true });
     openDetail();
 
-    fireEvent.click(screen.getByRole('button', { name: '修改「my-llm」的配置' }));
+    openRowMenu('my-llm');
+    fireEvent.click(screen.getByRole('menuitem', { name: '修改配置' }));
     fireEvent.click(dialog().getByRole('button', { name: '删除模型' }));
     fireEvent.click(confirmDialog('删除模型').getByRole('button', { name: '删除' }));
 
@@ -642,49 +681,40 @@ describe('服务商详情：删除服务商与密钥的影响面', () => {
     vi.unstubAllGlobals();
   });
 
-  it('删除服务商：软件自带与在这里添加的两种来源分开点名（都按「删除」说，不并成一个数）', () => {
+  it('删除服务商：影响面只有一种去向，文案不按来源分说', () => {
     stubFetch();
     openDetail({
       connections: [connection, generationConnection],
-      deployments: [generationDeployment],
-      deploymentCountByConnection: countDeploymentsByConnection([generationDeployment]),
-      customGenerationModels: [
-        {
-          model_id: 'my-image-model',
-          record_id: 'up_dep_rec2',
-          connection_id: generationConnection.connection_id,
-          remote_model_id: 'my-image-model',
-          family_adapter_id: 'openai-image-v1',
-          supports_reference_image: false,
-          parameter_overrides: { official: [], custom: [] },
-          created_at: '2026-09-25T00:00:00.000Z',
-        },
-      ],
+      customGenerationModels: [generationRecord],
+      modelCountByConnection: countModelsByConnection([generationRecord]),
     });
-    fireEvent.click(screen.getByText('我的绘图服务'));
-    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    selectProviderInRail('我的绘图服务');
+    openProviderMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除服务商' }));
 
+    // 2026-10-19 起模型只有记录一处载体：删连接即删它名下的模型，没有「摘掉接入、本体留着」
+    // 的第二种去向可说（原用例断言的是「自带模型之后可添加到其他服务商」那种双去向文案）。
     expect(
-      screen.getByText(
-        '确定删除「我的绘图服务」吗？删除后，在这里添加的 1 个模型会一并删除；软件自带的 1 个模型之后可添加到其他服务商。',
-      ),
+      screen.getByText('确定删除「我的绘图服务」吗？在这里添加的 1 个模型会一并删除。'),
     ).toBeInTheDocument();
   });
 
   it('删除服务商只有自建记录时：影响面只说删除', () => {
     stubFetch();
     openDetail();
-    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    openProviderMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除服务商' }));
 
     expect(
       screen.getByText('确定删除「我的网关」吗？在这里添加的 1 个模型会一并删除。'),
     ).toBeInTheDocument();
   });
 
-  it('删除密钥：接入与自建记录都只是不可用，合并成一个数', () => {
+  it('删除密钥：模型记录都只是不可用，计数合并成一个数', () => {
     stubFetch();
     openDetail();
-    fireEvent.click(screen.getByRole('button', { name: '删除密钥' }));
+    openProviderMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除密钥' }));
 
     expect(
       screen.getByText('确定删除「我的网关」的密钥吗？它下面的 1 个模型会变成不可用。'),
@@ -692,61 +722,56 @@ describe('服务商详情：删除服务商与密钥的影响面', () => {
   });
 });
 
-describe('服务商详情：添加自带模型的失败提示（生成连接，已装包模型）', () => {
+/**
+ * 2026-10-19 单一表单：原来这里还有一条「添加失败后重新装载列表」的用例，保护的是**批量**添加
+ * 的中断语义（勾选多条串行写入时前面几条可能已成功，不 reload 会让候选里留着它们，用户再点一次
+ * 必然撞上「已经添加过了」）。一次只写一条记录后没有「已成功的步骤」可对账，这条用例保护的
+ * 行为已不存在，故随批量添加一并退场；失败原因的呈现仍由下面的用例钉住。
+ */
+describe('服务商详情：生成侧添加模型的失败提示（单一表单）', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('自带区块默认展开；添加失败时把原因写进弹层（顶部提示条被遮罩挡住，用户看不到）', async () => {
-    stubFetch({ failBind: true });
-    openGenerationDetail({ catalog: [generationCandidate] });
+  /** 生成侧单一表单的弹层查询句柄（按标题取，避免与下层弹层混淆）。 */
+  const generationDialog = () => within(screen.getByRole('dialog', { name: '添加模型到「我的绘图服务」' }));
+
+  /** 在生成侧单一表单里填最少信息并提交（模型 ID + 接口类型）。 */
+  const submitGenerationForm = async (): Promise<void> => {
+    fireEvent.change(generationDialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
+    fireEvent.keyDown(generationDialog().getByLabelText('接口类型'), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('option', { name: 'OpenAI Image' }));
+    // 素材位按所选族能力渲染，读到之后才放行提交
+    await waitFor(() => {
+      expect(generationDialog().getByRole('checkbox', { name: '参考图' })).toBeInTheDocument();
+    });
+    fireEvent.click(generationDialog().getByRole('button', { name: '添加' }));
+  };
+
+  it('添加失败时把原因写进弹层（顶部提示条被遮罩挡住，用户看不到）', async () => {
+    stubFetch({ conflictCreate: true });
+    openGenerationDetail();
 
     openGenerationModelDialog();
-    const bindDialog = within(screen.getByRole('dialog', { name: '添加模型到「我的绘图服务」' }));
-    fireEvent.click(bindDialog.getByLabelText('添加 second-image-model'));
-    fireEvent.click(bindDialog.getByRole('button', { name: '添加 1 个模型' }));
+    await submitGenerationForm();
 
     await waitFor(() => {
-      expect(bindDialog.getByRole('alert')).toHaveTextContent('没能添加这个模型，请重试');
+      expect(generationDialog().getByRole('alert')).toHaveTextContent('这个名字已经有模型在用了');
     });
-    // 剩余理由要一并写出来：写入侧只剩「服务商不支持它」与「已经添加过了」，兜底只说「请重试」等于没说
-    expect(bindDialog.getByRole('alert')).toHaveTextContent('这个服务商不支持它，或它已经添加过了');
     expect(screen.getByRole('dialog', { name: '添加模型到「我的绘图服务」' })).toBeInTheDocument();
   });
 
-  it('添加失败后重新装载列表：批量里已加上的模型要随即退出候选', async () => {
-    stubFetch({ failBind: true });
-    const reload = vi.fn(async () => undefined);
-    openGenerationDetail({ catalog: [generationCandidate], reload });
-
-    openGenerationModelDialog();
-    const bindDialog = within(screen.getByRole('dialog', { name: '添加模型到「我的绘图服务」' }));
-    fireEvent.click(bindDialog.getByLabelText('添加 second-image-model'));
-    fireEvent.click(bindDialog.getByRole('button', { name: '添加 1 个模型' }));
-
-    await waitFor(() => {
-      expect(reload).toHaveBeenCalled();
-    });
-  });
-
-  it('连接没有密钥：提交前就拦下并给出插入密钥的路径，不发写入请求', async () => {
+  it('连接没有密钥：提交前就拦下并给出设置密钥的路径，不发写入请求', async () => {
     const fetchFn = stubFetch();
-    openGenerationDetail({
-      connections: [{ ...generationConnection, has_credential: false }],
-      deployments: [],
-      activeRoutes: { 'my-llm': customModel.record_id },
-      catalog: [generationCandidate],
-    });
+    openGenerationDetail({ connections: [{ ...generationConnection, has_credential: false }] });
 
     openGenerationModelDialog();
-    const bindDialog = within(screen.getByRole('dialog', { name: '添加模型到「我的绘图服务」' }));
-    fireEvent.click(bindDialog.getByLabelText('添加 second-image-model'));
-    fireEvent.click(bindDialog.getByRole('button', { name: '添加 1 个模型' }));
+    await submitGenerationForm();
 
-    // 弹层期间「插入密钥」被遮罩挡着，所以路径写成「关掉这个窗口后」
+    // 弹层期间「设置密钥」被遮罩挡着，所以路径写成「关掉这个窗口后」
     await waitFor(() => {
-      expect(bindDialog.getByRole('alert')).toHaveTextContent(
-        '「我的绘图服务」还没插密钥。关掉这个窗口后点「插入密钥」，再回来添加模型。',
+      expect(generationDialog().getByRole('alert')).toHaveTextContent(
+        '「我的绘图服务」还没设置密钥。关掉这个窗口后点「设置密钥」，再回来添加模型。',
       );
     });
     expect(fetchFn.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
@@ -754,27 +779,20 @@ describe('服务商详情：添加自带模型的失败提示（生成连接，�
 
   it('连接已停用：同样在提交前拦下，指向「启用」', async () => {
     const fetchFn = stubFetch();
-    openGenerationDetail({
-      connections: [{ ...generationConnection, lifecycle: 'disabled' }],
-      deployments: [],
-      activeRoutes: { 'my-llm': customModel.record_id },
-      catalog: [generationCandidate],
-    });
+    openGenerationDetail({ connections: [{ ...generationConnection, lifecycle: 'disabled' }] });
 
     openGenerationModelDialog();
-    const bindDialog = within(screen.getByRole('dialog', { name: '添加模型到「我的绘图服务」' }));
-    fireEvent.click(bindDialog.getByLabelText('添加 second-image-model'));
-    fireEvent.click(bindDialog.getByRole('button', { name: '添加 1 个模型' }));
+    await submitGenerationForm();
 
     await waitFor(() => {
-      expect(bindDialog.getByRole('alert')).toHaveTextContent(
+      expect(generationDialog().getByRole('alert')).toHaveTextContent(
         '「我的绘图服务」已停用。关掉这个窗口后点「启用」，再回来添加模型。',
       );
     });
     expect(fetchFn.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
   });
 
-  it('退役连接：添加与编辑入口都不渲染，「移除」与只读信息还在', () => {
+  it('退役连接：添加与编辑入口都不渲染，只读信息还在', () => {
     stubFetch();
     openDetail({
       connections: [{ ...connection, lifecycle: 'retired' }],
@@ -786,11 +804,11 @@ describe('服务商详情：添加自带模型的失败提示（生成连接，�
     expect(screen.queryByRole('button', { name: '启用' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '添加模型' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '修改「my-llm」的配置' })).not.toBeInTheDocument();
-    // 自建记录行没有「移除」：记录即接入，摘掉接入等于删掉模型，那个动作在配置弹层里
-    expect(screen.queryByRole('button', { name: '移除' })).not.toBeInTheDocument();
+    // retired 连接整行只读：连行菜单都不渲染
+    expect(screen.queryByRole('button', { name: '「my-llm」的操作' })).not.toBeInTheDocument();
   });
 
-  it('退役连接的已装包模型行塌缩单行只读：行内编辑排不渲染，模型 ID 纯文本可见（visual-design §8.6 律二）', () => {
+  it('退役连接的模型行塌缩只读：行内编辑排不渲染，模型 ID 纯文本可见（visual-design §8.6 律二）', () => {
     stubFetch();
     openGenerationDetail({
       connections: [connection, { ...generationConnection, lifecycle: 'retired' }],
@@ -800,10 +818,12 @@ describe('服务商详情：添加自带模型的失败提示（生成连接，�
     expect(
       screen.queryByRole('textbox', { name: 'gpt-image-2 的服务商那边的模型 ID' }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '移除' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '设为生成默认' })).not.toBeInTheDocument();
-    // 行 1 只读投影仍在：模型 ID 以纯文本呈现（状态更诚实 + 密度对冲）
-    expect(screen.getByText('gpt-image-2')).toBeInTheDocument();
+    // retired 行不渲染行菜单与星标（不提供必然失败的入口）
+    expect(screen.queryByRole('button', { name: '「my-llm」的操作' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /的默认$/ })).not.toBeInTheDocument();
+    // 只读投影仍在：模型 ID 以纯文本呈现（状态更诚实 + 密度对冲）；
+    // 表格里模型列与远程 ID 列都会出现该 ID，故用 all
+    expect(screen.getAllByText('gpt-image-2').length).toBeGreaterThan(0);
   });
 });
 
@@ -816,7 +836,7 @@ describe('服务商设置：添加服务商弹层', () => {
     const fetchFn = stubFetch({ failCreateProvider: true });
     render(<Harness overrides={{}} />);
 
-    fireEvent.click(screen.getByRole('button', { name: '＋ 添加服务商' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加服务商' }));
     const addDialog = within(screen.getByRole('dialog', { name: '添加服务商' }));
     fireEvent.change(addDialog.getByLabelText('服务地址'), { target: { value: 'https://api.example.com' } });
     fireEvent.change(addDialog.getByLabelText('密钥'), { target: { value: 'sk-add-key' } });
@@ -842,7 +862,7 @@ describe('服务商设置：添加服务商弹层', () => {
     const fetchFn = stubFetch();
     render(<Harness overrides={{}} />);
 
-    fireEvent.click(screen.getByRole('button', { name: '＋ 添加服务商' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加服务商' }));
     const addDialog = within(screen.getByRole('dialog', { name: '添加服务商' }));
     fireEvent.change(addDialog.getByLabelText('名称'), { target: { value: '另一个网关' } });
     fireEvent.change(addDialog.getByLabelText('服务地址'), { target: { value: 'https://other.example.com/v1' } });
@@ -861,25 +881,31 @@ describe('服务商设置：添加服务商弹层', () => {
   });
 });
 
-describe('服务商详情：自带模型进度行只读报数', () => {
+describe('服务商详情：计数口径（进度行已退役）', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('进度行只读报自带与可用两个数，不出快捷按钮（添加走详情里唯一的「添加模型」）', () => {
+  it('页面头报全局「N 个服务商 · M 个模型」，不再出现「软件自带 N 个模型，当前可用 M 个」', () => {
     stubFetch();
-    openGenerationDetail({ catalog: [generationCandidate] });
+    openGenerationDetail();
 
-    expect(screen.getByText('软件自带 1 个模型，当前可用 0 个')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /待就绪/ })).not.toBeInTheDocument();
+    // 旧进度行已退役（2026-10-19）：N 含自建模型、M 把「还没添加」算成不可用，
+    // 且全局口径贴在一个服务商详情上方会被读成这一家的状态
+    expect(screen.queryByText(/软件自带 \d+ 个模型/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/当前可用 \d+ 个/)).not.toBeInTheDocument();
+    // 页面头计数是全局口径（这里有两个服务商），不锁死具体数字
+    expect(screen.getByText(/^\d+ 个服务商 · \d+ 个模型$/)).toBeInTheDocument();
   });
 
-  it('进度行恒按可执行目录报数：对话记录所在的连接也一样（连接级接口类型已摘除，不再按协议分流）', () => {
+  it('计数是全局口径：两个服务商时页面头报 2，与当前选中哪一家无关', () => {
     stubFetch();
-    openDetail({ catalog: [generationCandidate] });
+    openDetail({
+      connections: [connection, { ...connection, connection_id: 'up_conn_other', display_name: '另一个网关' }],
+    });
 
-    expect(screen.getByText('软件自带 1 个模型，当前可用 0 个')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '添加模型' })).toBeInTheDocument();
+    expect(screen.getByText(/^2 个服务商 · /)).toBeInTheDocument();
+    expect(screen.queryByText(/软件自带/)).not.toBeInTheDocument();
   });
 });
 
@@ -893,7 +919,8 @@ describe('服务商详情：删除自定义档位', () => {
     // 影响面计数来自池子（这个档位正被 2 个模型用着）
     openDetail({ thinkingTierPool: { builtin: tierPool.builtin, custom: [{ name: 'ultra', used_by_models: 2 }] } });
 
-    fireEvent.click(screen.getByRole('button', { name: '修改「my-llm」的配置' }));
+    openRowMenu('my-llm');
+    fireEvent.click(screen.getByRole('menuitem', { name: '修改配置' }));
     fireEvent.click(dialog().getByRole('button', { name: '删除档位「ultra」' }));
 
     expect(

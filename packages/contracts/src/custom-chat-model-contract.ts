@@ -75,9 +75,9 @@ export const CustomChatModelSchema = z
   .object({
     model_id: CustomChatModelIdSchema,
     /**
-     * 接入记录 id（`up_dep_` 前缀，与 ModelDeployment id 同一 id 空间）。active route 与
-     * ExecutionSnapshot 的 `deployment_id` 字段引用本 id；存量迁移时继承原 deployment id，
-     * 既有 active-routes 数据因此零改动。由 Runtime Backend 生成，请求体不携带。
+     * 接入记录 id（`up_dep_` 前缀）。active route 与 ExecutionSnapshot 的 `deployment_id`
+     * 字段引用本 id；存量迁移时继承升级前那条接入的 id，既有 active-routes 数据因此零改动。
+     * 由 Runtime Backend 生成，请求体不携带。
      */
     record_id: z.string().regex(/^up_dep_[a-z0-9][a-z0-9-_]*$/),
     /**
@@ -118,8 +118,8 @@ export const CustomChatModelSchema = z
     max_output_tokens: MaxOutputTokensSchema.nullable().default(null),
     /**
      * 已启用思考档位（spec 37「思考档位」），**数组顺序即创作面的展示顺序**；空数组 =
-     * 只有「不思考」可用。2026-09-25 起档位随自建对话模型记录走（原落在 ModelDeployment
-     * 上，`ModelDeployment.enabled_thinking_tiers` 已随声明层合并退役）。
+     * 只有「不思考」可用。2026-09-25 起档位随对话模型记录走（此前落在独立的接入载体上，
+     * 那个载体已随 2026-10-19 原子换轨整体退场）。
      */
     enabled_thinking_tiers: z.array(ThinkingTierSchema).default([]),
     /**

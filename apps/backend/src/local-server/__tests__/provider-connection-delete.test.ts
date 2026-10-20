@@ -13,7 +13,6 @@ import {
   getConnection,
   setConnectionCredential,
 } from '../provider-connection/connection-store.cts';
-import { clearCacheForTest as clearDeploymentCache } from '../provider-connection/deployment-store.cts';
 import {
   clearCacheForTest as clearActiveRouteCache,
   getActiveDeploymentId,
@@ -42,8 +41,6 @@ import {
  * ③有活跃凭证租约（有任务正在使用）时仍拒绝删除，租约释放后可删——任务保护门保留。
  */
 
-const repoRoot = path.join(__dirname, '..', '..', '..', '..', '..');
-process.env['IART_MODEL_ASSET_PACKAGES_DIR'] = path.join(repoRoot, '.model-assets', 'sources');
 process.env['IART_PUBLIC_UPLOAD_CLOUDFLARE_IMAGE_PUBLIC_URL_ENDPOINT'] = 'https://relay.example.invalid/upload';
 
 const HUB_WRITE_TOKEN = 'd'.repeat(32);
@@ -77,7 +74,6 @@ const withIsolatedEnv = (t: test.TestContext): void => {
   process.env[HUB_LOCAL_WRITE_TOKEN_ENV] = HUB_WRITE_TOKEN;
   process.env['IART_STORAGE_ROOT'] = tempRoot;
   clearConnectionCache();
-  clearDeploymentCache();
   clearActiveRouteCache();
   clearCustomChatModelCache();
   clearCustomGenerationModelCache();
@@ -93,8 +89,7 @@ const withIsolatedEnv = (t: test.TestContext): void => {
       process.env['IART_STORAGE_ROOT'] = previousRoot;
     }
     clearConnectionCache();
-    clearDeploymentCache();
-    clearActiveRouteCache();
+      clearActiveRouteCache();
     clearCustomChatModelCache();
     clearCustomGenerationModelCache();
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -118,7 +113,7 @@ const writeHeaders = (): Record<string, string> => ({
   [HUB_LOCAL_WRITE_TOKEN_HEADER]: HUB_WRITE_TOKEN,
 });
 
-void test('删除服务商：还挂着接入也直接删，接入与 active 路由级联清理', async (t) => {
+void test('删除服务商：还挂着模型也直接删，模型记录与 active 路由级联清理', async (t) => {
   withIsolatedEnv(t);
   const baseUrl = await startServer(t);
   const connectionId = await seedConnection('chat');
@@ -140,10 +135,12 @@ void test('删除服务商：还挂着接入也直接删，接入与 active 路�
   const gone = await fetch(`${baseUrl}/api/provider-connections/${connectionId}`);
   assert.equal(gone.status, 404);
 
-  const remaining = await fetch(`${baseUrl}/api/model-deployments`);
+  // 模型记录的清单端点：连接删掉后它名下不应还留着任何模型（2026-10-19 起这是唯一载体，
+  // 原断言查的是 /api/model-deployments——那条路由已随部署载体退场删除）。
+  const remaining = await fetch(`${baseUrl}/api/custom-chat-models`);
   assert.equal(remaining.status, 200);
-  const payload = (await remaining.json()) as { deployments: JsonValue[] };
-  assert.equal(payload.deployments.length, 0, '接入应随连接级联清理');
+  const payload = (await remaining.json()) as { models: JsonValue[] };
+  assert.equal(payload.models.length, 0, '模型记录应随连接级联清理');
 
   assert.equal(getActiveDeploymentId(CHAT_MODEL_ID), null, 'active 路由应随连接级联清理');
 });

@@ -19,14 +19,6 @@ import {
   setCredentialForConnection,
 } from '../provider-connection/credential-store.cts';
 import {
-  createDeployment,
-  getDeployment,
-  listDeployments,
-  removeDeployment,
-  removeDeploymentsByConnection,
-  updateDeployment,
-} from '../provider-connection/deployment-store.cts';
-import {
   removeCustomChatModelsByConnection,
 } from '../provider-connection/custom-chat-model-store.cts';
 import {
@@ -35,7 +27,6 @@ import {
 import {
   clearActiveDeployment,
   clearActiveRoutesForConnection,
-  clearActiveRoutesForDeployment,
   getActiveDeploymentId,
   getActiveRoutes,
   resolveActiveTargetRecord,
@@ -44,33 +35,34 @@ import {
 import { createSkillRuntimeConfigRefresher } from '../skill-runtime/skill-runtime-config-store.cts';
 
 /**
- * Provider 连接、ModelDeployment 与 ActiveRoute 管理路由（spec 03 §4/§6 + spec 45 v3）。
+ * Provider 连接与 ActiveRoute 管理路由（spec 03 §4/§6 + spec 45 v4）。
  *
  * 归属与口径对齐：
  * - spec 03 §4 ProviderConnection：地址+凭证（连接级接口类型预选已退役，2026-09-29 起）、
  *   base_url 规范化、credential_ref、lifecycle
  * - spec 03 §5 Credential lease：Key 只进 safeStorage/fallback 文件，DTO 只含 ref/has_credential
- * - spec 03 §6 ModelDeployment + ActiveRoute：model_id+connection_id+remote_model_id，单值 active
+ * - spec 03 §6 模型记录与 active route：模型记录（对话 / 生成两族路由各自承载）是唯一载体，
+ *   active route 是「model_id → 该模型记录 id」的单值映射（2026-10-19 部署载体整体退场）
  * - spec 03 §7 健康：lifecycle/validity 分离，此处仅持久化，不做探测
- * - 跨边界 DTO 以 packages/contracts 为事实源（ProviderConnection / ModelDeployment / ActiveRouteMap）
+ * - 跨边界 DTO 以 packages/contracts 为事实源（ProviderConnection / ActiveRouteMap）
  *
  * 路由清单（RESTful）：
  * - GET    /api/provider-connections                      列出全部连接
  * - POST   /api/provider-connections                      创建连接 {display_name, base_url}
  * - GET    /api/provider-connections/:connectionId        查询单个
  * - PUT    /api/provider-connections/:connectionId        更新 display_name/base_url
- * - DELETE /api/provider-connections/:connectionId        删除（级联清 deployments/active/credential）
+ * - DELETE /api/provider-connections/:connectionId        删除（级联清模型记录/active/credential）
  * - PUT    /api/provider-connections/:connectionId/lifecycle  {lifecycle: enabled|disabled|retired}
  * - PUT    /api/provider-connections/:connectionId/credential  {value: string} 设置凭证
  * - DELETE /api/provider-connections/:connectionId/credential  清空凭证
- * - GET    /api/model-deployments                         列出全部部署 (?model_id=)
- * - POST   /api/model-deployments                         创建 {model_id, connection_id, remote_model_id}
- * - PUT    /api/model-deployments/:deploymentId           更新 connection_id/remote_model_id
- * - DELETE /api/model-deployments/:deploymentId           删除（级联清 active）
  * - GET    /api/active-routes                             列出全部 active map
  * - GET    /api/active-routes/:modelId                    查询单模型 active
  * - PUT    /api/active-routes/:modelId                    设置 {deployment_id: string|null}，null=清空
  * - DELETE /api/active-routes/:modelId                    清空
+ *
+ * 模型的增删改走两族记录自己的路由（`/api/custom-chat-models`、`/api/custom-generation-models`）：
+ * 2026-10-19 起不存在 `/api/model-deployments`——接入载体与模型记录已归一，第二套增删路由就是
+ * 第二类载体（spec 03 §12 PC-14）。
  *
  * 写保护：POST/PUT/DELETE 全部走 Hub write token（hub-local-write-policy），GET 只读不加。
  * 凭证写：真实 Key 只进 credential-store，响应只回 has_credential，不回明文。
@@ -110,29 +102,6 @@ const ProviderConnectionUpdateBodySchema = z
 
 const LifecycleBodySchema = z.object({ lifecycle: z.enum(['enabled', 'disabled', 'retired']) }).strict();
 const CredentialBodySchema = z.object({ value: z.string().min(1) }).strict();
-
-const DeploymentCreateBodySchema = z
-  .object({
-    model_id: z.string().min(1),
-    connection_id: z.string().min(1),
-    remote_model_id: z.string().min(1),
-  })
-  .strict();
-
-const DeploymentUpdateBodySchema = z
-  .object({
-    connection_id: z.string().min(1).optional(),
-    remote_model_id: z.string().min(1).optional(),
-  })
-  .strict()
-  .refine(
-    (b) =>
-      b.connection_id !== undefined
-      || b.remote_model_id !== undefined,
-    {
-      message: 'at least one updatable field required',
-    },
-  );
 
 const ActiveRoutePutBodySchema = z
   .object({ deployment_id: z.string().regex(/^up_dep_[a-z0-9][a-z0-9-_]*$/).nullable() })
@@ -228,12 +197,9 @@ const createProviderConnectionRoutes = (options?: {
         sendError(res, 409, ERROR_CODE_CONFLICT, '该连接存在活跃凭证租约（有任务正在使用），待任务终态后再删除', corsHeaders);
         return;
       }
-      const deploymentsRemoved = removeDeploymentsByConnection(connectionId);
-      if (deploymentsRemoved > 0) {
-        loggingModule.logDebug('[provider-connection-routes] delete connection: cascaded deployments', { connectionId, deploymentsRemoved });
-      }
-      // spec 03 §6.1：删除连接级联删除其下全部自建记录（对话/生成两族）——记录的接入归属
+      // spec 03 §6.1：删除连接级联删除其下全部模型记录（对话/生成两族）——记录的接入归属
       // 内嵌 connection_id，连接不存在后无归属记录非法。active 路由按被删记录逐个清理。
+      // 2026-10-19 起模型记录是唯一载体，不存在需要在这里另行清理的第二类接入。
       const removedChatRecords = removeCustomChatModelsByConnection(connectionId);
       const removedGenerationRecords = removeCustomGenerationModelsByConnection(connectionId);
       for (const record of [...removedChatRecords, ...removedGenerationRecords]) {
@@ -332,94 +298,6 @@ const createProviderConnectionRoutes = (options?: {
       sendJson(res, 200, { connection: updated, has_credential: true, credential_ref: result.credentialRef }, NO_STORE_HEADERS(corsHeaders));
     },
   },
-  // ----- ModelDeployment -----
-  {
-    name: 'model-deployments-list',
-    match: ({ req, pathname }) => req.method === 'GET' && pathname === '/api/model-deployments',
-    handle: ({ res, url, corsHeaders }) => {
-      const modelId = url.searchParams.get('model_id')?.trim() || '';
-      const deployments = modelId ? listDeployments().filter((d) => d.model_id === modelId) : listDeployments();
-      sendJson(res, 200, { deployments }, NO_STORE_HEADERS(corsHeaders));
-    },
-  },
-  {
-    name: 'model-deployments-create',
-    match: ({ req, pathname }) => req.method === 'POST' && pathname === '/api/model-deployments',
-    handle: async ({ req, res, corsHeaders }) => {
-      const body = await readJsonBodyOrSendError(req, res, corsHeaders);
-      if (body == null) return;
-      const parsed = DeploymentCreateBodySchema.safeParse(body);
-      if (!parsed.success) {
-        sendError(res, 400, ERROR_CODES.INVALID_CONFIG, 'model_id / connection_id / remote_model_id 无效', corsHeaders);
-        return;
-      }
-      try {
-        const deployment = createDeployment({
-          model_id: parsed.data.model_id,
-          connection_id: parsed.data.connection_id,
-          remote_model_id: parsed.data.remote_model_id,
-        });
-        sendJson(res, 200, { deployment }, NO_STORE_HEADERS(corsHeaders));
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        if (msg.includes('already exists')) {
-          sendError(res, 409, ERROR_CODE_CONFLICT, '该 model_id + connection_id + remote_model_id 已存在', corsHeaders);
-          return;
-        }
-        sendError(res, 400, ERROR_CODES.INVALID_CONFIG, msg, corsHeaders);
-      }
-    },
-  },
-  {
-    name: 'model-deployments-by-id',
-    match: ({ req, pathname }) => {
-      const segs = splitPathname(pathname);
-      return segs[0] === 'api' && segs[1] === 'model-deployments' && segs.length === 3 && (req.method === 'PUT' || req.method === 'DELETE' || req.method === 'GET');
-    },
-    handle: async ({ req, res, pathname, corsHeaders }) => {
-      const deploymentId = splitPathname(pathname)[2] ?? '';
-      const existing = getDeployment(deploymentId);
-      if (!existing) {
-        sendError(res, 404, ERROR_CODES.NOT_FOUND, 'ModelDeployment 不存在', corsHeaders);
-        return;
-      }
-      if (req.method === 'GET') {
-        sendJson(res, 200, { deployment: existing }, NO_STORE_HEADERS(corsHeaders));
-        return;
-      }
-      if (req.method === 'PUT') {
-        const body = await readJsonBodyOrSendError(req, res, corsHeaders);
-        if (body == null) return;
-        const parsed = DeploymentUpdateBodySchema.safeParse(body);
-        if (!parsed.success) {
-          sendError(res, 400, ERROR_CODES.INVALID_CONFIG, '更新字段无效', corsHeaders);
-          return;
-        }
-        try {
-          const patch: {
-            connection_id?: string;
-            remote_model_id?: string;
-          } = {};
-          if (parsed.data.connection_id !== undefined) patch.connection_id = parsed.data.connection_id;
-          if (parsed.data.remote_model_id !== undefined) patch.remote_model_id = parsed.data.remote_model_id;
-          const updated = updateDeployment(deploymentId, patch);
-          if (!updated) {
-            sendError(res, 404, ERROR_CODES.NOT_FOUND, 'ModelDeployment 不存在', corsHeaders);
-            return;
-          }
-          sendJson(res, 200, { deployment: updated }, NO_STORE_HEADERS(corsHeaders));
-        } catch (error) {
-          sendError(res, 400, ERROR_CODES.INVALID_CONFIG, error instanceof Error ? error.message : '更新失败', corsHeaders);
-        }
-        return;
-      }
-      // DELETE
-      const cleared = clearActiveRoutesForDeployment(deploymentId);
-      if (cleared > 0) loggingModule.logDebug('[provider-connection-routes] delete deployment: cleared active', { deploymentId, cleared });
-      const ok = removeDeployment(deploymentId);
-      sendJson(res, 200, { ok }, NO_STORE_HEADERS(corsHeaders));
-    },
-  },
   // ----- ActiveRoutes -----
   {
     name: 'active-routes-list',
@@ -465,7 +343,7 @@ const createProviderConnectionRoutes = (options?: {
         return;
       }
       try {
-        // 目标解析双查（spec 03 §6.1）：已装包 deployment 或自建模型记录（同一 id 空间）。
+        // 目标解析（spec 03 §6.1）：两族模型记录按 record_id 查，同一 id 空间。
         const target = resolveActiveTargetRecord(deploymentId);
         if (!target) {
           sendError(res, 404, ERROR_CODES.NOT_FOUND, '接入记录不存在', corsHeaders);
@@ -483,8 +361,8 @@ const createProviderConnectionRoutes = (options?: {
     },
   },
   ];
-  // skill 运行时配置的端点与凭证据取自模型的 active deployment，因此本组的任何写操作
-  // （连接、凭证、部署、active 路由）都可能改变它——统一在写操作后刷新一次。
+  // skill 运行时配置的端点与凭证据取自模型的 active 接入目标，因此本组的任何写操作
+  // （连接、凭证、active 路由）都可能改变它——统一在写操作后刷新一次。
   return routes.map((route) => ({
     ...route,
     handle: async (context: Parameters<RouteDefinition['handle']>[0]) => {

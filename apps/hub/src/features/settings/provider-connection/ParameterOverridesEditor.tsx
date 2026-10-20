@@ -830,7 +830,7 @@ export function ParameterOverridesEditor({
     return map;
   }, [descriptor, value]);
 
-  // 参考图字段完全不可覆盖（设计 §3.2：模态不是参数，归属由「支持参考图」开关管控），编辑器不渲染它
+  // 素材位字段完全不可覆盖（设计 §3.2：模态不是参数，归属由记录的素材位勾选管控），编辑器不渲染它
   const skippedFieldKeys = useMemo(
     () => descriptor.official_fields.filter((field) => field.component === 'imageUpload').map((field) => field.field_key),
     [descriptor.official_fields],

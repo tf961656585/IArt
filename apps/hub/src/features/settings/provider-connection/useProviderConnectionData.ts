@@ -4,14 +4,13 @@ import type {
   CustomChatModel,
   CustomGenerationModel,
   ExecutableModelDirectoryEntry,
-  ModelDeployment,
   ProviderConnection,
   ThinkingTierPool,
 } from '@iart/contracts';
 import { buildConfigUpdatePayload } from '../../../client/settings/config-update';
 import { HubHttpError } from '../../../client/adapters/http-client';
 import { useHubRuntime } from '../../../components/providers/HubAppProvider';
-import { countDeploymentsByConnection } from './invalidity';
+import { countModelsByConnection } from './invalidity';
 
 /**
  * 「服务商与模型」分区的唯一数据源。
@@ -27,8 +26,13 @@ import { countDeploymentsByConnection } from './invalidity';
  * - **目录按协议族分流**：可执行目录（`catalog`，含自建生成模型的族模板合成投影）与对话模型目录
  *   （`chatCatalog`）是两个独立端点：对话模型不进 PromptDock 目录。连接级接口类型已摘除
  *   （2026-09-29），消费方不再按连接协议选源——详情行状态按行类型选目录（见 ProviderDetail）。
- * - **自建模型单独取一次**：`customChatModels` 是用户自己声明的对话模型（模型 ID + 上下文窗口 + 最大输出 token），
- *   与目录不是同一件事——它属于「用户添加了什么」，目录属于「现在能用什么」，两者不能互相推导。
+ * - **模型记录单独取一次**：`customChatModels` / `customGenerationModels` 是用户自己添加的模型
+ *   （能力属性 + 所属服务商一体），与目录不是同一件事——它属于「用户添加了什么」，目录属于
+ *   「现在能用什么」，两者不能互相推导。2026-10-19 起它是模型**唯一**的来源，因此不再有与它
+ *   并列的接入清单。
+ * - **三态显式化**：`loadState` 区分「正在读取 / 读取失败 / 已就绪」。此前只有 `loading` 布尔
+ *   且无消费方，界面用「还没有服务商」兜住了加载中与读取失败两种状态——用户读到的是
+ *   「你还没配」，于是去重复创建（2026-10-19 修正）。
  * - **形态默认模型来自配置**：它们不是模型属性，而是「创作面进入某个形态时用哪个模型」这条本机配置
  *   （`config.agentDefaultModelId` / `config.generationDefaultModelId`，两者都是连接无关的本机偏好）；
  *   读写都留在本 hook，让「哪个模型是默认」在同一份装载里只有一个值。
@@ -43,7 +47,6 @@ export interface ProviderNotice {
 export function useProviderConnectionData() {
   const { api } = useHubRuntime();
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
-  const [deployments, setDeployments] = useState<ModelDeployment[]>([]);
   const [activeRoutes, setActiveRoutes] = useState<ActiveRouteMap>({});
   const [catalog, setCatalog] = useState<ExecutableModelDirectoryEntry[]>([]);
   /** 对话模型目录（GET /api/chat-model-catalog） */
@@ -64,21 +67,24 @@ export function useProviderConnectionData() {
   const [agentDefaultModelId, setAgentDefaultModelId] = useState<string | null>(null);
   /** 生成形态默认模型（GET /api/config 的 `generationDefaultModelId`）；null = 没设默认 */
   const [generationDefaultModelId, setGenerationDefaultModelId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  /**
+   * 装载三态：`idle` 仅存在于首次装载发起前的一瞬，界面按「正在读取」处理。
+   * 失败时保留 `loadError`，由页面渲染「没能读取 + 重试」，不再冒充空态。
+   */
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [notice, setNotice] = useState<ProviderNotice | null>(null);
 
   const reload = useCallback(async (): Promise<void> => {
-    setLoading(true);
+    setLoadState('loading');
     try {
       // 协议适配器清单不再拉取（2026-09-29 摘除连接级预选后，Hub 无消费方；
       // 后端端点与客户端方法保留）。接口类型只在添加模型时配置，表单选项值域来自契约枚举。
-      const [connectionResult, deploymentResult, routeResult] = await Promise.all([
+      const [connectionResult, routeResult] = await Promise.all([
         api.listProviderConnections(undefined),
-        api.listModelDeployments(undefined, undefined),
         api.listActiveRoutes(undefined),
       ]);
       setConnections(connectionResult.connections);
-      setDeployments(deploymentResult.deployments);
       setActiveRoutes(routeResult.active_routes);
       // 模型目录：契约字段来自 Runtime Backend 模型能力包投影，Hub 不得本地推导或伪造
       // （AGENTS.md：禁止复制 Provider 事实源）。可执行目录服务进度行与非对话行状态，
@@ -137,10 +143,14 @@ export function useProviderConnectionData() {
         setAgentDefaultModelId(null);
         setGenerationDefaultModelId(null);
       }
+      setLoadState('ready');
+      setLoadError(null);
     } catch (error: unknown) {
-      setNotice({ tone: 'error', text: describeError(error, '读不到服务商列表，点右上角「刷新」重试') });
-    } finally {
-      setLoading(false);
+      // 读取失败只落到 loadState，**不再覆盖 notice**：notice 承载的是用户上一次写入的结论
+      // （成功或失败），被一次后台重读的失败顶掉会让用户以为刚才那步没成功
+      // （2026-10-19 修正；此前 reload 失败直接写 notice，与成功提示互相覆盖）。
+      setLoadState('error');
+      setLoadError(describeError(error, '没能读取服务商列表'));
     }
   }, [api]);
 
@@ -180,20 +190,20 @@ export function useProviderConnectionData() {
     () => new Map(connections.map((connection) => [connection.connection_id, connection])),
     [connections],
   );
-  const deploymentCountByConnection = useMemo(
-    () => countDeploymentsByConnection(deployments),
-    [deployments],
+  // 每个服务商名下有多少个模型：两族记录同属一种对象「模型」，计数合并成一个数。
+  const modelCountByConnection = useMemo(
+    () => countModelsByConnection([...customChatModels, ...customGenerationModels]),
+    [customChatModels, customGenerationModels],
   );
-  const activeDeploymentIds = useMemo(() => new Set(Object.values(activeRoutes)), [activeRoutes]);
+  const activeRecordIds = useMemo(() => new Set(Object.values(activeRoutes)), [activeRoutes]);
 
   return {
     api,
     connections,
-    deployments,
     activeRoutes,
-    activeDeploymentIds,
+    activeRecordIds,
     connectionById,
-    deploymentCountByConnection,
+    modelCountByConnection,
     catalog,
     chatCatalog,
     catalogUnavailable,
@@ -208,7 +218,8 @@ export function useProviderConnectionData() {
     saveAgentDefaultModel,
     generationDefaultModelId,
     saveGenerationDefaultModel,
-    loading,
+    loadState,
+    loadError,
     notice,
     setNotice,
     reload,

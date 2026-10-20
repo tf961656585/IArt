@@ -332,14 +332,14 @@ describe("buildSchemaPayload media payloads", () => {
     });
   });
 
-  it("builds gpt-image-2-edit payload with media data passed through for backend processing", async () => {
+  it("builds openai-image 图生图 payload with media data passed through for backend processing", async () => {
     await withMockFile(async (FileCtor) => {
       const first = new FileCtor(["first"], "first.png", { type: "image/png" });
       const second = new FileCtor(["second"], "second.png", {
         type: "image/png",
       });
       const gptImage2EditSchema =
-        await loadSchemaFixtureFromProjection("gpt-image-2-edit");
+        await loadSchemaFixtureFromProjection("gpt-image-2");
 
       const payload = await buildSchemaPayload({
         schema: gptImage2EditSchema,
@@ -351,7 +351,7 @@ describe("buildSchemaPayload media payloads", () => {
             { id: "b", file: second },
           ],
         },
-        modelId: "gpt-image-2-edit",
+        modelId: "gpt-image-2",
         runtime: undefined,
       });
 
@@ -384,12 +384,11 @@ describe("buildSchemaPayload media payloads", () => {
     });
   });
 
-  it("合并后 gpt-image-2-edit (alias) image 为空时走文生图路径不报错", async () => {
-    // 合并改造后：gpt-image-2 单节点 image 字段从 required=true 改为 required=false。
-    // 旧 gpt-image-2-edit 节点通过 alias 命中合并包 gpt-image-2。
-    // 空 image + 有效 prompt 应走文生图路径（body.output_format/n 输出，body.image 不输出），不再抛错。
+  it("openai-image 双模式形态 image 为空时走文生图路径不报错", async () => {
+    // image 字段 required=false：空 image + 有效 prompt 走文生图路径
+    // （body.output_format / n 输出，body.image 不输出），不再抛错。
     const gptImage2EditSchema =
-      await loadSchemaFixtureFromProjection("gpt-image-2-edit");
+      await loadSchemaFixtureFromProjection("gpt-image-2");
 
     const payload = await buildSchemaPayload({
       schema: gptImage2EditSchema,

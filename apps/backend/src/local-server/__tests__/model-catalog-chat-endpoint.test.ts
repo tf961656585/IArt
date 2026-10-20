@@ -14,6 +14,7 @@ import {
   addCustomChatModel,
   clearCacheForTest as clearCustomModelCache,
 } from '../provider-connection/custom-chat-model-store.cts';
+import { addCustomGenerationModel } from '../provider-connection/custom-generation-model-store.cts';
 import {
   createConnection,
   clearCacheForTest as clearConnectionCache,
@@ -24,20 +25,19 @@ import { setCredentialForConnection } from '../provider-connection/credential-st
 /**
  * 目录端点分流（spec 03 §1 / spec 45 §1）：
  * - GET /api/chat-model-catalog 只返回用户自建声明的对话模型；
- * - GET /api/executable-model-catalog 仍不包含对话模型（对话模型不进 PromptDock 目录）。
+ * - GET /api/executable-model-catalog 只返回用户自建声明的生成模型（对话模型不进 PromptDock 目录）。
  *
- * 包根指向仓库内已跟踪的源包目录（.model-assets/sources），避免依赖本机 .model-assets/packages
- * 的安装状态；对话模型不再来自能力包，这里在测试内自行声明，声明落在临时存储根。
+ * 模型唯一来源是用户模型记录（spec 03 PC-15）：两个目录的入口都只认记录，不从任何内置资产取模型。
+ * 因此本用例在临时存储根内自行声明对话与生成两类记录，目录内容与仓库磁盘状态无关。
  */
 
-const repoRoot = path.join(__dirname, '..', '..', '..', '..', '..');
-process.env['IART_MODEL_ASSET_PACKAGES_DIR'] = path.join(repoRoot, '.model-assets', 'sources');
 process.env['IART_PUBLIC_UPLOAD_CLOUDFLARE_IMAGE_PUBLIC_URL_ENDPOINT'] = 'https://relay.example.invalid/upload';
 
 /** 自建对话模型（唯一来源），验收对象。 */
 const CHAT_MODEL_IDS = ['my-llm-a', 'my-llm-b'] as const;
-/** 一个已闭合生成族模型，用于确认旧端点未被改动、且生成模型不会窜进对话目录。 */
-const GENERATION_MODEL_ID = 'gpt-image-2';
+/** 自建生成模型：确认可执行目录由记录驱动，且生成模型不会窜进对话目录。 */
+const GENERATION_MODEL_ID = 'catalog-endpoint-image';
+const GENERATION_ADAPTER = 'openai-image-v1';
 const CHAT_ADAPTER = 'openai-responses-v1';
 const CONNECTION_BASE_URL = 'https://byok.example.com/v1';
 const CREDENTIAL_VALUE = 'sk-chat-catalog-endpoint-key';
@@ -84,6 +84,15 @@ void test('目录端点分流：对话模型只进 /api/chat-model-catalog，不
       `应能添加自建模型 ${modelId}`,
     );
   }
+  assert.equal(
+    addCustomGenerationModel({
+      model_id: GENERATION_MODEL_ID,
+      connection_id: connection.connection_id,
+      family_adapter_id: GENERATION_ADAPTER,
+    }).ok,
+    true,
+    `应能添加自建生成模型 ${GENERATION_MODEL_ID}`,
+  );
 
   const chatResponse = await fetch(`${baseUrl}/api/chat-model-catalog`);
   assert.equal(chatResponse.status, 200);
@@ -106,6 +115,6 @@ void test('目录端点分流：对话模型只进 /api/chat-model-catalog，不
   for (const modelId of CHAT_MODEL_IDS) {
     assert.ok(!executableIds.includes(modelId), `可执行目录不得包含对话模型 ${modelId}`);
   }
-  // 旧端点行为不回归：生成族模型仍照常返回。
-  assert.ok(executableIds.includes(GENERATION_MODEL_ID), `可执行目录仍应包含生成族模型 ${GENERATION_MODEL_ID}`);
+  // 可执行目录由用户记录驱动：已声明的生成记录必须出现。
+  assert.ok(executableIds.includes(GENERATION_MODEL_ID), `可执行目录应包含自建生成模型 ${GENERATION_MODEL_ID}`);
 });

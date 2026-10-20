@@ -4,15 +4,16 @@ import { isBuiltinThinkingTier } from './thinking-tier-contract';
 import { TaskSubmitMediaInputSchema } from './task-submit-media-input';
 
 /**
- * Provider 连接、协议适配与模型部署契约（contracts 层）
+ * Provider 连接、协议适配与模型接入契约（contracts 层）
  *
  * 归属与口径对齐：
  * - spec 主口径：`docs/custom-providers/03-Provider连接、协议适配与模型部署主口径.md`
  *   - §3 ProtocolAdapter：内置、不可变、版本化；Endpoint/鉴权/轮询/结果/错误由适配器声明
  *   - §4 ProviderConnection：全局本机、地址+凭证、Base URL 规范化、Credential lease
  *     （连接级 `protocol_adapter_id` 已退役，仅为存量迁移保留读取，2026-09-29 起）
- *   - §6 ModelDeployment 与 active route：model_id + connection_id + remote_model_id；单值 active
- *   - §7/§8 状态与快照：连接/部署健康、ExecutionSnapshot 冻结
+ *   - §6 模型记录与 active route：接入目标只有模型记录 id 一种；单值 active（2026-10-19 起
+ *     部署载体整体退场，见 §12 PC-14）
+ *   - §7/§8 状态与快照：连接健康、ExecutionSnapshot 冻结
  * - spec 主口径：`docs/model-assets/45-PromptDock模型能力目录、Deployment与执行快照契约.md` v3
  *   - BatchIntentSnapshot（提交时）+ ExecutionSnapshot（派发时冻结）
  * - spec 主口径：`docs/provider-remote-apis/03-OpenAI-图像生成接口.md`
@@ -28,7 +29,12 @@ export const PROTOCOL_ADAPTER_IDS = [
   'gemini-image-interactions-v1',
   'seedance-2-0-v1',
   'veo-v1',
-  'kling-v1',
+  // 可灵按官方三个提交端点拆成三个协议适配器（2026-10-19）：官方三个端点的请求体字段并不
+  // 通用（图生视频的 settings 没有 aspect_ratio、omni 的 audio 多一个 original 取值），
+  // 端点即模型身份。三个条目各自只声明自己的提交端点、共用同一组异步任务查询端点。
+  'kling-text2video-v1',
+  'kling-image2video-v1',
+  'kling-omni-video-v1',
   // 对话协议（2026-09-16 纳入）：作为 agent 形态的语言模型来源，不进 PromptDock 目录。
   // 2026-09-26 起协议归属模型级：自建模型记录自带协议声明（对话记录 `protocol_adapter_id` /
   // 生成记录 `family_adapter_id`）；连接级 `protocol_adapter_id` 已退役（2026-09-29 起，
@@ -179,10 +185,10 @@ export const ADAPTER_REGISTRY: Record<ProtocolAdapterId, ProtocolAdapter> = {
     },
     description: 'Veo video generation (LRO async)',
   },
-  'kling-v1': {
-    adapter_id: 'kling-v1',
+  'kling-text2video-v1': {
+    adapter_id: 'kling-text2video-v1',
     version: '1.0.0',
-    display_name: 'Kling',
+    display_name: 'Kling 文生视频',
     family: 'generation',
     auth: { kind: 'bearer', header_name: 'Authorization' },
     relative_endpoints: {
@@ -190,13 +196,37 @@ export const ADAPTER_REGISTRY: Record<ProtocolAdapterId, ProtocolAdapter> = {
       // 与旧设计标准（/v1/videos/text2video + body.model_name）互斥，本适配器只承载新标准。
       // spec：docs/provider-remote-apis/07-Kling-视频生成接口.md §5。
       textToVideo: '/text-to-video/kling-3.0',
-      imageToVideo: '/image-to-video/kling-3.0',
-      omniVideo: '/omni-video/kling-3.0-omni',
       // 新标准统一异步查询端点：task_ids / external_task_ids 二选一，批量以英文逗号分隔。
       taskById: '/tasks?task_ids={id}',
       taskByExternalId: '/tasks?external_task_ids={id}',
     },
-    description: 'Kling AI video generation (new design standard, async task query)',
+    description: 'Kling AI text-to-video (new design standard, async task query)',
+  },
+  'kling-image2video-v1': {
+    adapter_id: 'kling-image2video-v1',
+    version: '1.0.0',
+    display_name: 'Kling 图生视频',
+    family: 'generation',
+    auth: { kind: 'bearer', header_name: 'Authorization' },
+    relative_endpoints: {
+      imageToVideo: '/image-to-video/kling-3.0',
+      taskById: '/tasks?task_ids={id}',
+      taskByExternalId: '/tasks?external_task_ids={id}',
+    },
+    description: 'Kling AI image-to-video (new design standard, async task query)',
+  },
+  'kling-omni-video-v1': {
+    adapter_id: 'kling-omni-video-v1',
+    version: '1.0.0',
+    display_name: 'Kling 全模态视频',
+    family: 'generation',
+    auth: { kind: 'bearer', header_name: 'Authorization' },
+    relative_endpoints: {
+      omniVideo: '/omni-video/kling-3.0-omni',
+      taskById: '/tasks?task_ids={id}',
+      taskByExternalId: '/tasks?external_task_ids={id}',
+    },
+    description: 'Kling AI omni video (new design standard, async task query)',
   },
   'openai-chat-completions-v1': {
     adapter_id: 'openai-chat-completions-v1',
@@ -335,37 +365,13 @@ export const ProviderConnectionSchema = z
 export type ProviderConnection = z.infer<typeof ProviderConnectionSchema>;
 
 // ---------------------------------------------------------------------------
-// ModelDeployment & ActiveRouteMap
+// ActiveRouteMap
 // ---------------------------------------------------------------------------
 
 /**
- * ModelDeployment：一个**已装能力包**产品 `model_id` 在某个服务商连接下的一次接入
- * （spec 03 §6.1「Deployment 与自建模型记录」）。
- *
- * 自建模型（对话 / 生成）不走本实体：它们是服务商作用域单记录（能力属性与接入归属一体，
- * 见 `custom-chat-model-contract.ts` / `custom-generation-model-contract.ts`），不再产生
- * Deployment。本实体只服务已装能力包模型的接入。
- *
- * 2026-09-25 起 `enabled_thinking_tiers` / `default_thinking_tier` 已从本实体退役
- * （对话族没有内置包，档位只随自建对话模型记录走，spec 37 v4.0.0）。
- */
-export const ModelDeploymentSchema = z
-  .object({
-    deployment_id: z.string().regex(/^up_dep_[a-z0-9][a-z0-9-_]*$/),
-    model_id: z.string().min(1),
-    connection_id: z.string().min(1),
-    remote_model_id: z.string().min(1),
-    created_at: z.string(),
-    updated_at: z.string(),
-  })
-  .strict();
-
-export type ModelDeployment = z.infer<typeof ModelDeploymentSchema>;
-
-/**
- * active route：`model_id → 接入记录 id`（spec 03 §6.2）。值语义为「active 接入目标」——
- * 已装包模型指向其 ModelDeployment，自建模型指向其模型记录（两类 id 同用 `up_dep_` 前缀，
- * 因此解析侧按 model_id 在两族接入记录中定位目标）。
+ * active route：`model_id → 接入记录 id`（spec 03 §6.2）。值语义为「active 接入目标」，
+ * 取值只能是该模型自己的记录 id（`up_dep_` 前缀）。2026-10-19 起部署载体整体退场，接入目标
+ * 不存在第二种形态（spec 03 §12 PC-14）。
  */
 export const ActiveRouteMapSchema = z.record(
   z.string().min(1),
@@ -400,20 +406,6 @@ export const ConnectionHealthSchema = z
   .strict();
 export type ConnectionHealth = z.infer<typeof ConnectionHealthSchema>;
 
-export const DEPLOYMENT_VALIDITY_STATUSES = ['valid', 'invalid'] as const;
-export const DeploymentValidityStatusSchema = z.enum(DEPLOYMENT_VALIDITY_STATUSES);
-export type DeploymentValidityStatus = z.infer<typeof DeploymentValidityStatusSchema>;
-
-export const DeploymentValiditySchema = z
-  .object({
-    deployment_id: z.string().min(1),
-    status: DeploymentValidityStatusSchema,
-    reason: z.string().optional(),
-    checked_at: z.string(),
-  })
-  .strict();
-export type DeploymentValidity = z.infer<typeof DeploymentValiditySchema>;
-
 // ---------------------------------------------------------------------------
 // Cross-boundary DTOs
 // ---------------------------------------------------------------------------
@@ -437,16 +429,6 @@ export const ProviderConnectionCredentialResponseSchema = z
   .strict();
 export type ProviderConnectionCredentialResponse = z.infer<typeof ProviderConnectionCredentialResponseSchema>;
 
-export const ModelDeploymentListResponseSchema = z
-  .object({ deployments: z.array(ModelDeploymentSchema) })
-  .strict();
-export type ModelDeploymentListResponse = z.infer<typeof ModelDeploymentListResponseSchema>;
-
-export const ModelDeploymentResponseSchema = z
-  .object({ deployment: ModelDeploymentSchema })
-  .strict();
-export type ModelDeploymentResponse = z.infer<typeof ModelDeploymentResponseSchema>;
-
 export const ActiveRouteMapResponseSchema = z
   .object({ active_routes: ActiveRouteMapSchema })
   .strict();
@@ -459,9 +441,6 @@ export type ActiveRouteResponse = z.infer<typeof ActiveRouteResponseSchema>;
 
 export const ProviderConnectionOkResponseSchema = z.object({ ok: z.literal(true) }).strict();
 export type ProviderConnectionOkResponse = z.infer<typeof ProviderConnectionOkResponseSchema>;
-
-export const ModelDeploymentOkResponseSchema = z.object({ ok: z.literal(true) }).strict();
-export type ModelDeploymentOkResponse = z.infer<typeof ModelDeploymentOkResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // BatchIntentSnapshot & ExecutionSnapshot
@@ -505,7 +484,7 @@ export type BatchIntentSnapshot = z.infer<typeof BatchIntentSnapshotSchema>;
  * （spec 03 §8 / spec 45 §5.2 / runtime spec）。
  *
  * - 冻结连接身份与配置修订、适配器身份与版本、Base URL、remote_model_id、鉴权策略与凭证版本引用、已解析 endpoint 与参数。
- * - `deployment_id` 语义为「active 接入记录 id」：已装包模型为 ModelDeployment id，自建模型为其模型记录 id（两类 id 同用 `up_dep_` 前缀）。
+ * - `deployment_id` 语义为「active 接入记录 id」：其值即该模型的记录 id（2026-10-19 起部署载体退场，字段名沿用）。
  * - credential_lease 关联（spec 03 §5.3 Credential lease）：远端已受理后租约保留到任务终态；
  *   lease_state: 'active'（持有中）/ 'released'（任务终态后释放）。credential_ref 只承载不可逆引用，不承载明文 Key。
  * - 远端请求开始后，连接编辑、Key 轮换、接入切换或 Provider 退役不得改写本快照。

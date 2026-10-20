@@ -507,6 +507,17 @@ export interface NodeGraphActions {
    */
   autoLayoutWithPreMeasure: (options: CanvasAutoLayoutStoreOptions | undefined) => Promise<(AutoLayoutResult & { changedCount: number }) | null>;
 
+  /**
+   * 整理组间布局（CLI `canvas layout --scope containers`）：
+   * 把所有最外层容器（组 | 独立 Agent 容器）当整体，只消除容器之间的派生占位相交；
+   * 不重叠的容器保持原位，重叠的整组平移到最近空位，内部相对布局不变。
+   * 单次 updateNodePositionsBatch 写回 = 单条原子历史；无重叠时返回空 positions。
+   */
+  layoutContainers: () => Promise<{
+    positions: Record<string, NodePosition>;
+    changedCount: number;
+  } | null>;
+
   // 对齐/分布选中节点（spec：画布节点组.md「对齐作用域」）
   alignSelection: (mode: AlignmentMode) => void;
 

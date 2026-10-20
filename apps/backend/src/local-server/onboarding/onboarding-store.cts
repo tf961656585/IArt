@@ -14,8 +14,8 @@ import { isPlainObject } from '../utils.cts';
  *
  * - 文件：config/onboarding-state.json（独立小文件，先例 announcement.json）
  * - 只承载「用户是否已看过/跳过欢迎指引」这一个展示态标记
- * - 判定「是否触发指引」的配置状态（服务商/接入）不在这里：Hub 消费既有端点
- *   （GET /api/provider-connections、GET /api/model-deployments），本模块不感知配置事实
+ * - 判定「是否触发指引」的配置状态（有无服务商）不在这里：Hub 消费既有端点
+ *   （GET /api/provider-connections），本模块不感知配置事实
  * - 读取侧 Schema.safeParse 逐字段校验，损坏/缺字段回退默认值（未看过）；
  *   「文件不存在」与「文件损坏」同为未看过，不做新装机区分（拍板口径见 §3.6）
  */

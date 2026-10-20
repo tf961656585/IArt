@@ -14,7 +14,6 @@ import {
   normalizeString,
   notNullish,
   safeReadJsonFile,
-  uniq,
 } from "./model-package-catalog.shared.cts";
 import { buildProjectionFromPackage } from "./model-package-catalog.projection.cts";
 import { listDeclaredGenerationProjections } from "./generation-declaration-projection.cts";
@@ -23,44 +22,24 @@ import { validatePublicRelayRequirementsForCatalog } from "./public-relay-capabi
 
 const buildVariantShellModelId = (groupKey: string): string => `variant-group:${groupKey}`;
 
+/**
+ * 目录根的解析（**退役中**：模型能力包不再是模型来源，见 spec 03 PC-15）。
+ *
+ * 运行时不再探测仓库/安装包里的任何内置资产目录——那些隐式探测是「软件内置模型」的来源，
+ * 模型唯一来源是用户模型记录。本函数只认显式注入的 `IART_MODEL_ASSET_PACKAGES_DIR`；未注入即
+ * 返回一个**必定不存在**的哨兵路径（名字自述用途，不带任何旧目录语义），装配因此得到空目录
+ * 投影，而不是悄悄捡起仓库里的残留文件。
+ *
+ * 待「模型能力包」子系统整体删除时，本函数与其调用方一并退场。
+ */
 const resolveModelPackagesRoot = (
   options: { baseDir: string | undefined } = { baseDir: undefined },
 ) => {
-  const runtimeProcess = process as NodeJS.Process & { resourcesPath: string | undefined };
-  const resourcesPath = normalizeString(runtimeProcess.resourcesPath);
   const { IART_MODEL_ASSET_PACKAGES_DIR } = process.env;
   const envPath = normalizeString(IART_MODEL_ASSET_PACKAGES_DIR);
-  if (envPath) {
-    return path.resolve(envPath);
-  }
-  const baseDir = normalizeString(options.baseDir);
-  const candidates = [];
-  if (baseDir) {
-    candidates.push(
-      path.resolve(baseDir, "..", "..", "..", ".model-assets", "packages"),
-    );
-    candidates.push(
-      path.resolve(baseDir, "..", "..", ".model-assets", "packages"),
-    );
-  }
-  candidates.push(path.resolve(process.cwd(), ".model-assets", "packages"));
-  if (resourcesPath) {
-    candidates.push(path.join(resourcesPath, "model-assets"));
-  }
-  if (typeof process.execPath === "string" && process.execPath.trim()) {
-    candidates.push(path.join(path.dirname(process.execPath), "model-assets"));
-  }
-  const deduped = uniq(candidates.map((candidate) => path.resolve(candidate)));
-  for (const candidate of deduped) {
-    try {
-      if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
-        return candidate;
-      }
-    } catch {
-      void 0;
-    }
-  }
-  return deduped[0] || path.resolve(process.cwd(), ".model-assets", "packages");
+  void options;
+  if (envPath) return path.resolve(envPath);
+  return path.resolve(process.cwd(), ".iart-no-model-package-root");
 };
 
 /**
@@ -165,21 +144,6 @@ const aggregateVariantGroups = (
   return result;
 };
 
-const buildReservedModelIds = (projections: CatalogProjection[]): Set<string> => {
-  const reserved = new Set<string>();
-  for (const projection of projections) {
-    reserved.add(projection.model_id);
-    if (projection.shell_model_id !== undefined) reserved.add(projection.shell_model_id);
-    for (const alias of projection.runtime.aliases) reserved.add(alias);
-    if (projection.variant_group !== undefined) {
-      for (const variant of projection.variant_group.variants) {
-        reserved.add(variant.model_id);
-      }
-    }
-  }
-  return reserved;
-};
-
 const loadModelPackageCatalog = (
   options: { baseDir: string | undefined; includeDeclared?: boolean } = {
     baseDir: undefined,
@@ -198,15 +162,20 @@ const loadModelPackageCatalog = (
   const projectionIndexByModelId = new Map<string, number>();
   const duplicateModelIds = new Set<string>();
   if (!fs.existsSync(packageRoot)) {
-    diagnostics.push({
-      package_id: "*",
-      code: "packages_root_missing",
-      message: `模型包目录不存在: ${packageRoot}`,
-      model_id: undefined,
-    });
-    // 声明合成投影不依赖包目录：包目录缺失时仍进入目录（自建生成模型第二来源）。
+    // 未注入包根是**正常态**（模型唯一来源是用户记录，spec 03 PC-15），不是故障：
+    // 只有显式注入了目录却读不到时才记诊断，否则每次安装都会带一条恒假的
+    // `packages_root_missing`，把真实诊断淹掉。
+    if (normalizeString(process.env["IART_MODEL_ASSET_PACKAGES_DIR"])) {
+      diagnostics.push({
+        package_id: "*",
+        code: "packages_root_missing",
+        message: `模型包目录不存在: ${packageRoot}`,
+        model_id: undefined,
+      });
+    }
+    // 用户记录合成投影不依赖包目录：包目录缺失时仍进入目录（这是唯一的模型来源）。
     const declaredOnly = options.includeDeclared === true
-      ? listDeclaredGenerationProjections(new Set())
+      ? listDeclaredGenerationProjections()
       : { projections: [], localizationBundles: [], diagnostics: [] };
     diagnostics.push(...declaredOnly.diagnostics);
     return {
@@ -333,15 +302,15 @@ const loadModelPackageCatalog = (
       });
     }
   }
-  // 自建生成模型第二来源（生成模型自建声明试点 §3.6）：声明 × 族模板 → 内存态合成投影，
-  // 并入目录投影与本地化束——目录条目、执行链投影解析、节点投影三个消费方共用同一份。
-  // 与已装包身份（model_id / 别名 / 变体名）冲突的声明不合成（包优先），留诊断。
+  // 用户模型记录 × 族模板 → 内存态合成投影，并入目录投影与本地化束——目录条目、执行链投影
+  // 解析、节点投影三个消费方共用同一份。模型来源唯一（spec 03 PC-15）：不存在与记录撞名的
+  // 第二类载体，因此这里没有「包优先」跳过判据。
   // includeDeclared 只在请求期装载：可执行目录与投影解析按请求/按调用刷新，node-projections
   // 活快照见 createModelProjectionSnapshotCatalog（首个投影请求装配 + 声明变更失效单飞重建）。
   // 任何启动期急切装载都会把声明 store 的文件缓存冻结在进程起点，「先起服后写配置」的读取
   // 顺序会被冻结在空集（custom-generation-model 旧版文件回归测试依赖该顺序）。
   const declared = options.includeDeclared === true
-    ? listDeclaredGenerationProjections(buildReservedModelIds(aggregatedProjections))
+    ? listDeclaredGenerationProjections()
     : { projections: [], localizationBundles: [], diagnostics: [] };
   aggregatedProjections.push(...declared.projections);
   localizationBundles.push(...declared.localizationBundles);

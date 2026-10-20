@@ -55,6 +55,10 @@
   --warning: oklch(0.56 0.15 75); /* 深棕橙，色相 h=75 与深色一致，on card 4.75 */
   --border: oklch(0 0 0 / 0.035); /* 隐形安全网：边框退场，仅防与背景融合，不承担主边界（spec §5.4.4） */
   --input: oklch(0 0 0 / 0.12); /* input 描边略深 */
+  /* 数据面分隔线（表格行与表头下缘，仅此处使用；docs/hub/visual-design.md §5.4.5）：
+     --border 的 3.5% 是「隐形安全网」语义，用在表格上会让行边界消失、列对不齐，
+     故数据面单独一档，不改变卡片边框的隐形口径。 */
+  --border-data: oklch(0 0 0 / 0.065);
   --ring: oklch(0.535 0.22 277); /* focus ring 跟随 primary，浅色必须实色（spec §5.5），on card 5.60 */
 
   /* 原生控件色系声明（spec §5.6）：缺省时 Chromium 的原生控件（滚动条、input
@@ -111,6 +115,7 @@
   --warning: oklch(0.78 0.16 75);
   --border: oklch(1 0 0 / 3.5%); /* 隐形安全网：边框退场，仅防与背景融合（spec §5.2.5） */
   --input: oklch(1 0 0 / 12%);
+  --border-data: oklch(1 0 0 / 0.11); /* 数据面分隔线（表格行），见浅色块同名字段说明 */
   --ring: oklch(0.565 0.21 277); /* focus ring 跟随 primary 品牌色（§5.2.2），与 primary L 同步 */
 
   /* 原生控件色系声明（spec §5.6）：dark class 不等于 color-scheme，
@@ -174,6 +179,8 @@
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-border: var(--border);
+  /* border-data：Tailwind utility `border-data` 的取值来源（数据面表格分隔线专用） */
+  --color-data: var(--border-data);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-chart-1: var(--chart-1);

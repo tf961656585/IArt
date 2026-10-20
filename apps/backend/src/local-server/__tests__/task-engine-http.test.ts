@@ -312,7 +312,11 @@ void test("executeHttpTask: fetch 抛出网络异常时任务失败，error 包�
   assert.equal(resultRecord.error?.code, "no_active_deployment");
   assert.equal(resultRecord.error?.userMessage, undefined);
   assert.equal(resultRecord.error?.retryable, undefined);
-  assert.equal(resultRecord.error?.message, "model model-http-network-err has no active deployment");
+  assert.equal(
+    resultRecord.error?.message,
+    "model model-http-network-err has no active access target",
+    "error.message 应明确说明缺少 active 接入目标（2026-10-19 部署载体退场，措辞随语义改）",
+  );
 });
 
 void test("executeHttpTask: fetch 抛出非网络异常时任务失败，error 不包含 userMessage 和 retryable（向后兼容）", async (t) => {
@@ -355,8 +359,8 @@ void test("executeHttpTask: fetch 抛出非网络异常时任务失败，error �
   assert.equal(resultRecord.error?.code, "no_active_deployment");
   assert.equal(
     resultRecord.error?.message,
-    "model model-http-non-net-err has no active deployment",
-    `error.message 应明确说明缺少 active deployment，实际为: ${String(resultRecord.error?.message)}`,
+    "model model-http-non-net-err has no active access target",
+    `error.message 应明确说明缺少 active 接入目标，实际为: ${String(resultRecord.error?.message)}`,
   );
   assert.equal(
     Object.prototype.hasOwnProperty.call(

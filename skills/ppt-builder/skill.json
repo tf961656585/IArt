@@ -1,0 +1,6 @@
+{
+  "id": "ppt-builder",
+  "version": "0.3.1",
+  "name": "PPT Builder",
+  "description": "把大纲、文档或要点做成排版整齐的 PPT：自动排版不出格，附带讲者备注；支持设计令牌自定义配色字体、整页图 1:1 还原、本地图片与 AI 配图，内置几何质检与机器可读 schema。"
+}

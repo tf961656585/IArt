@@ -1,7 +1,27 @@
 #!/usr/bin/env node
-
-import fs from 'node:fs';
+/**
+ * guard:model-input-modalities —— 参数表单的媒体上传组件 ↔ capability 模态声明一致性。
+ *
+ * 不变量（未变）：`parameter_schema.fields` 里出现 `imageUpload` / `videoUpload` /
+ * `audioUpload` 时，`capability.input_modalities` 必须包含对应媒体类型；出现 `imageUpload`
+ * 时 `capability.supports_reference_media` 必须为 true。不一致会让「表单能选图、运行时按纯文本
+ * 处理」静默降级。
+ *
+ * 校验对象（2026-10-20 变更）：原本扫仓库内能力包源目录。模型能力包退场、
+ * 包目录删除后，**族模板**成为唯一产出这类组合的地方——自建生成模型记录 × 族模板在内存里
+ * 合成 sources，再经投影进目录。所以本门禁改为对族模板产出的 sources 逐族校验：族模板写错
+ * 一个媒体字段，所有自建模型都会踩同一个坑，这比对照旧包更要紧。
+ *
+ * 覆盖两种形态：不接受任何素材位的形态，与接受全部素材位的形态。素材位决定模板是否生成
+ * 媒体字段，只查一种形态会漏掉另一侧。
+ *
+ * 运行方式：`node --import tsx tooling/scripts/guard-model-input-modalities-consistency.mjs`
+ * （族模板是 backend 的 `.cts` 源码，需要 tsx 转译；与 diagnose:model-catalog 同一手法）。
+ */
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const COMPONENT_TO_MEDIA_KIND = {
   imageUpload: 'image',
@@ -9,138 +29,139 @@ const COMPONENT_TO_MEDIA_KIND = {
   audioUpload: 'audio',
 };
 
-function readJson(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-}
+const isRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-function parseArgs(argv) {
-  const args = { root: process.cwd() };
-  for (let i = 2; i < argv.length; i++) {
-    if (argv[i] === '--root' && argv[i + 1]) {
-      args.root = argv[++i];
-    }
+const asArray = (value) => (Array.isArray(value) ? value : []);
+
+const loadFamilyRegistry = async () => {
+  const modulePath = path.join(
+    repoRoot,
+    'apps',
+    'backend',
+    'src',
+    'local-server',
+    'generation-family-templates.registry.cts',
+  );
+  const loaded = await import(pathToFileURL(modulePath).href);
+  const registry = loaded.GENERATION_FAMILY_TEMPLATE_REGISTRY;
+  if (!isRecord(registry)) {
+    throw new Error(`family_template_registry_missing:${modulePath}`);
   }
-  return args;
-}
+  return registry;
+};
 
-function getModelSourceDirs(root) {
-  const sourcesDir = path.join(root, '.model-assets', 'sources');
-  if (!fs.existsSync(sourcesDir)) {
-    return [];
-  }
-  return fs.readdirSync(sourcesDir, { withFileTypes: true })
-    .filter(d => d.isDirectory())
-    .map(d => path.join(sourcesDir, d.name));
-}
-
-function collectMediaKindsFromFields(fields) {
+/** 从字段清单收集媒体类型；命中未知 upload 组件时返回告警（不阻断）。 */
+const collectMediaKinds = (fields) => {
   const kinds = new Set();
+  let unknownComponent = null;
   for (const field of fields) {
-    const component = field.component;
-    if (component && COMPONENT_TO_MEDIA_KIND[component]) {
+    if (!isRecord(field)) continue;
+    const component = typeof field.component === 'string' ? field.component : '';
+    if (COMPONENT_TO_MEDIA_KIND[component]) {
       kinds.add(COMPONENT_TO_MEDIA_KIND[component]);
-    } else if (component && component.endsWith('Upload') && !COMPONENT_TO_MEDIA_KIND[component]) {
-      // Unrecognized upload component — warn but don't block
-      return { kinds, unknownComponent: component };
+    } else if (component.endsWith('Upload') && !COMPONENT_TO_MEDIA_KIND[component]) {
+      unknownComponent = component;
     }
   }
-  return { kinds, unknownComponent: null };
-}
+  return { kinds, unknownComponent };
+};
 
-function checkModel(dirPath) {
-  const configPath = path.join(dirPath, 'runtime_model.json');
-  if (!fs.existsSync(configPath)) {
-    return null;
-  }
-
-  const config = readJson(configPath);
-  const modelName = path.basename(dirPath);
+/** 对一份族模板 sources 跑全部不变量检查。 */
+const checkSources = ({ familyAdapterId, modelId, sources }) => {
   const issues = [];
-
-  const capability = config.capability || {};
-  const inputModalities = capability.input_modalities || [];
+  const runtimeModel = isRecord(sources.runtimeModel) ? sources.runtimeModel : {};
+  const capability = isRecord(runtimeModel.capability) ? runtimeModel.capability : {};
+  const inputModalities = asArray(capability.input_modalities);
   const supportsReferenceMedia = capability.supports_reference_media;
+  const parameterSchema = isRecord(runtimeModel.parameter_schema)
+    ? runtimeModel.parameter_schema
+    : {};
+  const fields = asArray(parameterSchema.fields);
 
-  const parameterSchema = config.parameter_schema || {};
-  const fields = parameterSchema.fields || [];
+  const { kinds: requiredMediaKinds, unknownComponent } = collectMediaKinds(fields);
 
-  const { kinds: requiredMediaKinds, unknownComponent } = collectMediaKindsFromFields(fields);
-
-  if (unknownComponent) {
+  if (unknownComponent !== null) {
     issues.push({
+      familyAdapterId,
+      modelId,
       level: 'warning',
       message: `unknown upload component '${unknownComponent}' found in parameter_schema — extend COMPONENT_TO_MEDIA_KIND mapping if needed`,
     });
   }
 
-  // Check: input_modalities must include all media kinds derived from upload components
-  if (requiredMediaKinds.size > 0) {
-    for (const kind of requiredMediaKinds) {
-      if (!inputModalities.includes(kind)) {
-        issues.push({
-          level: 'error',
-          message: `parameter_schema has upload component for '${kind}' but input_modalities ${JSON.stringify(inputModalities)} does not include '${kind}'`,
-        });
-      }
+  for (const kind of requiredMediaKinds) {
+    if (!inputModalities.includes(kind)) {
+      issues.push({
+        familyAdapterId,
+        modelId,
+        level: 'error',
+        message: `parameter_schema has upload component for '${kind}' but input_modalities ${JSON.stringify(inputModalities)} does not include '${kind}'`,
+      });
     }
   }
 
-  // Check: supports_reference_media must be true when imageUpload is present
   if (requiredMediaKinds.has('image') && supportsReferenceMedia !== true) {
     issues.push({
+      familyAdapterId,
+      modelId,
       level: 'error',
-      message: `parameter_schema has imageUpload component but supports_reference_media is ${supportsReferenceMedia} (expected true)`,
+      message: `parameter_schema has imageUpload component but supports_reference_media is ${String(supportsReferenceMedia)} (expected true)`,
     });
   }
 
-  return { modelName, issues };
-}
+  return issues;
+};
 
-function main() {
-  const args = parseArgs(process.argv);
-  const dirs = getModelSourceDirs(args.root);
-
-  if (dirs.length === 0) {
-    console.error('guard:model-input-modalities failed: no model source directories found in .model-assets/sources/');
-    process.exit(1);
-  }
-
+const main = async () => {
+  const registry = await loadFamilyRegistry();
   const allIssues = [];
-  let _checked = 0;
+  let checkedShapes = 0;
 
-  for (const dir of dirs) {
-    const result = checkModel(dir);
-    if (!result) continue;
-    _checked++;
-    for (const issue of result.issues) {
-      allIssues.push({ model: result.modelName, ...issue });
+  for (const [familyAdapterId, entry] of Object.entries(registry)) {
+    if (!isRecord(entry) || entry.status !== 'ready') continue;
+    const buildBaseSources = entry.buildBaseSources;
+    if (typeof buildBaseSources !== 'function') continue;
+    const supportsMediaSlots = asArray(entry.supportsMediaSlots);
+
+    // 两种形态都查：素材位决定是否生成媒体字段，单查一种会漏另一侧的错配。
+    for (const acceptedMediaSlots of [[], supportsMediaSlots]) {
+      const modelId = `guard-${familyAdapterId}`;
+      const sources = buildBaseSources(modelId, { acceptedMediaSlots });
+      allIssues.push(...checkSources({ familyAdapterId, modelId, sources }));
+      checkedShapes += 1;
     }
   }
 
-  if (allIssues.some(i => i.level === 'error')) {
+  // 一个 ready 族都没扫到 = 门禁退化成空循环恒绿，必须判红。
+  if (checkedShapes === 0) {
+    console.error(
+      'guard:model-input-modalities failed: no ready family template found (registry scan produced zero shapes)',
+    );
+    process.exit(1);
+  }
+
+  const errors = allIssues.filter((issue) => issue.level === 'error');
+  if (errors.length > 0) {
     console.error('guard:model-input-modalities failed:');
-    for (const issue of allIssues) {
-      if (issue.level === 'error') {
-        console.error(`  ${issue.model}: ${issue.message}`);
-      }
+    for (const issue of errors) {
+      console.error(`  ${issue.familyAdapterId}/${issue.modelId}: ${issue.message}`);
     }
-    // Also print warnings if any
-    for (const issue of allIssues) {
-      if (issue.level === 'warning') {
-        console.error(`  ${issue.model}: [WARNING] ${issue.message}`);
-      }
+    for (const issue of allIssues.filter((item) => item.level === 'warning')) {
+      console.error(`  ${issue.familyAdapterId}/${issue.modelId}: [WARNING] ${issue.message}`);
     }
     process.exit(1);
   }
 
-  // Print warnings even on success
   for (const issue of allIssues) {
     if (issue.level === 'warning') {
-      console.error(`  ${issue.model}: [WARNING] ${issue.message}`);
+      console.error(`  ${issue.familyAdapterId}/${issue.modelId}: [WARNING] ${issue.message}`);
     }
   }
+};
 
-  // Success — no output (consistent with other guards)
-}
-
-main();
+main().catch((error) => {
+  console.error(
+    `guard:model-input-modalities failed: ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exit(1);
+});

@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Checkbox, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@iart/ui';
+import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@iart/ui';
 import type {
   FamilyTemplateParameterDescriptor,
+  GenerationMediaSlotId,
   ParameterOverrides,
 } from '@iart/contracts';
 import {
@@ -14,6 +15,11 @@ import {
   GenerationOverridesSection,
   useGenerationOverridesSection,
 } from './GenerationOverridesSection';
+import {
+  effectiveMediaSlots,
+  GenerationMediaSlotChecklist,
+  useGenerationMediaSlots,
+} from './GenerationMediaSlotFields';
 import { emptyParameterOverrides } from './ParameterOverridesEditor';
 
 /**
@@ -40,7 +46,7 @@ export type GenerationFamilyAdapterId = (typeof GENERATION_FAMILY_ADAPTER_IDS)[n
  * 契约扩族时这里自动跟随。空态起步、必选（2026-09-29 起连接级预选摘除），选了才能提交。
  *
  * 没有思考档位区块：生成族连接不承载档位（spec 37「声明位置」的生成侧空集）。
- * 没有常驻解释文字：两个 ID 字段靠占位符自解释，勾选框文案就是「支持参考图」的全部说明。
+ * 没有常驻解释文字：两个 ID 字段靠占位符自解释，素材位勾选框只写业务名，不印说明。
  * 「高级参数自定义」默认收起：展开才会按所选接口类型拉取参数描述；尚未选择接口类型时展开
  * 不发请求（收起再展开会按新选择再试）；不带覆盖的提交与不展开完全一致
  * （请求体不带 parameter_overrides，行为与现状零差异）。
@@ -73,8 +79,13 @@ export type GenerationModelFormPayload = {
    * （`remote_model_id: modelId`）同一个语义，由调用方落成具体值。
    */
   remoteModelId: string | null;
-  /** 图生图能力随声明落库（试点设计 C4：输入模态是模型属性） */
-  supportsReferenceImage: boolean;
+  /**
+   * 该模型接受的素材位清单（输入模态是模型属性，进记录）。
+   *
+   * 由所选接口类型的族能力逐项勾选得来（`supports_media_slots`），换接口类型即清空重选。
+   * 0 位族（可灵文生视频）提交空清单。
+   */
+  acceptedMediaSlots: GenerationMediaSlotId[];
   /**
    * 参数覆盖（生成模型参数高级自定义-design §3.4）；null = 没有自定义任何参数，
    * 请求体不带 parameter_overrides，与不带本字段的既有行为完全一致。
@@ -102,10 +113,16 @@ export function useGenerationModelForm({
   const [familyAdapterId, setFamilyAdapterId] = useState<GenerationFamilyAdapterId | null>(null);
   const [modelId, setModelId] = useState('');
   const [remoteModelId, setRemoteModelId] = useState('');
-  const [supportsReferenceImage, setSupportsReferenceImage] = useState(false);
   const [busy, setBusy] = useState(false);
   /** 模型 ID 非空但格式非法（失焦或提交时按 contracts 的 model_id schema 判定）。空串不算——它由按钮禁用拦截。 */
   const [idFormatInvalid, setIdFormatInvalid] = useState(false);
+  // 素材位按所选接口类型的族能力逐项勾选：换接口类型时清空并给可见反馈（不静默清空）
+  const mediaSlots = useGenerationMediaSlots({
+    familyAdapterId,
+    familyDisplayName:
+      familyAdapterId === null ? null : ADAPTER_REGISTRY[familyAdapterId].display_name,
+    loadDescriptor: loadParameterTemplate,
+  });
   const overrides = useGenerationOverridesSection(
     // 展开那一刻读当前所选接口类型：每次渲染重建闭包，读到的是最新选择。
     // 尚未选择接口类型时不发请求（留痕后折叠区按 pending 指引呈现；收起再展开会按新选择再试）
@@ -119,8 +136,9 @@ export function useGenerationModelForm({
   const [advancedBlocked, setAdvancedBlocked] = useState(false);
 
   const trimmedId = modelId.trim();
-  // 接口类型在创建表单必选（与后端契约对齐：生成记录 `family_adapter_id` 必填，创建后不可变）
-  const canSubmit = trimmedId !== '' && familyAdapterId !== null;
+  // 接口类型在创建表单必选（与后端契约对齐：生成记录 `family_adapter_id` 必填，创建后不可变）；
+  // 素材位必须已确定（读到了该族能力），否则会落一条素材位未知的记录
+  const canSubmit = trimmedId !== '' && familyAdapterId !== null && mediaSlots.blocked === false;
   const hasOverrides = overrides.value.official.length > 0 || overrides.value.custom.length > 0;
 
   /** 空串交回按钮禁用拦截；非空时按契约 schema 判格式，非法则显示拦截文案。返回是否放行提交。 */
@@ -138,6 +156,8 @@ export function useGenerationModelForm({
 
   const submit = (): void => {
     if (busy || trimmedId === '' || familyAdapterId === null) return;
+    // 素材位还没读到（loading/failed）：此时提交等于猜一份清单，拦在提交前
+    if (mediaSlots.blocked) return;
     if (!checkIdFormat()) return;
     // 客户端可判定的必然失败提交前拦下（ui-copy-standard 落地口径第 6 条）；
     // 拦不住的剩余理由由后端拒绝并原样透进弹层
@@ -151,7 +171,7 @@ export function useGenerationModelForm({
       familyAdapterId,
       modelId: trimmedId,
       remoteModelId: remoteModelId.trim() === '' ? null : remoteModelId.trim(),
-      supportsReferenceImage,
+      acceptedMediaSlots: effectiveMediaSlots(mediaSlots),
       parameterOverrides: hasOverrides ? overrides.value : null,
     })
       .then((added) => {
@@ -170,8 +190,7 @@ export function useGenerationModelForm({
     onModelIdBlur: checkIdFormat,
     remoteModelId,
     onRemoteModelIdChange: setRemoteModelId,
-    supportsReferenceImage,
-    onSupportsReferenceImageChange: setSupportsReferenceImage,
+    mediaSlots,
     overrides,
     advancedBlocked,
     busy,
@@ -243,15 +262,8 @@ export function GenerationModelFields({ form }: { form: GenerationModelFormState
         />
       </div>
 
-      <label htmlFor="generation-supports-reference-image" className="flex cursor-pointer items-center gap-2 text-xs">
-        <Checkbox
-          id="generation-supports-reference-image"
-          checked={form.supportsReferenceImage}
-          onCheckedChange={(checked) => form.onSupportsReferenceImageChange(checked === true)}
-          aria-label="支持参考图"
-        />
-        <span>支持参考图</span>
-      </label>
+      {/* 素材位按所选接口类型的族能力逐项渲染；0 位族（可灵文生视频）整块不出现 */}
+      <GenerationMediaSlotChecklist state={form.mediaSlots} />
 
       <GenerationOverridesSection
         state={form.overrides}

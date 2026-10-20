@@ -27,7 +27,7 @@ export const CLI_USAGE_TEXT = `iart — 驱动 IARTStudio 的命令行入口（�
   iart canvas group dissolve --group <组节点id> --project P
   iart canvas node move --node <节点id> --x N --y N --project P
   iart canvas node delete --nodes id1,id2 [--yes] --project P
-  iart canvas layout --scope all|group:<id> [--columns N] [--order id1,id2] --project P
+  iart canvas layout --scope all|containers|group:<id> [--columns N] [--order id1,id2] --project P
   iart generate --prompt T --model M [--count N] [--ref id1,id2] [--arg k=v,k2=v2] [--group 组名] [--request-id ID] [--wait] --project P
   iart task list --project P [--status submitting|generating|polling|downloading|succeeded|failed|cancelled] [--since ISO时间] [--request-id ID]
   iart task get <taskId> | task cancel <taskId> | task wait <taskId>
@@ -172,13 +172,14 @@ const parseCoordinate = (flagName: string, raw: string): number => {
   return Number(raw);
 };
 
-/** `--scope all|group:<id>`：all 原样；group:<id> 映射为契约的 { group } 对象形态。 */
-const parseScope = (raw: string): "all" | { group: string } => {
+/** `--scope all|containers|group:<id>`：all/containers 原样；group:<id> 映射为契约的 { group } 对象形态。 */
+const parseScope = (raw: string): "all" | "containers" | { group: string } => {
   if (raw === "all") return "all";
+  if (raw === "containers") return "containers";
   const match = /^group:(.+)$/.exec(raw);
   const groupId = match?.[1];
   if (groupId !== undefined && groupId.length > 0) return { group: groupId };
-  throw new CliArgError(`--scope 仅支持 all 或 group:<组标识>，收到：${raw}`);
+  throw new CliArgError(`--scope 仅支持 all、containers 或 group:<组标识>，收到：${raw}`);
 };
 
 const parseKvList = (raw: string): { key: string; value: string }[] =>

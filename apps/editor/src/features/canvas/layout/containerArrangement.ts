@@ -7,7 +7,8 @@
  *
  * 语义（spec：docs/runtime/画布自动布局算法.md「网格摆放」、docs/runtime/画布节点组.md
  * 「自动布局协作」）：对成员集合执行布局引擎排布（列数由调用方给出），并把算法输出
- * 平移补偿到「整理前成员包围盒左上角」——容器锚点保持，组框随成员派生自动更新。
+ * 平移补偿到「整理前成员包围盒左上角」。本文件只负责锚点补偿；整理后容器与相邻容器相交时
+ * 的整组让位由调用方经 layout/containerOverlap 追加（锚点保持让位于容器间不重叠）。
  */
 
 import type { GraphNode, NodePosition } from '../types';

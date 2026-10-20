@@ -102,9 +102,6 @@ jobs:
       - name: Build workspace packages
         run: pnpm build:packages
 
-      - name: Build model asset packages
-        run: pnpm build:model-asset-packages
-
       - name: Build backend & desktop-shell
         run: |
           pnpm --filter @iart/backend build
@@ -203,9 +200,6 @@ jobs:
       - name: Build workspace packages
         run: pnpm build:packages
 
-      - name: Build model asset packages
-        run: pnpm build:model-asset-packages
-
       - name: Build backend & desktop-shell
         run: |
           pnpm --filter @iart/backend build
@@ -268,9 +262,6 @@ jobs:
 
       - name: Build workspace packages
         run: pnpm build:packages
-
-      - name: Build model asset packages
-        run: pnpm build:model-asset-packages
 
       - name: Build backend & desktop-shell
         run: |

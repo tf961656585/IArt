@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { FamilyTemplateParameterDescriptor } from '@iart/contracts';
+import type {
+  FamilyTemplateParameterDescriptor,
+  GenerationMediaSlotId,
+} from '@iart/contracts';
 
 import {
   GenerationModelFields,
@@ -16,15 +19,45 @@ import {
  * 字段树在 `GenerationModelFields`。这里的 Harness 按合并弹窗的真实接线组装两者，
  * 底部按钮与弹窗 footer 同构（disabled = busy 或不可提交）。
  *
- * 保护的口径：接口类型是表单字段（协议归属模型级），空态起步、必选
- * （2026-09-29 起连接级预选摘除），随提交体交回；模型 ID 必填，没填不能提交；填了但格式非法
- * （按 contracts 的 model_id schema）拦截并显示格式文案，失焦即提示、提交不发请求；
- * 远端模型名留空提交 null（由调用方按「与模型 ID 相同」落成具体值，与对话侧先例同义），
- * 填了就原样交回；「支持参考图」默认不勾、勾选随提交体交回；没动「高级参数自定义」时
- * 提交 parameterOverrides 为 null（请求体不带 parameter_overrides，行为与现状一致）；
- * 尚未选择接口类型时展开高级区不拉参数描述，选好后再展开按所选接口类型拉取；
- * 失败原因显示在表单底部（顶部提示条被遮罩挡住），失败不关弹层、输入不丢。
+ * 2026-10-19 起素材位改为**按所选接口类型的族能力逐项勾选**（能力来自族模板描述符的
+ * `supports_media_slots`），本文件保护：
+ * - 接口类型空态起步、必选（2026-09-29 起连接级预选摘除）；模型 ID 必填、格式非法即拦；
+ * - 只呈现该族支持的素材位（OpenAI / Gemini 一位、Seedance 五位），0 位族不渲染素材区块；
+ * - 换接口类型时旧勾选被清空并给出可见反馈（不静默清空）；
+ * - 协议必填位（可灵图生视频的首帧）进入界面即已勾且不可取消，且必随提交体交回；
+ * - 族能力还没读到时不放行提交（否则会落一条素材位未知的记录）；
+ * - 没动「高级参数自定义」时提交 parameterOverrides 为 null；失败原因显示在表单底部。
  */
+
+/** 各族的素材位能力（与注册表 `supportsMediaSlots` 同值；测试夹具按族给）。 */
+const SUPPORTED_SLOTS: Record<string, GenerationMediaSlotId[]> = {
+  'openai-image-v1': ['reference_image'],
+  'gemini-image-interactions-v1': ['reference_image'],
+  'seedance-2-0-v1': ['first_frame', 'last_frame', 'reference_image', 'reference_video', 'reference_audio'],
+  'veo-v1': ['first_frame', 'last_frame'],
+  'kling-text2video-v1': [],
+  'kling-image2video-v1': ['first_frame', 'last_frame'],
+  'kling-omni-video-v1': ['first_frame', 'last_frame', 'reference_image', 'feature_video', 'base_video'],
+};
+
+/**
+ * 各族的「协议必选素材位」：由契约随描述符下发（唯一来源是 Runtime Backend 族注册表）。
+ *
+ * 测试在这里复刻一份是为了喂假描述符，不是第二处事实源——它不同步于产品行为，只表达
+ * 「可灵图生视频的端点每次提交都必须带首帧」这一条的界面后果。
+ */
+const REQUIRED_SLOTS: Readonly<Partial<Record<string, GenerationMediaSlotId[]>>> = {
+  'kling-image2video-v1': ['first_frame'],
+};
+
+/** 描述符的最小合法形状：素材位能力是本案的被测面，官方参数区与保留键给空。 */
+const descriptorFor = (familyAdapterId: string): FamilyTemplateParameterDescriptor => ({
+  family_adapter_id: familyAdapterId,
+  official_fields: [],
+  reserved_wire_names: [],
+  supports_media_slots: SUPPORTED_SLOTS[familyAdapterId] ?? [],
+  required_media_slots: [...(REQUIRED_SLOTS[familyAdapterId] ?? [])],
+});
 
 const Harness = ({
   onSubmit,
@@ -59,7 +92,7 @@ const renderForm = (
 ) => {
   const onSubmit = overrides.onSubmit ?? vi.fn(async () => true);
   const loadParameterTemplate =
-    overrides.loadParameterTemplate ?? (() => Promise.reject(new Error('用例没有预期会拉取参数描述')));
+    overrides.loadParameterTemplate ?? ((familyAdapterId: string) => Promise.resolve(descriptorFor(familyAdapterId)));
   const view = render(
     <Harness
       loadParameterTemplate={loadParameterTemplate}
@@ -72,10 +105,13 @@ const renderForm = (
 };
 
 /** 打开「接口类型」下拉并选中一个选项（jsdom 无 PointerEvent：键盘开下拉，click 选中）。 */
-const chooseAdapter = (): void => {
+const chooseAdapter = (displayName: string): void => {
   fireEvent.keyDown(screen.getByLabelText('接口类型'), { key: 'Enter' });
-  fireEvent.click(screen.getByRole('option', { name: 'OpenAI Image' }));
+  fireEvent.click(screen.getByRole('option', { name: displayName }));
 };
+
+/** 素材位勾选框名称（与界面文案同一套业务词）。 */
+const slotCheckbox = (label: string) => screen.getByRole('checkbox', { name: label });
 
 describe('GenerationModelForm（添加）', () => {
   it('接口类型空态起步且必填：填了模型 ID 没选接口类型仍不能提交', () => {
@@ -86,13 +122,22 @@ describe('GenerationModelForm（添加）', () => {
     expect(screen.getByLabelText('接口类型')).toHaveTextContent('请选择接口类型');
   });
 
-  it('选了接口类型才可提交，随提交体交回；勾选的能力随提交体交回', async () => {
+  it('选 OpenAI 图像：只出现「参考图」一项，勾选随提交体交回', async () => {
     const { onSubmit } = renderForm();
 
     fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
     fireEvent.change(screen.getByLabelText('服务商那边的模型 ID'), { target: { value: 'remote-name' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: '支持参考图' }));
-    chooseAdapter();
+    chooseAdapter('OpenAI Image');
+
+    // 该族只能表达参考图：其余素材位不出现（不呈现「能选但一提交就失败」的入口）
+    await waitFor(() => {
+      expect(slotCheckbox('参考图')).toBeInTheDocument();
+    });
+    expect(screen.getAllByRole('checkbox')).toHaveLength(1);
+    expect(screen.queryByRole('checkbox', { name: '首帧' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: '参考视频' })).not.toBeInTheDocument();
+
+    fireEvent.click(slotCheckbox('参考图'));
     fireEvent.click(screen.getByRole('button', { name: '添加' }));
 
     await waitFor(() => {
@@ -100,31 +145,136 @@ describe('GenerationModelForm（添加）', () => {
         familyAdapterId: 'openai-image-v1',
         modelId: 'my-image-model',
         remoteModelId: 'remote-name',
-        supportsReferenceImage: true,
+        acceptedMediaSlots: ['reference_image'],
         parameterOverrides: null,
       });
     });
   });
 
-  it('远端模型名留空提交 null（由调用方按「与模型 ID 相同」落成具体值），支持参考图默认不勾', async () => {
+  it('选 Seedance：五个素材位都能勾，随提交体交回；默认都不勾（除协议必填位）', async () => {
     const { onSubmit } = renderForm();
 
-    fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
-    chooseAdapter();
+    fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'my-video-model' } });
+    chooseAdapter('Seedance 2.0');
+
+    await waitFor(() => {
+      expect(slotCheckbox('首帧')).toBeInTheDocument();
+    });
+    const labels = screen.getAllByRole('checkbox').map((element) => element.getAttribute('aria-label'));
+    expect(labels).toEqual(['首帧', '尾帧', '参考图', '参考视频', '参考音频']);
+    // Seedance 的首帧不是协议必填位：默认不勾
+    expect(slotCheckbox('首帧')).not.toBeChecked();
+
+    fireEvent.click(slotCheckbox('首帧'));
+    fireEvent.click(slotCheckbox('参考视频'));
     fireEvent.click(screen.getByRole('button', { name: '添加' }));
 
     await waitFor(() => {
       expect(onSubmit).toHaveBeenCalledWith({
-        familyAdapterId: 'openai-image-v1',
-        modelId: 'my-image-model',
+        familyAdapterId: 'seedance-2-0-v1',
+        modelId: 'my-video-model',
         remoteModelId: null,
-        supportsReferenceImage: false,
+        acceptedMediaSlots: ['first_frame', 'reference_video'],
         parameterOverrides: null,
       });
     });
   });
 
-  it('模型 ID 格式非法时拦下：失焦即显示格式文案，提交不发请求；改一个字符即撤掉提示', () => {
+  it('选 Kling 文生视频：这个族没有任何素材位，不渲染素材区块（不是空框）', async () => {
+    const { onSubmit } = renderForm();
+
+    fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'my-t2v-model' } });
+    chooseAdapter('Kling 文生视频');
+
+    // 素材区块加载完成后仍然没有勾选框，也没有区块标题
+    await waitFor(() => {
+      expect(screen.queryByText('正在读取这个接口类型能用的素材…')).not.toBeInTheDocument();
+    });
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+    expect(screen.queryByText('这个模型接受的素材')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '添加' }));
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith({
+        familyAdapterId: 'kling-text2video-v1',
+        modelId: 'my-t2v-model',
+        remoteModelId: null,
+        acceptedMediaSlots: [],
+        parameterOverrides: null,
+      });
+    });
+  });
+
+  it('换接口类型：旧勾选被清空，并给出可见反馈（不静默清空）', async () => {
+    renderForm();
+
+    fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'my-model' } });
+    chooseAdapter('OpenAI Image');
+    await waitFor(() => {
+      expect(slotCheckbox('参考图')).toBeInTheDocument();
+    });
+    fireEvent.click(slotCheckbox('参考图'));
+    expect(slotCheckbox('参考图')).toBeChecked();
+
+    // 换成可灵图生视频（只支持首帧/尾帧，不含参考图）：参考图这一位在新族根本不存在
+    chooseAdapter('Kling 图生视频');
+    await waitFor(() => {
+      expect(slotCheckbox('尾帧')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole('checkbox', { name: '参考图' })).not.toBeInTheDocument();
+    expect(slotCheckbox('尾帧')).not.toBeChecked();
+    // 反馈点名换成了哪个接口类型，并说清旧勾选已清掉
+    expect(screen.getByText('已换成「Kling 图生视频」，之前勾的素材都清掉了。')).toBeInTheDocument();
+  });
+
+  it('可灵图生视频的首帧是协议必填位：进入即已勾且不能取消，必随提交体交回', async () => {
+    const { onSubmit } = renderForm();
+
+    fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'my-i2v-model' } });
+    chooseAdapter('Kling 图生视频');
+
+    await waitFor(() => {
+      expect(slotCheckbox('首帧')).toBeInTheDocument();
+    });
+    // 不勾首帧就会造出一个永远生成不成功的模型：界面直接替用户勾上并锁住
+    expect(slotCheckbox('首帧')).toBeChecked();
+    expect(slotCheckbox('首帧')).toBeDisabled();
+
+    fireEvent.click(slotCheckbox('首帧'));
+    expect(slotCheckbox('首帧')).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: '添加' }));
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith({
+        familyAdapterId: 'kling-image2video-v1',
+        modelId: 'my-i2v-model',
+        remoteModelId: null,
+        acceptedMediaSlots: ['first_frame'],
+        parameterOverrides: null,
+      });
+    });
+  });
+
+  it('读不到族能力时：给一行原因且不放行提交（不猜素材位）', async () => {
+    const { onSubmit } = renderForm({
+      loadParameterTemplate: () => Promise.reject(new Error('boom')),
+    });
+
+    fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'my-model' } });
+    chooseAdapter('OpenAI Image');
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('暂时读不到这个接口类型能用的素材。关掉这个窗口后点「刷新」再试。'),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: '添加' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '添加' }));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('模型 ID 格式非法时拦下：失焦即显示格式文案，提交不发请求；改一个字符即撤掉提示', async () => {
     const { onSubmit } = renderForm();
 
     const input = screen.getByLabelText('模型 ID');
@@ -134,7 +284,10 @@ describe('GenerationModelForm（添加）', () => {
       '模型 ID 只能用字母、数字、.、_、-，且以字母或数字开头',
     );
 
-    chooseAdapter();
+    chooseAdapter('OpenAI Image');
+    await waitFor(() => {
+      expect(slotCheckbox('参考图')).toBeInTheDocument();
+    });
     fireEvent.click(screen.getByRole('button', { name: '添加' }));
     expect(onSubmit).not.toHaveBeenCalled();
 
@@ -147,7 +300,10 @@ describe('GenerationModelForm（添加）', () => {
     const { onSubmit } = renderForm({ onClose, onSubmit: vi.fn(async () => false) });
 
     fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
-    chooseAdapter();
+    chooseAdapter('OpenAI Image');
+    await waitFor(() => {
+      expect(slotCheckbox('参考图')).toBeInTheDocument();
+    });
     fireEvent.click(screen.getByRole('button', { name: '添加' }));
 
     await waitFor(() => {
@@ -169,7 +325,7 @@ describe('GenerationModelForm（添加）', () => {
 
   it('尚未选择接口类型时展开高级区不拉参数描述；选好后再展开按所选接口类型拉取', async () => {
     const loadParameterTemplate = vi.fn<(familyAdapterId: string) => Promise<FamilyTemplateParameterDescriptor>>(
-      () => Promise.reject(new Error('用例没有预期会真的装载')),
+      (familyAdapterId: string) => Promise.resolve(descriptorFor(familyAdapterId)),
     );
     renderForm({ loadParameterTemplate });
 
@@ -182,8 +338,12 @@ describe('GenerationModelForm（添加）', () => {
 
     // 选好接口类型：收起再展开，按所选接口类型拉取
     fireEvent.click(screen.getByRole('button', { name: '高级参数自定义' }));
-    chooseAdapter();
+    chooseAdapter('OpenAI Image');
+    await waitFor(() => {
+      expect(slotCheckbox('参考图')).toBeInTheDocument();
+    });
     fireEvent.click(screen.getByRole('button', { name: '高级参数自定义' }));
+    // 素材位装载已按所选接口类型拉过一次（高级区复用同一份描述符装载）
     await waitFor(() => {
       expect(loadParameterTemplate).toHaveBeenCalledWith('openai-image-v1');
     });

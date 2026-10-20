@@ -30,9 +30,9 @@ import {
   setConnectionCredential,
 } from '../provider-connection/connection-store.cts';
 import {
-  clearCacheForTest as clearDeploymentCache,
-  createDeployment,
-} from '../provider-connection/deployment-store.cts';
+  addCustomGenerationModel,
+  clearCacheForTest as clearCustomGenerationModelCache,
+} from '../provider-connection/custom-generation-model-store.cts';
 import {
   clearCacheForTest as clearActiveRouteCache,
   setActiveDeployment,
@@ -213,7 +213,7 @@ const setupSeam = async (t: TestContext): Promise<SeamHandle> => {
   process.env['IART_MODEL_ASSET_PACKAGES_DIR'] = packagesDir;
   const clearCaches = (): void => {
     clearConnectionCache();
-    clearDeploymentCache();
+    clearCustomGenerationModelCache();
     clearActiveRouteCache();
   };
   clearCaches();
@@ -252,7 +252,11 @@ const setupSeam = async (t: TestContext): Promise<SeamHandle> => {
     throw new Error(`unexpected IPC message type in idempotency seam: ${msg.type}`);
   });
 
-  // 生成链路种子：连接 → 凭证 → 部署 → active route（组装受理用，真实 store）。
+  // 生成链路种子：连接 → 凭证 → 用户生成模型记录 → active route（组装受理用，真实 store）。
+  //
+  // 2026-10-19 起模型唯一载体是用户模型记录（spec 03 §6.1 / PC-15）：接入归属与能力属性一次
+  // 写入，`record_id` 即 active 与执行快照的接入目标。原先经 `createDeployment` 播种的写法随
+  // 部署载体退场一并失效，这里改为真实创建记录——断言的仍是「真实受理路径能解析到这条模型」。
   const generationConnection = createConnection({
     display_name: 'seam-gen-upstream',
     base_url: GENERATION_CONNECTION_BASE_URL,
@@ -260,12 +264,18 @@ const setupSeam = async (t: TestContext): Promise<SeamHandle> => {
   const generationCredential = await setCredentialForConnection(generationConnection.connection_id, GENERATION_CREDENTIAL);
   assert.ok(generationCredential, 'generation credential should be written');
   setConnectionCredential(generationConnection.connection_id, generationCredential.credentialRef, generationCredential.version, true);
-  const generationDeployment = createDeployment({
+  const generationRecord = addCustomGenerationModel({
     model_id: GENERATION_MODEL_ID,
     connection_id: generationConnection.connection_id,
     remote_model_id: 'remote-seam-image',
+    family_adapter_id: 'openai-image-v1',
   });
-  assert.equal(setActiveDeployment(GENERATION_MODEL_ID, generationDeployment.deployment_id), generationDeployment.deployment_id);
+  assert.equal(generationRecord.ok, true, 'generation model record should be created');
+  if (!generationRecord.ok) throw new Error('generation model record should be created');
+  assert.equal(
+    setActiveDeployment(GENERATION_MODEL_ID, generationRecord.model.record_id),
+    generationRecord.model.record_id,
+  );
 
   // 假 HTTP 上游：受理路径不触网；仅拦截远端请求（本机 127.0.0.1 是真实被测服务器，
   // 原样放行），远端请求立即拒绝 → 派发余波（setImmediate startTaskExecution）失败结算。

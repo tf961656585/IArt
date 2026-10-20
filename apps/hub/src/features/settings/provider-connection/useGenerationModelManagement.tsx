@@ -71,12 +71,12 @@ export function useGenerationModelManagement(options: {
     attachBlockedReason,
   } = options;
 
-  /** 「修改」弹层的打开目标：整条模型记录（回填参考图开关与现有参数覆盖） */
+  /** 「修改」弹层的打开目标：整条模型记录（回填素材位勾选与现有参数覆盖） */
   const [editingGenerationModel, setEditingGenerationModel] = useState<CustomGenerationModel | null>(null);
 
   /**
    * 添加生成模型（spec 03 §6.1「记录即接入」）：一次写入创建自建生成模型记录——
-   * 能力属性（参考图支持、参数覆盖）与接入归属（`connection_id` + `remote_model_id`）同一次落库，
+   * 能力属性（接受的素材位、参数覆盖）与接入归属（`connection_id` + `remote_model_id`）同一次落库，
    * active 接入由后端在创建内完成，没有中间态。
    *
    * 失败即整体失败：一次调用没有「已成功的步骤」可留。重名（全局唯一，409）在提交前先按
@@ -112,7 +112,7 @@ export function useGenerationModelManagement(options: {
         ...(payload.remoteModelId === null ? {} : { remote_model_id: payload.remoteModelId }),
         // 接口类型随表单选择落库（2026-09-26 起协议归属模型级，不再从连接继承）
         family_adapter_id: payload.familyAdapterId,
-        supports_reference_image: payload.supportsReferenceImage,
+        accepted_media_slots: payload.acceptedMediaSlots,
         // 没有自定义任何参数时请求体不带 parameter_overrides：与不带本字段的既有行为完全一致
         ...(payload.parameterOverrides === null ? {} : { parameter_overrides: payload.parameterOverrides }),
       });
@@ -163,7 +163,7 @@ export function useGenerationModelManagement(options: {
   };
 
   /**
-   * 保存一个已添加生成模型的修改（修改弹层的「保存」）：`supports_reference_image` 与
+   * 保存一个已添加生成模型的修改（修改弹层的「保存」）：`accepted_media_slots` 与
    * `parameter_overrides` 都是整体替换；编辑器回填的就是现有覆盖，未改动的保存等于原样写回。
    *
    * 后端对覆盖做权威校验（设计 §3.5），确定性拒绝的逐条原因经 `describeErrorWithReason`
@@ -175,7 +175,7 @@ export function useGenerationModelManagement(options: {
   ): Promise<boolean> => {
     try {
       await api.updateCustomGenerationModel(record.model_id, {
-        supports_reference_image: payload.supportsReferenceImage,
+        accepted_media_slots: payload.acceptedMediaSlots,
         parameter_overrides: payload.parameterOverrides,
       });
       setNotice({ tone: 'success', text: `已保存「${record.model_id}」的模型配置` });

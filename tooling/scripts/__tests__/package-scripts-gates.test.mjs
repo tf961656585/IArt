@@ -115,14 +115,16 @@ test('预飞硬门禁入口覆盖运行构建发布风险', () => {
     'pnpm verify:desktop-smoke',
   ]);
 
+  // 模型能力包不再是模型来源（spec 03 PC-15）：构建链不再打包任何模型资产目录。
   assert.equal(
     scripts['build:desktop-runtime'],
-    'pnpm build:model-asset-packages && pnpm --filter @iart/backend build && pnpm --filter @iart/desktop-shell build && pnpm build:desktop-static',
+    'pnpm --filter @iart/backend build && pnpm --filter @iart/desktop-shell build && pnpm build:desktop-static',
   );
+  assert.equal(scripts['build:model-asset-packages'], undefined);
   assert.equal(scripts['guard:no-internal-timeout'], 'node ./tooling/scripts/guard-no-internal-timeout.mjs');
   assert.equal(scripts['guard:ipc-contract-parse'], 'node ./tooling/scripts/guard-ipc-contract-parse.mjs');
   assert.equal(scripts['guard:contract-ownership'], 'node ./tooling/scripts/guard-contract-ownership.mjs');
-  assert.equal(scripts['guard:public-relay-capabilities'], 'node ./tooling/scripts/guard-public-relay-capabilities.mjs');
+  assert.equal(scripts['guard:public-relay-capabilities'], 'node --import tsx ./tooling/scripts/guard-public-relay-capabilities.mjs');
   assert.equal(scripts['guard:no-runtime-json-leak'], 'node ./tooling/scripts/guard-no-runtime-json-leak.mjs');
   assert.equal(scripts['guard:no-json-clone'], 'node ./tooling/scripts/guard-no-json-clone.mjs');
   assert.equal(scripts['guard:local-media-url-resolution'], 'node ./tooling/scripts/guard-local-media-url-resolution.mjs');

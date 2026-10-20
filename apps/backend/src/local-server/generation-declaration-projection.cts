@@ -3,10 +3,11 @@ import type { ModelAssetLocalizationBundle } from '@iart/contracts/model-asset-c
 import * as loggingModule from './logging.cts';
 import { buildProjectionFromPackageSources } from './model-package-catalog.projection.cts';
 import type { CatalogProjection } from './model-package-catalog.types.cts';
+import { declaredGenerationPackageId } from './generation-family-templates.cts';
 import {
-  buildOpenAiImageV1TemplateSources,
-  DECLARED_GENERATION_PACKAGE_ID,
-} from './generation-family-templates.cts';
+  buildFamilyTemplateSources,
+  filterAcceptedMediaSlotsForFamily,
+} from './generation-family-templates.registry.cts';
 import { listCustomGenerationModels } from './provider-connection/custom-generation-model-store.cts';
 
 /**
@@ -17,13 +18,13 @@ import { listCustomGenerationModels } from './provider-connection/custom-generat
  * 二者合成为一份 CatalogProjection 形状的内存态投影，进入现有目录投影管线——PromptDock
  * 目录、提交链、执行链、结果物化零改动，所有消费方继续只说「能力包」这一种语言。
  *
- * - 纯内存态：禁止写入 .model-assets 安装目录（不与包分发链混淆）；声明本体仍由
+ * - 纯内存态：禁止写入任何安装目录（不与分发包链混淆）；声明本体仍由
  *   custom-generation-model-store 落 config/custom-generation-models.json。
  * - 本地化：合成源交给 buildProjectionFromPackageSources，走与已装包完全相同的
  *   validateLocalizationTargets + rewriteProjectionLocalizationKeys 路径，文案由模板 locales
  *   承载，投影处不硬编码任何语言。
- * - 冒名防御：声明 model_id 命中已装包身份（model_id / 别名 / 变体名）时不合成（包优先，
- *   声明视为过时残留），由调用方传入保留身份集合并留诊断。
+ * - 没有「冒名防御」：模型来源唯一（spec 03 PC-15），不存在另一类载体占用 model_id 身份，
+ *   记录即模型。任何「与已装包撞名则跳过」的判据在包退场后恒假，不得重新引入。
  */
 
 export type DeclaredGenerationProjection = {
@@ -41,21 +42,41 @@ export type DeclaredGenerationProjectionDiagnostic = {
 const buildDeclaredGenerationProjection = (
   declaration: CustomGenerationModel,
 ): DeclaredGenerationProjection | null => {
-  // 试点单族：模板注册表按 family_adapter_id 分发；扩族时随族模板登记放宽。
-  if (declaration.family_adapter_id !== 'openai-image-v1') {
-    loggingModule.logDebug('[generation-declaration-projection] no family template for declared family', {
+  // 族模板按 family_adapter_id 查注册表分发：未登记 = 非法/已删族；pending = 该族模板未就绪。
+  // 两者都不合成投影，但留痕要能分清「记录非法」与「这一族还没做」，否则扩族期排查会误判。
+  const built = buildFamilyTemplateSources(
+    declaration.family_adapter_id,
+    declaration.model_id,
+    {
+      // 投影侧按该族模板能表达的素材位收窄：写入侧已拒绝越界写入，这里兜的是守卫落地前的
+      // 存量记录（越界位被过滤并留痕，记录本身不丢）。
+      acceptedMediaSlots: filterAcceptedMediaSlotsForFamily(
+        declaration.family_adapter_id,
+        declaration.accepted_media_slots,
+        declaration.model_id,
+      ),
+      parameterOverrides: declaration.parameter_overrides,
+    },
+  );
+  if (built.kind === 'unknown') {
+    loggingModule.logDebug('[generation-declaration-projection] unknown family adapter id, declaration skipped', {
       modelId: declaration.model_id,
       familyAdapterId: declaration.family_adapter_id,
     });
     return null;
   }
-  const sources = buildOpenAiImageV1TemplateSources(declaration.model_id, {
-    supportsReferenceImage: declaration.supports_reference_image,
-    parameterOverrides: declaration.parameter_overrides,
-  });
+  if (built.kind === 'pending') {
+    loggingModule.logDebug('[generation-declaration-projection] family template pending, declaration skipped', {
+      modelId: declaration.model_id,
+      familyAdapterId: built.familyAdapterId,
+      reason: 'family_template_not_implemented',
+    });
+    return null;
+  }
+  const sources = built.sources;
   try {
     const { projection, localizationBundle } = buildProjectionFromPackageSources({
-      packageId: DECLARED_GENERATION_PACKAGE_ID,
+      packageId: declaredGenerationPackageId(declaration.family_adapter_id),
       entryModelModelId: declaration.model_id,
       protocolFormat: undefined,
       runtimeModel: sources.runtimeModel,
@@ -66,6 +87,7 @@ const buildDeclaredGenerationProjection = (
   } catch (error) {
     loggingModule.logWarn('[generation-declaration-projection] synthetic projection build failed, declaration skipped', {
       modelId: declaration.model_id,
+      familyAdapterId: declaration.family_adapter_id,
       error: error instanceof Error ? error.message : String(error),
     });
     return null;
@@ -79,29 +101,17 @@ export type DeclaredGenerationProjectionResult = {
 };
 
 /**
- * 从当前全部声明构建合成投影集合（目录投影的第二来源）。
+ * 从当前全部用户模型记录构建合成投影集合。
  *
- * `reservedModelIds` 是已装包占用的全部身份（model_id / 别名 / 变体名 / 组壳 id）：命中的
- * 声明不合成——已装包优先，声明视为与包撞车的过时残留，留 debug 与诊断（AGENTS.md 条件跳过
- * 必须留痕）。投影构建失败同样跳过并留痕，不阻断其他模型。
+ * 模型来源唯一（spec 03 PC-15）：没有第二类载体可以与记录「撞名」，因此这里不存在保留身份集、
+ * 也不存在「包优先」跳过——原冒名防御依赖「已装包占用某身份」这一事实，包退场后它恒假，
+ * 留着只会让一条合法记录被静默跳过。投影构建失败仍逐个跳过并留痕，不阻断其他模型。
  */
-const listDeclaredGenerationProjections = (reservedModelIds: ReadonlySet<string>): DeclaredGenerationProjectionResult => {
+const listDeclaredGenerationProjections = (): DeclaredGenerationProjectionResult => {
   const projections: CatalogProjection[] = [];
   const localizationBundles: ModelAssetLocalizationBundle[] = [];
   const diagnostics: DeclaredGenerationProjectionDiagnostic[] = [];
   for (const declaration of listCustomGenerationModels()) {
-    if (reservedModelIds.has(declaration.model_id)) {
-      loggingModule.logDebug('[generation-declaration-projection] declared model_id collides with installed package identity, projection skipped', {
-        modelId: declaration.model_id,
-      });
-      diagnostics.push({
-        package_id: DECLARED_GENERATION_PACKAGE_ID,
-        code: 'declared_model_id_collision',
-        message: `自建模型 ${declaration.model_id} 与已装模型包身份冲突，声明投影已跳过`,
-        model_id: declaration.model_id,
-      });
-      continue;
-    }
     const built = buildDeclaredGenerationProjection(declaration);
     if (built === null) continue;
     projections.push(built.projection);

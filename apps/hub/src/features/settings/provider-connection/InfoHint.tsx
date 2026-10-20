@@ -14,12 +14,16 @@ export function InfoHint({ text, subject }: { text: string; subject: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        {/* 微型圆形解释钮（h-3.5=14px）：icon 系最小档 icon-sm（32px）放不下，会把字段行撑高；
-            几何不变红线不放行迁移——原生 button 待登记按钮标准白名单（§7 出路②） */}
+        {/* 圆形解释钮：**图标 14px 不变，命中区 24px**（2026-10-19）。
+            原先命中区与图标同为 14px，是视觉尺寸当命中区用的典型缺陷——14px 的点按目标
+            远低于可达性底线，触控板/触屏上几乎点不中。现在用负外边距把多出来的命中区
+            向四周撑开（`-m-1` + `p-1` 抵消），**不改变所在行的高度与文字对齐**，
+            因此不会把字段行撑高，也就绕开了原本「按钮最小档 32px 放不下」的顾虑。
+            口径见 docs/hub/visual-design.md §8.6 律一（chip 内微动作命中区 ≥24px）。 */}
         <button
           type="button"
           aria-label={`${subject}说明`}
-          className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="-m-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
         </button>

@@ -9,6 +9,7 @@
 
 import { applyLayoutInputOrder } from '../../layout/layoutPrimitives';
 import { computeContainerArrangedPositions } from '../../layout/containerArrangement';
+import { resolveContainerOverlaps } from '../../layout/containerOverlap';
 import { normalizeNodeGraphSettings } from '../../types/nodeGraph';
 import type { GraphNode, GroupNodeData, NodePosition } from '../../types/node';
 import {
@@ -380,8 +381,6 @@ export const createCanvasGroupActions = (
     );
     if (members.length === 0) return null;
 
-    const memberIds = new Set(members.map((m) => m.id));
-
     const normalizedSettings = normalizeNodeGraphSettings(nodeGraph.settings);
     // 容器内整理：参与节点多在视口内，options 入参的实时 measured 优先；缺失时用 store 会话态缓存兜底。
     const measuredFromOptions = options ? options.measuredSizeByNodeId : undefined;
@@ -410,7 +409,7 @@ export const createCanvasGroupActions = (
       columns: options ? options.columns : undefined,
     };
 
-    // 整理前成员包围盒左上角作为锚点（spec：容器内整理保持容器位置不变）；
+    // 整理前成员包围盒左上角作为锚点（无容器间冲突时保持；冲突时按 spec AL-GC-003 整组让位）；
     // 布局计算与锚点补偿走共享实现（与批次收口重排同源，layout/containerArrangement.ts）。
     const arrangedPositions = await computeContainerArrangedPositions({
       members,
@@ -421,17 +420,54 @@ export const createCanvasGroupActions = (
     if (arrangedPositions === null) {
       return { positions: {}, changedCount: 0 };
     }
-    const positions = arrangedPositions;
+
+    // 容器级防重叠（长大容器整体让位）：整理让容器派生矩形可能长大并与相邻容器相交。
+    // 合成图先套用整理目标位置，并把 Agent 容器的位移跟随铺到其成员（与下方写回同一机制），
+    // 让 resolver 看到的派生几何就是整理后的真实结果。
+    const arrangedUpdates: GroupPositionUpdate[] = Object.entries(arrangedPositions).map(
+      ([id, position]) => ({ id, position }),
+    );
+    const followedPositions = new Map<string, NodePosition>();
+    for (const update of expandPositionUpdatesWithGroup(nodeGraph, arrangedUpdates)) {
+      followedPositions.set(update.id, update.position);
+    }
+    const syntheticNodes = nodeGraph.nodes.map((node) => {
+      const nextPosition = followedPositions.get(node.id);
+      return nextPosition === undefined ? node : { ...node, position: nextPosition };
+    });
+    const relocations = resolveContainerOverlaps({
+      nodes: syntheticNodes,
+      sizeSources,
+      snapGrid: normalizedSettings.snapGrid,
+      containerIds: [containerId],
+    });
+
+    // 最终位置表：整理目标位置 + 让位位移（整组统一 delta，含宿主组其他成员与嵌套成员）。
+    // 未被整理覆盖的后代以「跟随整理后的位置」或当前存储位置为基底，保证相对布局不变。
+    const finalPositions: Record<string, NodePosition> = { ...arrangedPositions };
+    for (const relocation of relocations) {
+      for (const id of relocation.memberIds) {
+        const base =
+          finalPositions[id] ??
+          followedPositions.get(id) ??
+          nodeGraph.nodes.find((node) => node.id === id)?.position;
+        if (base === undefined) continue;
+        finalPositions[id] = {
+          x: base.x + relocation.delta.x,
+          y: base.y + relocation.delta.y,
+        };
+      }
+    }
 
     let touched = 0;
     const touchedNodeIds: string[] = [];
     set((state) => {
       if (!state.nodeGraph) return;
-      // 先组装显式成员的目标位置（锚点补偿后）
+      // 遍历图中所有命中最终位置表的节点（不止显式成员）：容器让位会移动宿主组其他成员与
+      // 嵌套 Agent 容器成员，遗漏会让组框派生与实际位置脱节。
       const memberUpdates: GroupPositionUpdate[] = [];
       for (const node of state.nodeGraph.nodes) {
-        if (!memberIds.has(node.id)) continue;
-        const nextPos = positions[node.id];
+        const nextPos = finalPositions[node.id];
         if (nextPos) {
           memberUpdates.push({ id: node.id, position: nextPos });
         }
@@ -462,6 +498,6 @@ export const createCanvasGroupActions = (
       get().saveToHistory();
     }
 
-    return { positions, changedCount: touched };
+    return { positions: finalPositions, changedCount: touched };
   },
 });

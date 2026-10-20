@@ -47,7 +47,7 @@ import { setCredentialForConnection } from '../provider-connection/credential-st
  * 真实边界外的替身只有两处（与 custom-generation-family-catalog.engineSeam 同一 bargain）：
  * 假 fetch 上游 + Backend→Main IPC 拦截。
  *
- * 红→绿自证：先在「合成未接线」状态（buildOpenAiImageV1TemplateSources 暂不应用覆盖）
+ * 红→绿自证：先在「合成未接线」状态（族模板合成入口 buildFamilyTemplateSources 暂不应用覆盖）
  * 跑红（目录无自定义字段、上游请求体无别名键），再随接线转绿；两段日志落 /tmp。
  */
 
@@ -272,7 +272,7 @@ const seedDeclarationAndRouting = async (params: {
     connection_id: connection.connection_id,
     remote_model_id: REMOTE_MODEL_ID,
     family_adapter_id: 'openai-image-v1',
-    supports_reference_image: false,
+    accepted_media_slots: [],
     parameter_overrides: params.parameterOverrides,
   });
   assert.equal(added.ok, true, 'declaration with overrides should be accepted by the real store');
@@ -412,7 +412,7 @@ void test('接缝：PUT 修改覆盖后目录与请求体随之更新（S6 编�
     method: 'PUT',
     headers: writeHeaders(),
     body: JSON.stringify({
-      supports_reference_image: false,
+      accepted_media_slots: [],
       parameter_overrides: { official: [{ field_key: 'size', wire_name: 'model' }], custom: [] },
     }),
   });
@@ -428,7 +428,7 @@ void test('接缝：PUT 修改覆盖后目录与请求体随之更新（S6 编�
     method: 'PUT',
     headers: writeHeaders(),
     body: JSON.stringify({
-      supports_reference_image: false,
+      accepted_media_slots: [],
       parameter_overrides: OVERRIDES_V2,
     }),
   });

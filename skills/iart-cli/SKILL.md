@@ -15,7 +15,9 @@ description: |
 > **版本门槛**：本 skill 描述的命令面与行为需要 **IARTStudio 0.6.3 或更高**（CLI 以轻量纯
 > Node 进程运行；受理幂等键、任务过滤与人读失败原因、生成档案读取、`--version`、`--group`
 > 出生组、组清单与空组建组、画布投影身份、产物落位自动排布以及本地文件导入
-> （`asset import`）均随该版本提供）。旧版本软件的
+> （`asset import`）均随该版本提供）。`canvas layout --scope containers` 需要应用已包含该
+> 能力：若 `iart --help` 的 layout 用法未列出 containers，请升级到最新版本并重启应用。
+> 旧版本软件的
 > `iart` 可能表现不同（启动慢、偶发无输出崩溃、控制台中文乱码、`batch get` 报「无法识别的命令」）；
 > 遇到这类旧行为时请用户把应用升级到最新版本，并重启一次应用——应用启动时会自动把
 > 命令入口修正到新形态，无需手动重新注册。
@@ -100,7 +102,7 @@ description: |
 | `iart canvas group dissolve --group <容器id> --project P` | 解散容器（组或 Agent 容器）：组解散删除组节点、成员保留画布原位且归属解除；Agent 容器解散解除成员关系、头节点保留回落单节点形态、会话保留。**不提供连删**（连删是界面显式危险动作）。返回 `group_node_id` 与解散前 `member_ids`；目标不存在 `group_not_found`、目标非容器或 Agent 无成员 `command_rejected` |
 | `iart canvas node move --node <id> --x N --y N --project P` | 移动单个节点到目标画布坐标（可负、可小数）。**容器节点不能直接移动**（组位置由成员派生，移动一律成员级，指定容器 `command_rejected`）；返回 `node_id`、最终 `position` 与实际位移的 `moved_node_ids` |
 | `iart canvas node delete --nodes id1,id2 [--yes] --project P` | 删除节点（与界面删除同一连带语义：删除组节点=解散、成员保留原位；Agent 节点删除会级联清除其会话且**不可恢复**）。请求集命中 Agent 节点时必须加 `--yes` 显式确认；**不提供连删**；返回实际删除的 `deleted_node_ids`（含连带级联） |
-| `iart canvas layout --scope all\|group:<组id> [--columns N] [--order id1,id2] --project P` | 整理布局（`--scope` 必填）；返回受影响节点的最终位置。`--order` 显式指定摆放顺序（数组序最高优先，未指定节点按现状数组序跟排；order 节点必须存在且属于本次整理作用域）——批量产物要按镜头/序号排格时用它；不带 `--order` 时整理行为与默认完全一致 |
+| `iart canvas layout --scope all\|group:<组id>\|containers [--columns N] [--order id1,id2] --project P` | 整理布局（`--scope` 必填）：`all`=整理画布自由散点（容器及其成员不动）；`group:<组id>`=整理该容器内成员；`containers`=只消除组与独立 Agent 容器之间的重叠（不重叠的容器保持原位，相交的容器整组让到最近空位，不重排容器内部、不动不重叠的容器）。返回受影响节点的最终位置。`--order` 显式指定摆放顺序（数组序最高优先，未指定节点按现状数组序跟排；order 节点必须存在且属于本次整理作用域）——批量产物要按镜头/序号排格时用它；不带 `--order` 时整理行为与默认完全一致。`containers` 不重排成员，不要传 `--columns`/`--order`（会报 `command_rejected`） |
 
 ### 生成与任务
 
@@ -260,18 +262,27 @@ iart canvas group create --name "分镜" --project <路径或名称> --json
 iart generate --prompt "..." --model <model_id> --count 8 --group "分镜" --wait --json --project <路径或名称>
 
 # 5) 收口自动重排：本批全部任务到终态时，系统自动把成功产物整理成一个紧凑网格块
-#    （按任务号排序、单步可撤销）——不需要也不建议再手动 layout
+#    （按任务号排序、单步可撤销）——不需要也不建议再手动 layout。组框因此长大会压到
+#    邻居时，系统会把该组整体让位（内部布局不变、其他容器不动），不需要手动处理
 
 # 6) 仅在想自定义列数时手动整理该组
 iart canvas layout --scope group:<组id> --columns 4 --project <路径或名称> --json
+
+# 7) 存量画布已有容器相互压叠时，用容器作用域一次修好（只动相交的容器，内部不重排）
+iart canvas layout --scope containers --project <路径或名称> --json
 ```
 
 要点：
 
 - **不手动摆位置**：生成产物的出生落位、成功追加、批次收口重排全部由系统防重叠自动完成；
   `canvas node move --x --y` 是坐标微调逃生口，仅在语义化方法覆盖不了时才用（容器不能直接移动）。
+- **容器压叠不用手动摆**：系统整理（批次收口重排、容器内整理）使某组变大并压到相邻容器时，
+  会把该组整体让到最近空位（容器内部布局不变、其他容器不动、一步可撤销）；
+  用户自己拖拽把容器叠在一起，系统不会强行纠正。
+  存量已重叠的画布用 `iart canvas layout --scope containers` 修——只消除容器之间的重叠，
+  不重排容器内部、不动不重叠的容器。
 - **组名要唯一**：`--group` 按名称精确匹配节点组（Agent 容器不参与）；重名被 `group_name_ambiguous` 拒绝，不提交。
-- **批次收口重排只作用于本批成功产物**，失败任务记录原地保留；编辑器关闭期间收口的批次不补重排。
+- **批次收口重排的自由桶只作用于本批成功产物**，失败任务记录不进入自由桶；同容器桶按容器内整理排布该容器全部成员（含失败任务记录），其坐标随组内布局变化；编辑器关闭期间收口的批次不补重排。
 - 其他组织动作：`canvas group dissolve`（解散，成员保留原位归属解除）、`canvas node delete`
   （删除节点，删 Agent 需加 `--yes`，会话不可恢复）、`canvas layout --scope all`
   （整理全部自由散点；散点会避开已有组的范围摆放）。

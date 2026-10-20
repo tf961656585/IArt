@@ -13,8 +13,9 @@
  *   失败任务节点原地保留；整批无成功产物不重排；
  * - 归属分桶：产物归属同一容器（groupId 指向的现存展开容器）为同容器桶，按容器内整理
  *   语义排布（复用 layout/containerArrangement.ts 共享计算：容器内网格、组框随成员派生、
- *   容器锚点保持）；自由桶整块按网格排布并经防重叠搜索落位（避开全部既有占位，
- *   含容器派生包围盒），锚点为重排前整块包围盒左上角；
+ *   无容器间冲突时锚点保持）；随后经 layout/containerOverlap 做容器级防重叠——增长容器与
+ *   相邻顶层容器相交时整组让位，锚点保持让位于容器间不重叠；自由桶整块按网格排布并经
+ *   防重叠搜索落位（避开全部既有占位，含让位后的容器派生包围盒），锚点为重排前整块包围盒左上角；
  * - 全部移动经单次 updateNodePositionsBatch 落库 = 单条原子历史记录，undo 一步整体还原。
  */
 
@@ -27,6 +28,7 @@ import {
   isContainerNode,
 } from '@/features/canvas/services/groupMembership';
 import { computeContainerArrangedPositions } from '@/features/canvas/layout/containerArrangement';
+import { resolveContainerOverlaps } from '@/features/canvas/layout/containerOverlap';
 import { normalizeNodeGraphSettings } from '@/features/canvas/types/nodeGraph';
 import { resolveEffectiveSize } from '@/features/canvas/utils/effectiveSize';
 import { ASSET_NODE_DEFAULT_SIZE } from '@/features/canvas/nodes/asset/assetNodeFactory';
@@ -182,6 +184,15 @@ const finalizeBatch = async (graphId: string, ledger: BatchLedgerEntry): Promise
 
     const moves: Array<{ id: string; position: NodePosition }> = [];
     const movedPositionById = new Map<string, NodePosition>();
+    // 实际发生重排的容器：折叠/缺失/空成员的桶跳过重排，也不作为让位候选（未增长不移动）。
+    const grownContainerIds: string[] = [];
+    // 同一 id 只保留一条最终 move：后写覆盖先写（容器让位会再次移动桶内成员）。
+    const applyMove = (id: string, position: NodePosition): void => {
+      const existingIndex = moves.findIndex((move) => move.id === id);
+      if (existingIndex >= 0) moves.splice(existingIndex, 1);
+      moves.push({ id, position });
+      movedPositionById.set(id, position);
+    };
 
     // 同容器桶先行：容器内整理语义（全体成员参与，容器锚点保持）；折叠容器不可整理，跳过
     for (const [containerId] of bucketByContainerId) {
@@ -203,9 +214,43 @@ const finalizeBatch = async (graphId: string, ledger: BatchLedgerEntry): Promise
         snapGrid: normalizeNodeGraphSettings(graph.settings).snapGrid,
       });
       if (positions === null) continue;
+      grownContainerIds.push(containerId);
       for (const [id, position] of Object.entries(positions)) {
-        moves.push({ id, position });
-        movedPositionById.set(id, position);
+        applyMove(id, position);
+      }
+    }
+
+    // 容器级防重叠（容器桶收口后、自由桶之前）：整理让容器派生矩形长大，可能与相邻容器相交；
+    // 相交时整组让位（只做容器 × 容器判定，自由节点只作为让位搜索的障碍参与避让）。
+    // 让位结果写回 map，自由桶据此看到最终位置；全部位置仍只经末尾一次 updateNodePositionsBatch 落库。
+    if (grownContainerIds.length > 0) {
+      const syntheticForOverlap =
+        movedPositionById.size > 0
+          ? graph.nodes.map((node) => {
+              const moved = movedPositionById.get(node.id);
+              return moved ? { ...node, position: moved } : node;
+            })
+          : graph.nodes;
+      const relocations = resolveContainerOverlaps({
+        nodes: syntheticForOverlap,
+        sizeSources,
+        snapGrid: normalizeNodeGraphSettings(graph.settings).snapGrid,
+        containerIds: grownContainerIds,
+      });
+      for (const relocation of relocations) {
+        for (const id of relocation.memberIds) {
+          const base =
+            movedPositionById.get(id) ??
+            graph.nodes.find((node) => node.id === id)?.position;
+          if (base === undefined) continue;
+          applyMove(id, {
+            x: base.x + relocation.delta.x,
+            y: base.y + relocation.delta.y,
+          });
+        }
+        // 容器自身存储 position 目标值（供合成图与自由桶使用；updateNodePositionsBatch 按
+        // 目标位置与存储 position 之差展开到未显式给出的成员）。
+        applyMove(relocation.containerId, relocation.containerTargetPosition);
       }
     }
 
@@ -249,7 +294,7 @@ const finalizeBatch = async (graphId: string, ledger: BatchLedgerEntry): Promise
           const cell = cells[index];
           if (!node || !cell) continue;
           const position = { x: blockOrigin.x + cell.dx, y: blockOrigin.y + cell.dy };
-          moves.push({ id: node.id, position });
+          applyMove(node.id, position);
         }
       }
     }

@@ -15,8 +15,8 @@ import { readOnboardingState, setGuideDismissed } from '../onboarding/onboarding
  * - PUT  /api/onboarding-state         写已看标记 { guideDismissed: boolean }
  *
  * 写入进 Hub write token 白名单（hub-local-write-policy）。
- * 判定「是否触发指引」的配置状态不经过本路由：Hub 直接消费
- * GET /api/provider-connections 与 GET /api/model-deployments（IA §9.1 不自建判定）。
+ * 判定「是否触发指引」的配置状态不经过本路由：Hub 直接消费 GET /api/provider-connections
+ * （IA §9.1 不自建判定；2026-10-19 起判据只有「零服务商」一条）。
  */
 
 const { ERROR_CODES } = constantsModule;

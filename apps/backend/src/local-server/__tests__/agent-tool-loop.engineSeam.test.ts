@@ -22,9 +22,6 @@ import {
   setConnectionCredential,
 } from '../provider-connection/connection-store.cts';
 import {
-  clearCacheForTest as clearDeploymentCache,
-} from '../provider-connection/deployment-store.cts';
-import {
   clearCacheForTest as clearActiveRouteCache,
   setActiveDeployment,
 } from '../provider-connection/active-route-store.cts';
@@ -292,7 +289,6 @@ const setupTest = async (t: TestContext) => {
   process.env['IART_MODEL_ASSET_PACKAGES_DIR'] = emptyPackagesDir;
   const clearCaches = (): void => {
     clearConnectionCache();
-    clearDeploymentCache();
     clearActiveRouteCache();
     clearCustomModelCache();
   };
