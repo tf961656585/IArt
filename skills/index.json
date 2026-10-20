@@ -12,10 +12,18 @@
     {
       "id": "iart-cli",
       "name": "IARTStudio CLI",
-      "version": "1.10.0",
-      "description": "通过 iart 命令行驱动正在运行的 IARTStudio 桌面应用：感知打开项目与画布选中、打开/创建项目、导入本地媒体文件（asset import，整批一个撤销步骤）、提交生成（受理幂等键防重复出图、--group 指定出生组）并把产物落进画布、读生成档案拿提示词全文与提交意图（batch get / asset get / task get 内联 generation）、建组/空组建组/组清单/解散/移动/删除节点与按序整理布局、先规划分组再提交生成的画布组织方法论、过滤查询与等待生成任务（失败原因可读、画布投影身份可查）。",
-      "bundleKey": "skills/bundles/iart-cli-1.10.0.json",
-      "sha512": "dbf36a7eaf7080e3abdc3f66fd6f96fac8c20c826d6efd7541655eaf3710d78d55985471b3a4115de7ca161ee91c9bab28d5f5d484e6af0d172afb70a866baa1"
+      "version": "1.11.0",
+      "description": "通过 iart 命令行驱动正在运行的 IARTStudio 桌面应用：感知打开项目与画布选中、打开/创建项目、导入本地媒体文件（asset import，整批一个撤销步骤）、提交生成（受理幂等键防重复出图、--group 指定出生组）并把产物落进画布、读生成档案拿提示词全文与提交意图（batch get / asset get / task get 内联 generation）、建组/空组建组/组清单/解散/移动/删除节点与按序整理布局、容器作用域组间整理（--scope containers 消除组框重叠，不动容器内部）、先规划分组再提交生成的画布组织方法论、过滤查询与等待生成任务（失败原因可读、画布投影身份可查）。",
+      "bundleKey": "skills/bundles/iart-cli-1.11.0.json",
+      "sha512": "9a343f84a3d5157499e842855d079916aa3a5495a528b09f698141475a19e1ea196535929efb3a8384b385934628a8f956baf965d157cf9afedc184eb1439a23"
+    },
+    {
+      "id": "ppt-builder",
+      "name": "PPT Builder",
+      "version": "0.3.1",
+      "description": "把大纲、文档或要点做成排版整齐的 PPT：自动排版不出格，附带讲者备注；支持设计令牌自定义配色字体、整页图 1:1 还原、本地图片与 AI 配图，内置几何质检与机器可读 schema。",
+      "bundleKey": "skills/bundles/ppt-builder-0.3.1.json",
+      "sha512": "e8de5d42ba54432e6469e011f7d5da4c462e14de1b10673bf3a598efe879bd47571afc429ec2d0bbd4404aa27b9fc777f3cda4bf6f8446385859c066b6f3cdb0"
     }
   ]
 }
