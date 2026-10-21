@@ -28,6 +28,7 @@ import type {
 } from '@iart/contracts';
 import { submitGenerationBatch } from '@/client/api/promptDockApi';
 import type { AssetNodeData, TaskNodeData } from '@/features/canvas/types/node';
+import { createCatalogEntryWithSlots, multiImageRefSlots } from '@/features/promptdock/__tests__/fixtures/promptDockCatalogEntry';
 import { usePromptDockStore } from '@/features/promptdock/promptDockStore';
 import { useCanvasStore } from '../../store/canvasStore';
 import { createNodeGraph } from '../../types/nodeGraph';
@@ -102,19 +103,9 @@ const mediaAsset = (id: string): MediaAsset => ({
   lifecycle: { createdAt: 1, updatedAt: 2 },
 });
 
-const catalogEntry = (): ExecutableModelDirectoryEntry => ({
-  model_id: 'model-a',
-  model_version: '1.0.0',
-  default_task_type: 'image',
-  capability: { input_modalities: ['text', 'image'], output_modalities: ['image'] },
-  parameter_schema: { fields: [], required_fields: [], default_values: {} },
-  deployment: {
-    has_active_deployment: true,
-    active_deployment_id: 'dep_1',
-    deployable: true,
-    failure_code: 'none',
-  },
-});
+/** 目录条目带一个多张参考位（形状对齐真实图像编辑族，用途判据才真正生效）。 */
+const catalogEntry = (): ExecutableModelDirectoryEntry =>
+  createCatalogEntryWithSlots(multiImageRefSlots);
 
 const acceptanceResponse = (taskCount: number, replayed = false): PromptDockBatchSubmitResponse => ({
   batch_id: 'batch_grp',
@@ -197,7 +188,7 @@ describe('CLI 出生组接缝（CLI-043/CLI-044/CLI-046）', () => {
       prompt: '一只猫在窗台',
       model: 'model-a',
       count: 2,
-      ref: ['asset_1'],
+      ref: [{ asset_id: 'asset_1', slot_id: null }],
       group: '分镜',
     });
     const response = parseResponse(await executeCliProxyCommand(command));

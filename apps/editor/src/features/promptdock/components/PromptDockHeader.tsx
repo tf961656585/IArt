@@ -14,6 +14,7 @@ import {
 import { cn } from '@/lib/utils';
 import { usePromptDockStore } from '../promptDockStore';
 import { describeDeploymentFailure } from '../deploymentFailureText';
+import { rejudgeReferencesForModel } from '../referenceSlotModel';
 
 type PromptDockHeaderProps = {
   catalog: PromptDockCatalogEntry[];
@@ -41,6 +42,7 @@ export function PromptDockHeader({
 }: PromptDockHeaderProps) {
   const { t } = useTranslation('components');
   const setDraft = usePromptDockStore((s) => s.setDraft);
+  const references = usePromptDockStore((s) => s.draft.references);
 
   const modelOptions = useMemo(
     () =>
@@ -63,6 +65,8 @@ export function PromptDockHeader({
       onValueChange={(modelId) => {
         const entry = catalog.find((e) => e.model_id === modelId) ?? null;
         // 模型专属参数重置为新模型默认值；prompt 与引用保留（不兼容引用由校验呈现）。
+        // 用途随模型切换重判一次（设计 §4.5）：同名素材位原样保留、原用途不存在时按新模型的
+        // 默认落位重判、原本未指定的也重判一次。不重判会让「用不了」的用途一路拖到后端才失败。
         setDraft({
           modelId,
           modelVersion: entry?.model_version ?? null,
@@ -71,6 +75,7 @@ export function PromptDockHeader({
             Object.keys(entry.parameter_schema.default_values).length > 0
               ? { ...entry.parameter_schema.default_values }
               : {},
+          references: rejudgeReferencesForModel(references, entry),
         });
       }}
     >

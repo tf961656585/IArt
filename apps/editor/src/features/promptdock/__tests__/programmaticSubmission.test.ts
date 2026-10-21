@@ -26,6 +26,12 @@ import {
   type ProgrammaticSubmitIntent,
 } from '../programmaticSubmission';
 import { EMPTY_PROMPT_DOCK_DRAFT, usePromptDockStore } from '../promptDockStore';
+import {
+  createCatalogEntry,
+  createCatalogEntryWithSlots,
+  firstLastFrameSlots,
+  multiImageRefSlots,
+} from './fixtures/promptDockCatalogEntry';
 
 /**
  * 程序化提交共享核心与 CLI 纯入口（spec docs/integrations/CLI与本地Agent集成.md §6.4/§5.4/§9，
@@ -105,19 +111,8 @@ const mediaAsset = (id: string, mediaType: 'image' | 'video' | 'audio' = 'image'
   lifecycle: { createdAt: 1, updatedAt: 2 },
 });
 
-const entry = (modelId = 'model-a'): ExecutableModelDirectoryEntry => ({
-  model_id: modelId,
-  model_version: '1.0.0',
-  default_task_type: 'image',
-  capability: { input_modalities: ['text', 'image'], output_modalities: ['image'] },
-  parameter_schema: { fields: [], required_fields: [], default_values: {} },
-  deployment: {
-    has_active_deployment: true,
-    active_deployment_id: 'dep_1',
-    deployable: true,
-    failure_code: 'none',
-  },
-});
+const entry = (modelId = 'model-a'): ExecutableModelDirectoryEntry =>
+  createCatalogEntry({ model_id: modelId });
 
 const acceptanceResponse = (taskCount: number): PromptDockBatchSubmitResponse => ({
   batch_id: 'batch_1',
@@ -167,7 +162,7 @@ const legalIntent = (overrides: Partial<ProgrammaticSubmitIntent> = {}): Program
   modelId: 'model-a',
   prompt: '一只猫',
   args: {},
-  refAssetIds: ['asset_1'],
+  refs: [{ assetId: 'asset_1' }],
   count: 2,
   promptPresetSnapshots: undefined,
   clientRequestId: undefined,
@@ -192,6 +187,10 @@ describe('程序化提交共享核心（与界面提交同一构造路径）', (
   it('合法 intent 按界面同一形状构造提交请求（目录条目提供模型版本，引用素材解析媒体输入）', async () => {
     submitGenerationBatchMock.mockResolvedValue(acceptanceResponse(2));
 
+    // 目录条目带一个多张参考位：--ref 无用途时按设计 §8 兜底成「普通参考」，
+    // 媒体条目随带该素材位的字段键（field_key 是后端分桶的显式绑定）。
+    usePromptDockStore.setState({ catalog: [createCatalogEntryWithSlots(multiImageRefSlots)] });
+
     const outcome = await runGenerationBatchSubmission(legalIntent());
 
     expect(submitGenerationBatchMock).toHaveBeenCalledTimes(1);
@@ -208,6 +207,7 @@ describe('程序化提交共享核心（与界面提交同一构造路径）', (
           value: 'local-media://demo/asset_1.png',
           mime_type: 'image/png',
           filename: null,
+          field_key: 'image',
         },
       ],
       reference_asset_ids: ['asset_1'],
@@ -282,7 +282,7 @@ describe('CLI 程序化提交纯入口（CLI-008 / CLI-007）', () => {
 
   it('引用素材不存在 → invalid_reference 且 message 定位素材标识，不发起提交', async () => {
     const result = await submitGenerationBatchFromIntent(
-      legalIntent({ refAssetIds: ['ghost-asset'] }),
+      legalIntent({ refs: [{ assetId: 'ghost-asset' }] }),
     );
 
     if (result.ok) throw new Error('expected error result');
@@ -293,7 +293,7 @@ describe('CLI 程序化提交纯入口（CLI-008 / CLI-007）', () => {
 
   it('模型不在可执行目录 → model_not_available 且 message 定位模型标识', async () => {
     const result = await submitGenerationBatchFromIntent(
-      legalIntent({ modelId: 'ghost-model', refAssetIds: [] }),
+      legalIntent({ modelId: 'ghost-model', refs: [] }),
     );
 
     if (result.ok) throw new Error('expected error result');
@@ -317,7 +317,7 @@ describe('CLI 程序化提交纯入口（CLI-008 / CLI-007）', () => {
       ],
     });
 
-    const result = await submitGenerationBatchFromIntent(legalIntent({ refAssetIds: [] }));
+    const result = await submitGenerationBatchFromIntent(legalIntent({ refs: [] }));
 
     if (result.ok) throw new Error('expected error result');
     expect(result.error.code).toBe('model_not_available');
@@ -347,7 +347,7 @@ describe('CLI 程序化提交纯入口（CLI-008 / CLI-007）', () => {
       ],
     });
 
-    const result = await submitGenerationBatchFromIntent(legalIntent({ refAssetIds: [] }));
+    const result = await submitGenerationBatchFromIntent(legalIntent({ refs: [] }));
 
     if (result.ok) throw new Error('expected error result');
     expect(result.error.code).toBe('command_rejected');
@@ -372,7 +372,7 @@ describe('CLI 程序化提交纯入口（CLI-008 / CLI-007）', () => {
     });
 
     const result = await submitGenerationBatchFromIntent(
-      legalIntent({ refAssetIds: [], args: { steps: 'abc' } }),
+      legalIntent({ refs: [], args: { steps: 'abc' } }),
     );
 
     if (result.ok) throw new Error('expected error result');
@@ -408,7 +408,7 @@ describe('CLI 程序化提交纯入口（CLI-008 / CLI-007）', () => {
 
     const result = await submitGenerationBatchFromIntent(
       legalIntent({
-        refAssetIds: [],
+        refs: [],
         args: { enhance: 'true', steps: '30', quality: 'hd' },
       }),
     );
@@ -441,7 +441,7 @@ describe('CLI 程序化提交纯入口（CLI-008 / CLI-007）', () => {
     });
 
     const result = await submitGenerationBatchFromIntent(
-      legalIntent({ refAssetIds: [], args: { quality: '4k' } }),
+      legalIntent({ refs: [], args: { quality: '4k' } }),
     );
 
     if (result.ok) throw new Error('expected error result');
@@ -452,7 +452,7 @@ describe('CLI 程序化提交纯入口（CLI-008 / CLI-007）', () => {
 
   it('任务数越界（>10 或 <1）→ command_rejected，不发起提交', async () => {
     for (const count of [0, 11]) {
-      const result = await submitGenerationBatchFromIntent(legalIntent({ count, refAssetIds: [] }));
+      const result = await submitGenerationBatchFromIntent(legalIntent({ count, refs: [] }));
       if (result.ok) throw new Error(`expected error result for count=${count}`);
       expect(result.error.code).toBe('command_rejected');
       expect(result.error.message).toContain(String(count));
@@ -495,7 +495,7 @@ describe('受理幂等键（CLI-033 Editor 侧）', () => {
     submitGenerationBatchMock.mockResolvedValue(acceptanceResponse(1));
 
     const outcome = await runGenerationBatchSubmission(
-      legalIntent({ clientRequestId: 'req-seam-echo', refAssetIds: [] }),
+      legalIntent({ clientRequestId: 'req-seam-echo', refs: [] }),
     );
 
     expect(outcome.ok).toBe(true);
@@ -506,7 +506,7 @@ describe('受理幂等键（CLI-033 Editor 侧）', () => {
   it('界面形态（intent 不带幂等键）→ 提交请求不出现 client_request_id 键', async () => {
     submitGenerationBatchMock.mockResolvedValue(acceptanceResponse(1));
 
-    await runGenerationBatchSubmission(legalIntent({ refAssetIds: [] }));
+    await runGenerationBatchSubmission(legalIntent({ refs: [] }));
 
     const request = submitGenerationBatchMock.mock.calls[0]?.[0];
     expect(request).not.toHaveProperty('client_request_id');
@@ -536,7 +536,7 @@ describe('受理幂等键（CLI-033 Editor 侧）', () => {
   it('CLI 纯入口：重放回执携带幂等键回显与 replayed 标志；全新受理 replayed: false', async () => {
     submitGenerationBatchMock.mockResolvedValue({ ...acceptanceResponse(1), replayed: true });
     const replay = await submitGenerationBatchFromIntent(
-      legalIntent({ clientRequestId: 'req-seam-replay', refAssetIds: [] }),
+      legalIntent({ clientRequestId: 'req-seam-replay', refs: [] }),
     );
     if (!replay.ok) throw new Error('expected ok result');
     expect(replay.acceptance.replayed).toBe(true);
@@ -544,7 +544,7 @@ describe('受理幂等键（CLI-033 Editor 侧）', () => {
 
     submitGenerationBatchMock.mockResolvedValue(acceptanceResponse(1));
     const fresh = await submitGenerationBatchFromIntent(
-      legalIntent({ clientRequestId: 'req-seam-fresh', refAssetIds: [] }),
+      legalIntent({ clientRequestId: 'req-seam-fresh', refs: [] }),
     );
     if (!fresh.ok) throw new Error('expected ok result');
     expect(fresh.acceptance.replayed).toBe(false);
@@ -572,24 +572,31 @@ describe('buildProgrammaticIntentFromCliParams（契约参数 → 提交意图�
       modelId: 'model-a',
       prompt: '一只猫',
       args: { a: '2', b: 'z' },
-      refAssetIds: [],
+      refs: [],
       count: 1,
       promptPresetSnapshots: undefined,
       clientRequestId: undefined,
     });
   });
 
-  it('count / ref 显式提供时原样进入意图；wait 不进意图（轮询归主进程侧）', () => {
+  it('count / ref 显式提供时原样进入意图（含用途）；wait 不进意图（轮询归主进程侧）', () => {
     const intent = buildProgrammaticIntentFromCliParams({
       prompt: 'x',
       model: 'm',
       count: 3,
-      ref: ['asset_9'],
+      ref: [
+        { asset_id: 'asset_9', slot_id: 'first_frame' },
+        { asset_id: 'asset_10', slot_id: null },
+      ],
       wait: true,
     });
 
     expect(intent.count).toBe(3);
-    expect(intent.refAssetIds).toEqual(['asset_9']);
+    // 用途原样进入意图：CLI 已能做用途表达（--ref <id>:<用途>），意图层不得丢弃它。
+    expect(intent.refs).toEqual([
+      { assetId: 'asset_9', slotId: 'first_frame' },
+      { assetId: 'asset_10', slotId: null },
+    ]);
     expect('wait' in intent).toBe(false);
   });
 
@@ -601,5 +608,122 @@ describe('buildProgrammaticIntentFromCliParams（契约参数 → 提交意图�
     });
 
     expect(intent.clientRequestId).toBe('req-seam-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 引用用途链路（设计 docs/editor/PromptDock参考区用途标注-design.md §5.2/§8）
+//
+// 0.6.5 回归的回归保护：用途在提交核心入口处丢失时，这几条用例必须变红。
+// 种床刻意带 media_slots（目录条目 fixture 不带素材位会让用途判据恒不生效）。
+// ---------------------------------------------------------------------------
+
+describe('引用用途：意图携带 / §8 兜底 / 阻断文案可执行', () => {
+  it('显式用途随提交下发为该素材位的字段键（界面路径同形状）', async () => {
+    usePromptDockStore.setState({ catalog: [createCatalogEntryWithSlots(firstLastFrameSlots)] });
+    submitGenerationBatchMock.mockResolvedValue(acceptanceResponse(1));
+
+    const outcome = await runGenerationBatchSubmission(
+      legalIntent({ refs: [{ assetId: 'asset_1', slotId: 'first_frame' }], count: 1 }),
+    );
+
+    expect(outcome.ok).toBe(true);
+    const mediaInputs = submitGenerationBatchMock.mock.calls[0]?.[0].media_inputs;
+    // 显式用途不被兜底改写：首帧就是首帧（后端据此分桶到 firstFrameImage）
+    expect(mediaInputs?.[0]?.field_key).toBe('firstFrameImage');
+  });
+
+  it('未表达用途且模型只有一个多张位 → 按 §8 兜底成普通参考并受理成功', async () => {
+    usePromptDockStore.setState({ catalog: [createCatalogEntryWithSlots(multiImageRefSlots)] });
+    submitGenerationBatchMock.mockResolvedValue(acceptanceResponse(1));
+
+    const outcome = await runGenerationBatchSubmission(
+      legalIntent({ refs: [{ assetId: 'asset_1' }], count: 1 }),
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(submitGenerationBatchMock.mock.calls[0]?.[0].media_inputs?.[0]?.field_key).toBe('image');
+  });
+
+  it('未表达用途且模型全是单张位 → 阻断，CLI 文案给出 --ref 可执行动作与可用用途', async () => {
+    usePromptDockStore.setState({ catalog: [createCatalogEntryWithSlots(firstLastFrameSlots)] });
+
+    const result = await submitGenerationBatchFromIntent(
+      legalIntent({ refs: [{ assetId: 'asset_1', slotId: null }], count: 1 }),
+    );
+
+    if (result.ok) throw new Error('expected error result');
+    expect(result.error.code).toBe('command_rejected');
+    // 不再让用户去画布点一个命令行提交读不到的位置：给的是 CLI 现场能完成的动作。
+    expect(result.error.message).toContain('--ref');
+    expect(result.error.message).toContain('first_frame');
+    expect(result.error.message).not.toContain('画布创作区');
+    expect(submitGenerationBatchMock).not.toHaveBeenCalled();
+  });
+
+  it('未表达用途且模型只有一个单张位 → 不替调用方认定（§8 不兜底，阻断）', async () => {
+    // 唯一候选但只能放一张：§4.3「加入参考」会直绑，§8「没表达用途」不绑。
+    usePromptDockStore.setState({
+      catalog: [
+        createCatalogEntryWithSlots([
+          {
+            slotId: 'first_frame',
+            fieldKey: 'firstFrameImage',
+            required: false,
+            maxFiles: 1,
+            mediaKind: 'image',
+            label: '首帧',
+          },
+        ]),
+      ],
+    });
+
+    const result = await submitGenerationBatchFromIntent(
+      legalIntent({ refs: [{ assetId: 'asset_1' }], count: 1 }),
+    );
+
+    if (result.ok) throw new Error('expected error result');
+    expect(result.error.code).toBe('command_rejected');
+    expect(result.error.message).toContain('first_frame');
+    expect(submitGenerationBatchMock).not.toHaveBeenCalled();
+  });
+
+  it('用途不属于当前模型 → 阻断且点名该用途，不发起提交', async () => {
+    usePromptDockStore.setState({ catalog: [createCatalogEntryWithSlots(multiImageRefSlots)] });
+
+    const result = await submitGenerationBatchFromIntent(
+      legalIntent({ refs: [{ assetId: 'asset_1', slotId: 'last_frame' }], count: 1 }),
+    );
+
+    if (result.ok) throw new Error('expected error result');
+    expect(result.error.code).toBe('command_rejected');
+    expect(result.error.message).toContain('last_frame');
+    expect(result.error.message).toContain('reference_image');
+    expect(submitGenerationBatchMock).not.toHaveBeenCalled();
+  });
+
+  it('CLI --ref 用途经意图进入提交体（端到端：参数 → 意图 → field_key）', async () => {
+    // 首帧改为非必填：本用例只验证「用途一路传到 field_key」，不叠加必填位阻断。
+    usePromptDockStore.setState({
+      catalog: [
+        createCatalogEntryWithSlots(
+          firstLastFrameSlots.map((slot) => ({ ...slot, required: false })),
+        ),
+      ],
+    });
+    submitGenerationBatchMock.mockResolvedValue(acceptanceResponse(1));
+
+    const intent = buildProgrammaticIntentFromCliParams({
+      prompt: '一只猫',
+      model: 'model-a',
+      ref: [{ asset_id: 'asset_1', slot_id: 'last_frame' }],
+      count: 1,
+    });
+    const result = await submitGenerationBatchFromIntent(intent);
+
+    if (!result.ok) throw new Error(`expected ok result, got ${result.error.message}`);
+    expect(submitGenerationBatchMock.mock.calls[0]?.[0].media_inputs?.[0]?.field_key).toBe(
+      'lastFrameImage',
+    );
   });
 });

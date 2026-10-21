@@ -191,7 +191,8 @@ export const runPromptDockPreflight = (
   // 7. 参考图用途（设计 docs/editor/PromptDock参考区用途标注-design.md §6）
   //
   // 这条判据取代了「参数值为空」那条对空数组天然失效的旧判据：必填素材位是否有图占用、
-  // 是否存在没指定用途的图，两者都只看草稿的参考条目与模型下发的素材位清单。
+  // 是否存在没指定用途的图、已标的用途在当前模型上是否还存在，三者都只看草稿的参考条目与
+  // 模型下发的素材位清单。
   if (!isAgentForm && entry) {
     for (const problem of collectSlotProblems(draft.references, entry)) {
       if (problem.kind === 'required-slot-empty') {
@@ -200,6 +201,15 @@ export const runPromptDockPreflight = (
           message: `还没有指定「${problem.label}」用哪张图。`,
           field: problem.fieldKey,
           exit: null,
+          slot: { slotId: problem.slotId, mediaType: problem.mediaType },
+        });
+      } else if (problem.kind === 'slot-not-in-model') {
+        issues.push({
+          code: 'slot-not-in-model',
+          message: `「${problem.label}」的用途在这个模型上用不了，请重新选一个用途。`,
+          field: problem.refId,
+          exit: null,
+          slot: { slotId: problem.slotId, mediaType: problem.mediaType },
         });
       } else {
         issues.push({
@@ -207,6 +217,7 @@ export const runPromptDockPreflight = (
           message: `还有图没指定用途，请为「${problem.label}」选一个用途。`,
           field: problem.refId,
           exit: null,
+          slot: { slotId: null, mediaType: problem.mediaType },
         });
       }
     }

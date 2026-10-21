@@ -67,7 +67,7 @@ const FLAG_SPECS = new Map<string, FlagSpec>([
   ["--limit", { field: "limit", kind: "number", usage: "--limit <N>", help: "最多返回条数（正整数）" }],
   ["--offset", { field: "offset", kind: "number", usage: "--offset <N>", help: "跳过前 N 条（非负整数，缺省 0）" }],
   ["--count", { field: "count", kind: "number", usage: "--count <N>", help: "生成任务数（正整数）" }],
-  ["--ref", { field: "ref", kind: "stringList", usage: "--ref <id1,id2>", help: "引用资产标识（逗号分隔，须为项目内已存在资产）" }],
+  ["--ref", { field: "ref", kind: "stringList", usage: "--ref <id>[:<用途>]", help: "引用资产标识（逗号分隔，须为项目内已存在资产）；用途取自 iart model get 的 media_slots[].slotId，省略则按模型能力自动归入" }],
   ["--arg", { field: "arg", kind: "kvList", usage: "--arg <k=v,k2=v2>", help: "模型参数键值对（逗号分隔，受该模型参数 schema 约束）" }],
   ["--members", { field: "members", kind: "stringList", usage: "--members <id1,id2>", help: "组成员节点标识（逗号分隔；group create 省略时创建空组，group add/remove 必填）" }],
   // --file 是文件路径列表（spec §5.3 / CLI-047）：完整路径可合法含逗号，按 pathList
@@ -329,7 +329,7 @@ const COMMAND_SPEC_LIST: readonly CommandSpec[] = [
     ],
     summary: "提交一次生成；--wait 时轮询至全部任务终态。",
     syntax:
-      "iart generate --prompt T --model M [--count N] [--ref id1,id2] [--arg k=v,k2=v2] [--group 组名] [--request-id ID] [--wait] --project P",
+      "iart generate --prompt T --model M [--count N] [--ref id[:用途],id2] [--arg k=v,k2=v2] [--group 组名] [--request-id ID] [--wait] --project P",
     notes: ["未传 --request-id 时客户端自动生成幂等键并在受理回执中回显。"],
   },
   {
@@ -527,6 +527,28 @@ const parseKvList = (raw: string): { key: string; value: string }[] =>
       throw new CliArgError(`--arg 需要 k=v 形式，收到：${pair}`);
     }
     return { key: pair.slice(0, eq), value: pair.slice(eq + 1) };
+  });
+
+/**
+ * `--ref <素材标识>[:<用途>]` 条目（spec §5.4 引用用途）。
+ *
+ * 只按**第一个**冒号拆分：素材标识不含冒号，用途标识（素材位标识）同样不含，按首冒号
+ * 拆分即可，且未来任一侧放宽都不会静默错位。缺省冒号即「调用方没表达用途」，落 `null`
+ * 交由提交侧按设计文档 §8 存量兼容兜底——不在这里猜，避免 CLI 侧出现第二套用途判定。
+ */
+const parseRefList = (raw: string): { asset_id: string; slot_id: string | null }[] =>
+  splitList(raw).map((item) => {
+    const colon = item.indexOf(":");
+    if (colon < 0) return { asset_id: item, slot_id: null };
+    const assetId = item.slice(0, colon);
+    const slotId = item.slice(colon + 1);
+    if (assetId.length === 0) {
+      throw new CliArgError(`--ref 的素材标识不能为空，收到：${item}（形状：<素材标识>[:<用途>]）`);
+    }
+    if (slotId.length === 0) {
+      throw new CliArgError(`--ref 指定用途时用途标识不能为空，收到：${item}（形状：<素材标识>[:<用途>]）`);
+    }
+    return { asset_id: assetId, slot_id: slotId };
   });
 
 /** 解析主体：命令短语定位 + flag 收集 + 按命令构造请求草稿 + 契约校验；用户可见错误以 CliArgError 抛出。 */
@@ -812,7 +834,8 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
     }
     case "generate": {
       const count = optionalNumber("count", "--count");
-      const ref = optionalStringList("ref");
+      const refRaw = listValues.get("ref");
+      const ref = refRaw === undefined ? undefined : refRaw.flatMap((item) => parseRefList(item));
       const argRaw = listValues.get("arg");
       const arg = argRaw === undefined ? undefined : argRaw.flatMap((item) => parseKvList(item));
       const clientRequestId = scalarValues.get("client_request_id");

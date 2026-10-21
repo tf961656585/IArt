@@ -113,13 +113,14 @@ description: |
 
 | 命令 | 说明 |
 |---|---|
-| `iart generate --prompt T --model M [--count N] [--ref id1,id2] [--arg k=v,k2=v2] [--group 组名] [--request-id ID] [--wait] --project P` | 提交生成（见下） |
+| `iart generate --prompt T --model M [--count N] [--ref id[:用途],id2] [--arg k=v,k2=v2] [--group 组名] [--request-id ID] [--wait] --project P` | 提交生成（见下） |
 | `iart task cancel <taskId> --project P` | 取消任务（与界面取消同语义） |
 | `iart task wait <taskId> [--timeout S] --project P` | 轮询至终态。默认不设时限；`--timeout` 到期只是本次命令以 `wait_timeout` 退出，任务继续跑 |
 
 `generate` 细节：
 - `--count` 缺省 1，范围 1–10。
 - `--ref` 引用**已存在**的资产（id 来源：`asset list`（可 `--query` 按文件名/提示词搜）、`canvas nodes list` 的 `asset_id`，或用户从画布右键菜单「复制素材 ID」贴给你的 id；同一内容出现多个 id 时任一等效，`asset get` 的 `equivalent_asset_ids` 可核对）。**本地文件路径不是合法输入**——本地文件需先导入成为素材才能引用：用 `iart asset import --file <绝对路径>` 导入（见 §1 与 R1.5），或由用户在画布中拖入。
+- `--ref` 可带用途后缀：`--ref <素材标识>:<用途>`，如 `--ref a:first_frame,b:last_frame`（可与不带用途的条目混写）。用途标识取 `iart model get <model_id> --json` 的 `media_slots[].slotId`，**不要猜**。省略用途时按模型能力自动归入：模型声明了可放多张的参考位（图像编辑类）→ 普通参考；只有单张位（图生视频的首帧/尾帧）→ 拒绝并列出可选用途，此时必须显式指定。
 - `--arg` 的参数名与取值域以 `model get` 的 `parameter_schema` 为准，**不要猜**。
 - `--arg size=WxH` 是**请求值，不是保证值**。带参考图的编辑类模型、`auto`/档位式尺寸可能按服务商策略产出不同尺寸；终态以产物 `asset.original.width/height` 为准。`task wait`/`generate --wait` 的终态结果带 `warnings[]`：请求是字面量 WxH 且实际图片尺寸不同时给出 `requested_size_not_honored`（信息性，**不改变任务成功状态**）。
 - `--request-id` 受理幂等键（batch 级）：不传时 CLI 自动生成 uuid 并在受理回执回显；**重提时复用同一 request_id 即幂等**——命中已受理批次会原样返回既有批次与任务身份（`replayed: true`），不重复出图。
@@ -242,7 +243,7 @@ iart task list --request-id <回执里的幂等键> --project P --json
 | `model_not_available` | 模型不在可用模型目录，或当前不可提交 | 读 `failure_code`：模型尚未添加到服务商、连接不可用或缺凭证等，引导用户到设置页「服务商与模型」配置；刚在设置页添加过模型仍报此错，请用户重开项目后重试 |
 | `task_not_found` | 任务标识不存在 | `task list` 核对 id |
 | `wait_timeout` | `--timeout` 到期 | 任务仍在跑：去掉 `--timeout` 重等，或改用 `task get` 轮询 |
-| `command_rejected` | 画布侧前置校验拦截（含 group add/remove 目标不是节点组、remove 成员不属于目标组等） | 读 message 中的定位信息修正输入后重试 |
+| `command_rejected` | 画布侧前置校验拦截（含 group add/remove 目标不是节点组、remove 成员不属于目标组、参考图用途未指定或用途不属当前模型等） | 读 message 中的定位信息修正输入后重试；参考图用途类问题按 message 列出的可选用途用 `--ref <素材标识>:<用途>` 重提 |
 | `internal_error` | 未归类内部错误 | 原样转告用户，附诊断线索 |
 
 ---

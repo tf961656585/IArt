@@ -129,6 +129,20 @@ export type PromptDockDraft = {
   taskCount: number;
 };
 
+/**
+ * 用途类问题的定位细节（`slot-required-empty` / `slot-unspecified` / `slot-not-in-model` 携带）。
+ *
+ * 存在的理由：三类问题的可修复动作都指向「某个用途」，而 CLI 没有画布徽章可点，只能把
+ * 「该模型这一媒体类型有哪些用途」直接写进错误文案。不带这份细节，CLI 只能让用户去界面上
+ * 点一个命令行提交永远读不到的位置（0.6.5 的报错死路）。
+ */
+export type PromptDockSlotIssueDetail = {
+  /** 涉及的素材位标识；null = 该引用还没有用途（`slot-unspecified`） */
+  slotId: string | null;
+  /** 该素材位的媒体类型，决定文案列出哪一档可选用途 */
+  mediaType: 'image' | 'video' | 'audio';
+};
+
 /** 前置校验失败定位反馈（spec 节点执行前置校验.md：不提交 + 定位 + 覆盖全部）。 */
 export type PromptDockPreflightIssue = {
   code:
@@ -141,7 +155,9 @@ export type PromptDockPreflightIssue = {
     /** 必填素材位没有任何参考图占用（如可灵图生视频的首帧）。 */
     | 'slot-required-empty'
     /** 参考图在参考区里但还没有指定用途。 */
-    | 'slot-unspecified';
+    | 'slot-unspecified'
+    /** 参考图标的用途在当前模型的素材位上不存在（模型切换后残留、或调用方给错用途标识）。 */
+    | 'slot-not-in-model';
   /** 用户可读原因，已定位到问题输入 */
   message: string;
   /** 问题字段（参数 fieldKey、引用 assetId 或失效预设 presetId） */
@@ -152,6 +168,11 @@ export type PromptDockPreflightIssue = {
    * （docs/hub/首次指引-design.md §4.4）。
    */
   exit: 'hub-providers' | null;
+  /**
+   * 用途类问题的定位细节（仅 `slot-*` 三类携带；其余问题不设该键）。
+   * `exactOptionalPropertyTypes` 下不用 `slot: undefined` 表达缺席，构造侧以条件展开省略。
+   */
+  slot?: PromptDockSlotIssueDetail;
 };
 
 /** 提交受理前的一次完整校验结果。 */

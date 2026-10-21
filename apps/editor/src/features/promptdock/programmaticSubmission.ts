@@ -17,6 +17,7 @@ import { useCanvasStore } from '@/features/canvas/store/canvasStore';
 import type { PromptCollectionItem } from '@/features/canvas/types';
 import { runPromptDockPreflight } from './promptDockPreflight';
 import { resolvePromptDockSubmitPrompt } from './promptDockPrompt';
+import { candidateSlots, legacySlotId } from './referenceSlotModel';
 import { usePromptDockStore } from './promptDockStore';
 import type { PromptDockDraft, PromptDockPreflightIssue, PromptDockReference } from './PromptDock.types';
 
@@ -46,6 +47,21 @@ import type { PromptDockDraft, PromptDockPreflightIssue, PromptDockReference } f
  * 提交传输层失败原样上抛（不重试，spec §5.4），由调用方映射为错误响应。
  */
 
+/**
+ * 程序化提交的引用条目输入（意图层形态）。
+ *
+ * 用途（`slotId`）必须由调用方表达，而不是提交核心事后重判：界面路径传草稿里用户已标好的
+ * 现值，CLI 路径传 `--ref <id>:<用途>`。`null` / `undefined` 同义，都表示「调用方没表达」，
+ * 由提交核心按设计文档 §8 存量兼容兜底（模型有可放多张的参考位 → 普通参考，否则进入阻断）。
+ *
+ * 历史形状是纯 `string[]`（只有资产标识），导致用途在进入提交核心的一刻就丢失——界面与 CLI
+ * 都会把用户已标的用途降级成「未指定」（0.6.5 回归）。
+ */
+export type ProgrammaticSubmitRef = {
+  assetId: string;
+  slotId?: string | null | undefined;
+};
+
 /** 程序化提交意图：程序化提交核心的入参（对齐 CLI 契约 generate 参数的 Editor 侧形态）。 */
 export type ProgrammaticSubmitIntent = {
   /** 目标模型标识；null = 未指定（前置校验按「模型不可用」阻断） */
@@ -58,8 +74,8 @@ export type ProgrammaticSubmitIntent = {
   prompt: string;
   /** 模型参数空间（UI 为类型化表单值；CLI 为 k=v 收敛后的参数记录） */
   args: DynamicPayload;
-  /** 引用资产标识（顺序即引用顺序；重复标识按一个引用处理，与参考区去重同语义） */
-  refAssetIds: readonly string[];
+  /** 引用条目（顺序即引用顺序；重复资产标识按一个引用处理，与参考区去重同语义） */
+  refs: readonly ProgrammaticSubmitRef[];
   /** 固定任务数（1..10，与提交契约一致） */
   count: number;
   /**
@@ -187,25 +203,36 @@ const buildMentionMap = (
 };
 
 /**
- * 引用资产 id → 参考条目。媒体类型从画布媒体资产注册表读取——界面引用 chip 的媒体类型与
+ * 引用条目 → 参考条目。媒体类型从画布媒体资产注册表读取——界面引用 chip 的媒体类型与
  * 注册表同源（referenceOps 准入判定从同一注册表解析），程序化提交只有资产 id，统一从事实源
  * 投影。注册表查不到的引用保留条目（mediaType 兜底 image），由前置校验「引用资产不可用」
  * 阻断；兜底类型只影响同轮多问题的文案数量，不影响阻断本身。
+ *
+ * 用途按「调用方给了就用、没给才兜底」处理（设计文档 §8）：`legacySlotId` 是 §8 的唯一实现
+ * （模型声明了多张位 → 普通参考，否则未指定），此处复用它而不另写一套判定。
+ * 调用方显式表达的用途不参与兜底——否则用户在界面上标好的首帧会被降级成「未指定」，
+ * 正是设计 §7 禁止的静默改写。
+ *
+ * 不用 `defaultSlotId`（§4.3 的默认落位）：它会把「唯一候选且只能放一张」的位也绑上，
+ * 那是给用户主动加入参考用的规则；用在「调用方没表达」的存量引用上等于替用户认定用途。
  */
-const resolveReferencesFromAssetIds = (
-  refAssetIds: readonly string[],
+const resolveReferencesFromRefs = (
+  refs: readonly ProgrammaticSubmitRef[],
   mediaAssets: ProjectMediaAssets,
+  entry: PromptDockCatalogEntry | null,
 ): PromptDockReference[] => {
   const references: PromptDockReference[] = [];
   const seen = new Set<string>();
-  for (const assetId of refAssetIds) {
-    if (seen.has(assetId)) continue;
-    seen.add(assetId);
+  for (const ref of refs) {
+    if (seen.has(ref.assetId)) continue;
+    seen.add(ref.assetId);
+    const mediaType = mediaAssets[ref.assetId]?.mediaType ?? 'image';
     references.push({
-      refId: assetId,
-      assetId,
-      mediaType: mediaAssets[assetId]?.mediaType ?? 'image',
+      refId: ref.assetId,
+      assetId: ref.assetId,
+      mediaType,
       label: '',
+      slotId: ref.slotId ?? legacySlotId(entry, mediaType),
     });
   }
   return references;
@@ -241,7 +268,7 @@ export const runGenerationBatchSubmission = async (
       ? null
       : (usePromptDockStore.getState().catalog.find((item) => item.model_id === intent.modelId) ??
         null);
-  const references = resolveReferencesFromAssetIds(intent.refAssetIds, mediaAssets);
+  const references = resolveReferencesFromRefs(intent.refs, mediaAssets, entry);
 
   // 前置校验与界面提交同一函数同一覆盖面（spec §6.4「同一的前置校验」）；
   // 校验输入是 intent 的投影（草稿形状），不读写创作面草稿本身。
@@ -409,6 +436,9 @@ export type CliProgrammaticSubmitOutcome =
 /**
  * CLI generate 命令参数 → 程序化提交意图（count 缺省 1；`wait` 的轮询归本地控制服务侧，
  * 不进画布窗口执行的意图；`group` 出生组组名透传，spec CLI-043）。
+ *
+ * `--ref` 的 `slot_id` 原样进入意图：CLI 已能做用途表达（`--ref <id>:<用途>`），缺省时
+ * 落 `null` 由共享核心按设计文档 §8 兜底，CLI 侧不判断用途合法性（依赖模型目录，在预检判定）。
  */
 export const buildProgrammaticIntentFromCliParams = (
   params: CliGenerateParams,
@@ -416,7 +446,7 @@ export const buildProgrammaticIntentFromCliParams = (
   modelId: params.model,
   prompt: params.prompt,
   args: argsRecordFromCliEntries(params.arg ?? []),
-  refAssetIds: params.ref ?? [],
+  refs: (params.ref ?? []).map((ref) => ({ assetId: ref.asset_id, slotId: ref.slot_id })),
   count: params.count ?? 1,
   promptPresetSnapshots: undefined,
   clientRequestId: params.client_request_id,
@@ -523,18 +553,66 @@ const mapPreflightIssueToCliError = (
         message: `提示词包含未知的预设引用（${field}），请直接给出提示词正文。`,
       };
     case 'slot-required-empty':
-      // CLI 没有用途语法（用途是素材属性，只能在画布侧表达），因此这里不复述可修复动作，
-      // 只说明缺什么、并指向界面上能补的位置。
       return {
         code: 'command_rejected',
-        message: `该模型要求「${field}」有一张图，但当前没有图被指定到这个位置。请在画布创作区为该图选择用途后重试。`,
+        message: `该模型要求「${slotLabelOf(entry, issue)}」有一张图，但当前没有图被指定到这个用途。${describeCliSlotGuide(entry, issue)}`,
       };
     case 'slot-unspecified':
       return {
         code: 'command_rejected',
-        message: '有参考图还没有指定用途。请在画布创作区为每张图选择用途后重试。',
+        message: `有参考图还没有指定用途。${describeCliSlotGuide(entry, issue)}`,
+      };
+    case 'slot-not-in-model':
+      // 调用方给错了用途标识（或模型切换后残留）：点名它、并列出本模型真正可用的用途。
+      return {
+        code: 'command_rejected',
+        message: `用途「${issue.slot?.slotId ?? field}」不适用于这个模型。${describeCliSlotGuide(entry, issue)}`,
       };
   }
+};
+
+/**
+ * CLI 用途类问题的可执行动作（spec §5.4 引用用途）。
+ *
+ * CLI 已能做用途表达（`--ref <素材标识>:<用途>`），因此这里给的是 CLI 现场能完成的动作与
+ * 本模型真实可用的用途清单——而不是让用户去画布创作区点一个命令行提交永远读不到的位置
+ * （0.6.5 的报错死路：用途存在界面草稿上，程序化提交不读写草稿）。
+ */
+const describeCliSlotGuide = (
+  entry: PromptDockCatalogEntry | null,
+  issue: PromptDockPreflightIssue,
+): string => {
+  const mediaType = issue.slot?.mediaType ?? null;
+  const candidates =
+    entry === null || mediaType === null
+      ? []
+      : candidateSlots(entry, mediaType).map(
+          (slot) => `${slot.slotId}（${slot.label.length > 0 ? slot.label : slot.fieldKey}）`,
+        );
+  const guide =
+    candidates.length > 0
+      ? `该模型的${MEDIA_TYPE_CLI_LABEL[mediaType ?? 'image']}用途有：${candidates.join('、')}。`
+      : '';
+  return `${guide}请用 --ref <素材标识>:<用途> 指定用途后重试。`;
+};
+
+/** 用途问题的素材位标签：优先目录标签，其次用途标识，最后回退字段键。 */
+const slotLabelOf = (
+  entry: PromptDockCatalogEntry | null,
+  issue: PromptDockPreflightIssue,
+): string => {
+  const slotId = issue.slot?.slotId ?? null;
+  const slot =
+    slotId === null ? undefined : entry?.media_slots?.find((item) => item.slotId === slotId);
+  if (slot === undefined) return slotId ?? issue.field ?? '该用途';
+  return slot.label.length > 0 ? slot.label : slot.fieldKey;
+};
+
+/** CLI 文案里的媒体类型用词（image/video/audio 是内部标识，不上命令面文案）。 */
+const MEDIA_TYPE_CLI_LABEL: Record<'image' | 'video' | 'audio', string> = {
+  image: '图片',
+  video: '视频',
+  audio: '音频',
 };
 
 /**

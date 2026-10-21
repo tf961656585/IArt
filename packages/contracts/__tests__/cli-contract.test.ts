@@ -496,6 +496,7 @@ describe('代理执行通道命令契约（spec §6.3）', () => {
       CliProxyCommandSchema.safeParse({ command: 'task.cancel', request_id: 'req_3', task_id: 'task_1' }).success,
     ).toBe(true);
     // generate：参数与 B 命令面共享同一 schema（prompt/model 必填，count/ref/arg/wait 可选）。
+    // ref 为结构化引用条目（素材标识 + 可选用途）：带用途与不带用途两种形状都要能 parse。
     expect(
       CliProxyCommandSchema.safeParse({
         command: 'generate',
@@ -503,7 +504,7 @@ describe('代理执行通道命令契约（spec §6.3）', () => {
         prompt: '一只猫在窗台',
         model: 'model-a',
         count: 2,
-        ref: ['asset_1'],
+        ref: [{ asset_id: 'asset_1', slot_id: 'first_frame' }, { asset_id: 'asset_2' }],
         arg: [{ key: 'size', value: '1024x1024' }],
       }).success,
     ).toBe(true);

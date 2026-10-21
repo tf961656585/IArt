@@ -300,7 +300,11 @@ describe("parseCliArgs（参数名 → 契约字段映射表）", () => {
       prompt: "T",
       model: "M",
       count: 2,
-      ref: ["a", "b"],
+      // 不带用途时 slot_id 落 null（由提交侧按设计 §8 兜底），不是缺键
+      ref: [
+        { asset_id: "a", slot_id: null },
+        { asset_id: "b", slot_id: null },
+      ],
       arg: [
         { key: "k", value: "v" },
         { key: "k2", value: "v2" },

@@ -20,6 +20,7 @@ import type {
 } from '@iart/contracts';
 import { submitGenerationBatch } from '@/client/api/promptDockApi';
 import type { TaskNodeData } from '@/features/canvas/types/node';
+import { createCatalogEntryWithSlots, multiImageRefSlots } from '@/features/promptdock/__tests__/fixtures/promptDockCatalogEntry';
 import { usePromptDockStore } from '@/features/promptdock/promptDockStore';
 import { useCanvasStore } from '../../store/canvasStore';
 import { createNodeGraph } from '../../types/nodeGraph';
@@ -106,19 +107,12 @@ const mediaAsset = (id: string): MediaAsset => ({
   lifecycle: { createdAt: 1, updatedAt: 2 },
 });
 
-const catalogEntry = (): ExecutableModelDirectoryEntry => ({
-  model_id: 'model-a',
-  model_version: '1.0.0',
-  default_task_type: 'image',
-  capability: { input_modalities: ['text', 'image'], output_modalities: ['image'] },
-  parameter_schema: { fields: [], required_fields: [], default_values: {} },
-  deployment: {
-    has_active_deployment: true,
-    active_deployment_id: 'dep_1',
-    deployable: true,
-    failure_code: 'none',
-  },
-});
+/**
+ * 目录条目带一个多张参考位（真实图像编辑族的形状）：`--ref` 不带用途时按设计 §8 兜底成
+ * 「普通参考」并带 field_key 下发给后端。不带素材位的退化条目会让用途判据恒不生效。
+ */
+const catalogEntry = (): ExecutableModelDirectoryEntry =>
+  createCatalogEntryWithSlots(multiImageRefSlots);
 
 const acceptanceResponse = (taskCount: number): PromptDockBatchSubmitResponse => ({
   batch_id: 'batch_cli',
@@ -195,7 +189,7 @@ describe('CLI 代理执行通道 · generate（CLI-007/CLI-008 Editor 侧映射�
       prompt: '一只猫在窗台',
       model: 'model-a',
       count: 2,
-      ref: ['asset_1'],
+      ref: [{ asset_id: 'asset_1', slot_id: null }],
       arg: [{ key: 'size', value: '1024x1024' }],
       wait: true,
     });
@@ -226,7 +220,7 @@ describe('CLI 代理执行通道 · generate（CLI-007/CLI-008 Editor 侧映射�
       request_id: 'req-gen-2',
       prompt: '一只猫在窗台',
       model: 'model-a',
-      ref: ['ghost-asset'],
+      ref: [{ asset_id: 'ghost-asset', slot_id: null }],
     });
 
     const response = parseResponse(await executeCliProxyCommand(command));

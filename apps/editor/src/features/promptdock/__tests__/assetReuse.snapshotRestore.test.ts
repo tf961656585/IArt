@@ -5,6 +5,7 @@ import type { AssetNodeData } from '@/features/canvas/types/taskNode';
 import { fetchBatchIntentSnapshot } from '@/client/api/promptDockApi';
 import { usePromptDockStore } from '../promptDockStore';
 import { reuseAssetToDraft, restoreDraftFromBatchSnapshot } from '../assetReuse';
+import { multiImageRefSlots } from './fixtures/promptDockCatalogEntry';
 
 /**
  * 资产「复用」回填回归（产品 spec 00-产品定位与核心动作.md「复用」段）：
@@ -106,6 +107,7 @@ const seedStore = () => {
           deployable: true,
           failure_code: 'none',
         },
+        media_slots: multiImageRefSlots,
       },
     ],
     catalogLoaded: true,
@@ -133,12 +135,14 @@ describe('资产「复用」回填（batch 快照恢复）', () => {
     expect(draft.modelVersion).toBe('2.0.0');
     expect(draft.prompt).toBe('一只在雨中弹吉他的柴犬');
     expect(draft.arguments).toEqual({ size: 'auto', quality: 'high' });
+    // 快照不承载用途标记：按设计 §8 用当前目录条目的默认落位补一次（多张位 → 普通参考）。
     expect(draft.references).toEqual([
       {
         refId: 'asset_ref_1',
         assetId: 'asset_ref_1',
         mediaType: 'image',
         label: 'asset_ref_1',
+        slotId: 'reference_image',
       },
     ]);
     expect(draft.taskCount).toBe(2);

@@ -3,7 +3,9 @@ import type { AssetNodeData } from '@/features/canvas/types/taskNode';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
 import { extractFileKeyFromRuntimeMediaUrl } from '@/features/canvas/utils/mediaUrl';
 import { fetchBatchIntentSnapshot } from '@/client/api/promptDockApi';
+import type { PromptDockCatalogEntry } from '@/client/api/promptDockApi';
 import { usePromptDockStore } from './promptDockStore';
+import { legacySlotId } from './referenceSlotModel';
 import type { PromptDockDraft, PromptDockReference } from './PromptDock.types';
 
 /**
@@ -98,15 +100,24 @@ const buildDraftPatchFromSnapshot = (
     modelVersion: catalogEntry?.model_version ?? null,
     prompt: snapshot.prompt,
     arguments: { ...snapshot.params },
-    references: buildReferencesFromSnapshot(snapshot),
+    references: buildReferencesFromSnapshot(snapshot, catalogEntry),
     // 快照回填的是提交时已展开的正文，不含预设 token：清空上一次草稿的 token 快照，避免残留。
     promptPresetSnapshots: undefined,
     ...(opts.restoreTaskCount ? { taskCount: snapshot.task_count } : {}),
   };
 };
 
-/** 草稿参考区重建：优先快照内参考资产 id，旧快照（无该字段）按 media_refs fileKey 反查兜底。 */
-const buildReferencesFromSnapshot = (snapshot: BatchIntentSnapshot): PromptDockReference[] => {
+/**
+ * 草稿参考区重建：优先快照内参考资产 id，旧快照（无该字段）按 media_refs fileKey 反查兜底。
+ *
+ * 用途按设计文档 §8 存量兼容处理：快照不承载用途标记，一律按**当前目录条目**的默认落位赋
+ * 一次（多张位 → 普通参考，全单张位 → 未指定）。因此在全单张位模型上复用旧任务时仍要各点
+ * 一次用途——这是 §8 已声明的可接受代价，不在这里按快照历史推断。
+ */
+const buildReferencesFromSnapshot = (
+  snapshot: BatchIntentSnapshot,
+  entry: PromptDockCatalogEntry | null,
+): PromptDockReference[] => {
   const mediaAssets: ProjectMediaAssets = useCanvasStore.getState().mediaAssets ?? {};
   const assetIds = snapshot.reference_asset_ids ?? resolveAssetIdsFromMediaRefs(snapshot, mediaAssets);
   const graph = useCanvasStore.getState().nodeGraph;
@@ -125,6 +136,7 @@ const buildReferencesFromSnapshot = (snapshot: BatchIntentSnapshot): PromptDockR
       assetId,
       mediaType: asset.mediaType,
       label: typeof nodeLabel === 'string' && nodeLabel ? nodeLabel : assetId,
+      slotId: legacySlotId(entry, asset.mediaType),
     });
   }
   return references;

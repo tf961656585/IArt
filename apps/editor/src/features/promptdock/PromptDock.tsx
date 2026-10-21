@@ -336,11 +336,15 @@ export function PromptDock() {
     // 与 CLI 提交同一主链（spec docs/integrations/CLI与本地Agent集成.md §6.4：程序化提交是
     // 创作面提交主链的调用入口）；本组件只保留 UI 副作用（submitting / 阻断反馈 / toast）。
     // 预设 token 随快照传递：失效 token 由共享核心内的前置校验阻断，有效 token 在核心内展开。
+    // 用途随引用条目一起传入（设计 §5.2）：参考区是用途的唯一表达位，核心不重判用户已标的值。
     const intent: ProgrammaticSubmitIntent = {
       modelId: currentDraft.modelId,
       prompt: currentDraft.prompt,
       args: currentDraft.arguments,
-      refAssetIds: currentDraft.references.map((reference) => reference.assetId),
+      refs: currentDraft.references.map((reference) => ({
+        assetId: reference.assetId,
+        slotId: reference.slotId ?? null,
+      })),
       count: currentDraft.taskCount,
       promptPresetSnapshots: currentDraft.promptPresetSnapshots,
       // 界面提交不携带受理幂等键（幂等键是 CLI 提交面语义，spec §5.4 受理幂等键）。

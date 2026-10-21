@@ -62,6 +62,21 @@ export const defaultSlotId = (
   return multi?.slotId ?? null;
 };
 
+/**
+ * 存量引用的兜底用途（设计 §8）：**仅在模型声明了可放多张的该媒体类型参考位时**视为
+ * 「普通参考」，否则一律「未指定」（进入阻断并要求显式指定）。
+ *
+ * 与 `defaultSlotId`（§4.3「加入参考」的默认落位）只差一档：唯一候选且该位只能放一张时，
+ * §4.3 直接绑它（用户主动加入的图只有一种去处），§8 不绑——调用方没表达，不能替它认定
+ * 那唯一一个单张位就是首帧。这一档不能靠复用 `defaultSlotId` 表达：否则单张位模型上的
+ * 存量/脚本引用会被凭空造出用途，且多张引用会一起挤进同一个单张位。
+ */
+export const legacySlotId = (
+  entry: SlotCatalogEntry | null | undefined,
+  mediaType: 'image' | 'video' | 'audio',
+): string | null =>
+  candidateSlots(entry, mediaType).find((slot) => slotIsMulti(slot))?.slotId ?? null;
+
 /** 某用途位当前被哪张图占用（单张位同一时刻只允许一张；多张位不占用）。 */
 export const slotOccupant = (
   references: readonly PromptDockReference[],
@@ -116,16 +131,38 @@ export const rejudgeReferencesForModel = (
     return { ...ref, slotId: next };
   });
 
-/** 用途阻断的两类原因（供前置校验与界面呈现共用同一判据）。 */
+/** 用途阻断的三类原因（供前置校验与界面呈现共用同一判据）。 */
 export type SlotProblem =
-  | { kind: 'required-slot-empty'; fieldKey: string; slotId: string; label: string }
-  | { kind: 'unspecified-reference'; refId: string; label: string };
+  | {
+      kind: 'required-slot-empty';
+      fieldKey: string;
+      slotId: string;
+      label: string;
+      mediaType: 'image' | 'video' | 'audio';
+    }
+  | {
+      kind: 'unspecified-reference';
+      refId: string;
+      label: string;
+      mediaType: 'image' | 'video' | 'audio';
+    }
+  /** 引用标的用途在**当前模型**上不存在（模型切换后残留、或调用方给错用途标识）。 */
+  | {
+      kind: 'slot-not-in-model';
+      refId: string;
+      label: string;
+      slotId: string;
+      mediaType: 'image' | 'video' | 'audio';
+    };
 
 /**
  * 参考区用途层面的问题（设计 §6）。
  *
  * 只读草稿的参考条目与模型目录条目，不读参数值、不读后端组装结果——
  * 「`[]` 能过校验」那条旧判据因此被就地关掉，而不是在组装期兜。
+ *
+ * 三类问题互斥：用途在当前模型上不存在的引用既不占用任何位、也不该再被算成「未指定」，
+ * 否则用户会同时看到两条指向同一张图的提示。
  */
 export const collectSlotProblems = (
   references: readonly PromptDockReference[],
@@ -135,6 +172,23 @@ export const collectSlotProblems = (
   if (entry === null || entry === undefined) return problems;
   const slots = entry.media_slots ?? [];
   if (slots.length === 0) return problems;
+
+  // 用途不在当前模型上：先单独点名。该引用不参与下面两条判据（不占位、不重复报未指定）。
+  for (const ref of references) {
+    const currentSlotId = slotIdOf(ref);
+    if (currentSlotId === null) continue;
+    const candidates = candidateSlots(entry, ref.mediaType);
+    // 该媒体类型在本模型没有任何候选位 → 由既有「不兼容参考」承载，此处不重复报。
+    if (candidates.length === 0) continue;
+    if (candidates.some((slot) => slot.slotId === currentSlotId)) continue;
+    problems.push({
+      kind: 'slot-not-in-model',
+      refId: ref.refId,
+      label: ref.label,
+      slotId: currentSlotId,
+      mediaType: ref.mediaType,
+    });
+  }
 
   // 必填素材位必须有某张已标用途的引用占用。
   for (const slot of slots) {
@@ -146,6 +200,7 @@ export const collectSlotProblems = (
         fieldKey: slot.fieldKey,
         slotId: slot.slotId,
         label: slot.label.length > 0 ? slot.label : slot.fieldKey,
+        mediaType: slot.mediaKind,
       });
     }
   }
@@ -154,7 +209,12 @@ export const collectSlotProblems = (
   for (const ref of references) {
     if (slotIdOf(ref) !== null) continue;
     if (candidateSlots(entry, ref.mediaType).length === 0) continue;
-    problems.push({ kind: 'unspecified-reference', refId: ref.refId, label: ref.label });
+    problems.push({
+      kind: 'unspecified-reference',
+      refId: ref.refId,
+      label: ref.label,
+      mediaType: ref.mediaType,
+    });
   }
   return problems;
 };

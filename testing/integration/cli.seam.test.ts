@@ -73,6 +73,10 @@ vi.mock('@/client/api/videoThumbnail', () => ({
 
 import { cancelTask, submitGenerationBatch } from '@/client/api/promptDockApi';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
+import {
+  createCatalogEntryWithSlots,
+  multiImageRefSlots,
+} from '@/features/promptdock/__tests__/fixtures/promptDockCatalogEntry';
 import { usePromptDockStore } from '@/features/promptdock/promptDockStore';
 import {
   CLOSED_PROJECT_NAME,
@@ -437,19 +441,9 @@ describe('链路 C：generate 主链（程序化提交）', () => {
     });
     usePromptDockStore.setState({
       catalog: [
-        {
-          model_id: 'seam-model-a',
-          model_version: '1.0.0',
-          default_task_type: 'image',
-          capability: { input_modalities: ['text', 'image'], output_modalities: ['image'] },
-          parameter_schema: { fields: [], required_fields: [], default_values: {} },
-          deployment: {
-            has_active_deployment: true,
-            active_deployment_id: 'dep_seam_1',
-            deployable: true,
-            failure_code: 'none',
-          },
-        },
+        // 真实目录形状：带一个多张参考位。seam 若用不带素材位的退化条目，`--ref` 的用途判据
+        // 恒不生效，用途链断裂在 seam 层不可见（0.6.5 回归的漏网位置）。
+        createCatalogEntryWithSlots(multiImageRefSlots, { model_id: 'seam-model-a' }),
       ],
     });
     // 用户正在编辑的草稿快照（CLI-008「草稿不变」断言基线）

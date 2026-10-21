@@ -227,3 +227,42 @@ describe('runPromptDockPreflight：agent 形态的模型可用性', () => {
     }
   });
 });
+
+/**
+ * 参考区用途判据的界面反馈（设计文档 §6）：三类问题各有自己的 code、定位与文案，
+ * 且都携带 `slot` 细节（CLI 侧靠它列出可选用途，界面侧供后续定位使用）。
+ */
+describe('runPromptDockPreflight：参考区用途', () => {
+  const buildSlotEntry = (): PromptDockCatalogEntry => ({
+    ...buildEntry([]),
+    media_slots: [
+      {
+        slotId: 'reference_image',
+        fieldKey: 'image',
+        required: false,
+        maxFiles: 8,
+        mediaKind: 'image',
+        label: '普通参考',
+      },
+    ],
+  });
+
+  const buildImageAsset = () =>
+    createMediaAssetMapFixture([createMediaAssetFixture({ id: 'asset_1' })]);
+
+  it('用途在当前模型上不存在 → slot-not-in-model，文案不印素材位/字段键', () => {
+    const draft: PromptDockDraft = {
+      ...buildDraft('改图', {}),
+      references: [
+        { refId: 'asset_1', assetId: 'asset_1', mediaType: 'image', label: '参考素材', slotId: 'first_frame' },
+      ],
+    };
+    const result = runPromptDockPreflight(draft, buildSlotEntry(), buildImageAsset());
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected blocking issues');
+    const issue = result.issues.find((item) => item.code === 'slot-not-in-model');
+    expect(issue).toBeDefined();
+    expect(issue?.message).toBe('「参考素材」的用途在这个模型上用不了，请重新选一个用途。');
+    expect(issue?.slot).toEqual({ slotId: 'first_frame', mediaType: 'image' });
+  });
+});

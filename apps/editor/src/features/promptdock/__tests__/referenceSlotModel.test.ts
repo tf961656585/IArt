@@ -16,6 +16,7 @@ import {
   candidateSlots,
   collectSlotProblems,
   defaultSlotId,
+  legacySlotId,
   reassignSlot,
   rejudgeReferencesForModel,
 } from '../referenceSlotModel';
@@ -83,6 +84,25 @@ describe('候选与默认落位', () => {
   it('多个候选全是单张位 → 未指定（刻意不按第一位自动占用）', () => {
     expect(defaultSlotId(twoSingleSlots, 'image')).toBeNull();
   });
+
+  it('存量兜底（§8）：唯一候选但只能放一张时**不**绑（与 §4.3 默认落位的唯一差别）', () => {
+    const onlyFirst: SlotFixture = {
+      model_id: 'only-first',
+      media_slots: [
+        { slotId: 'first_frame', fieldKey: 'firstFrameImage', required: true, maxFiles: 1, mediaKind: 'image', label: '首帧' },
+      ],
+    };
+    // §4.3「加入参考」：唯一去处，直接绑
+    expect(defaultSlotId(onlyFirst, 'image')).toBe('first_frame');
+    // §8「存量/脚本引用没表达用途」：不替调用方认定它是首帧
+    expect(legacySlotId(onlyFirst, 'image')).toBeNull();
+  });
+
+  it('存量兜底（§8）：存在多张位时绑该位，与 §4.3 一致', () => {
+    expect(legacySlotId(oneMultiSlot, 'image')).toBe('reference_image');
+    expect(legacySlotId(mixedSlots, 'image')).toBe('reference_image');
+    expect(legacySlotId(twoSingleSlots, 'image')).toBeNull();
+  });
 });
 
 describe('换绑与占用', () => {
@@ -148,5 +168,21 @@ describe('阻断判据', () => {
   it('无素材位模型（纯文生视频）→ 不产生任何阻断', () => {
     const noSlots: SlotFixture = { model_id: 't2v', media_slots: [] };
     expect(collectSlotProblems([makeRef('a', null)], noSlots)).toEqual([]);
+  });
+
+  it('用途在当前模型上不存在 → 一条 slot-not-in-model，且不再算作未指定', () => {
+    // 模型切换后残留的用途：last_frame 在只有多张参考位的模型上不存在。
+    const problems = collectSlotProblems([makeRef('a', 'last_frame')], oneMultiSlot);
+    const notInModel = problems.filter((p) => p.kind === 'slot-not-in-model');
+    assert.equal(notInModel.length, 1);
+    expect(notInModel[0]).toMatchObject({ refId: 'a', slotId: 'last_frame', mediaType: 'image' });
+    // 互斥：同一张图不会既报「用途不存在」又报「未指定」。
+    expect(problems.filter((p) => p.kind === 'unspecified-reference')).toHaveLength(0);
+  });
+
+  it('媒体类型在模型上完全没有候选位 → 不报 slot-not-in-model（由不兼容参考承载）', () => {
+    // twoSingleSlots 只声明 image；引用是 video 时由 incompatible-reference 一类判据负责。
+    const videoRef = { ...makeRef('a', 'first_frame'), mediaType: 'video' as const };
+    expect(collectSlotProblems([videoRef], twoSingleSlots)).toEqual([]);
   });
 });
