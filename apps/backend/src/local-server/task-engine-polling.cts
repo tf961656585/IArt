@@ -338,6 +338,7 @@ const executePollingTask = async (
     let responseContentType = "";
     let responseOk = false;
     let responseHeaders: Headers | null = null;
+    const attemptStartedAt = Date.now();
     try {
       const requestInit: RequestInit = {
         method: activeRequestMethod,
@@ -397,7 +398,10 @@ const executePollingTask = async (
         false,
       );
       lastFailureMessage = String(error);
-      lastNetworkClass = classifyNetworkError(error);
+      lastNetworkClass = classifyNetworkError(error, {
+        phase: "polling",
+        elapsedMs: Date.now() - attemptStartedAt,
+      });
       consecutiveFailures += 1;
       next = toRecord(
         await patchTaskRecord(next, {
@@ -415,7 +419,7 @@ const executePollingTask = async (
               code: ERROR_CODES.TASK_EXECUTION_FAILED,
               message: lastFailureMessage,
               userMessage: lastNetworkClass.userMessage,
-              retryable: true,
+              retryable: lastNetworkClass.retryable,
             }
           : {
               code: ERROR_CODES.TASK_EXECUTION_FAILED,

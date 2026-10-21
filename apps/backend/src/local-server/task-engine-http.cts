@@ -354,6 +354,9 @@ const executeHttpTask = async (
   const inlineChunks: Buffer[] = [];
   let responseBody: unknown = null;
   let responseBodyType: string | null = null;
+  // 阶段耗时基准：请求发出与响应头到达各记一次，失败文案据此区分「连不上」与「等待后中断」。
+  let requestStartedAt: number | null = null;
+  let downloadStartedAt: number | null = null;
   const releaseLeaseSafe = () => {
     if (lease) {
       try {
@@ -373,7 +376,9 @@ const executeHttpTask = async (
     Object.assign(requestInit as PlainObject, {
       dispatcher: getFetchDispatcher(),
     });
+    requestStartedAt = Date.now();
     const response = await fetch(finalTargetUrl.toString(), requestInit);
+    downloadStartedAt = Date.now();
     const contentType = response.headers.get("content-type") || "";
     const contentLengthHeader = response.headers.get("content-length");
     const parsedLength = contentLengthHeader
@@ -559,7 +564,24 @@ const executeHttpTask = async (
         error: { code: ERROR_CODES.TASK_CANCELED, message: "Task canceled" },
       } as PlainObject);
     }
-    const networkClass = classifyNetworkError(error);
+    const failurePhase = normalizeString(toRecord(next.progress).phase);
+    const networkClass = classifyNetworkError(error, {
+      phase: failurePhase,
+      elapsedMs:
+        downloadStartedAt !== null
+          ? Date.now() - downloadStartedAt
+          : requestStartedAt !== null
+            ? Date.now() - requestStartedAt
+            : null,
+    });
+    if (networkClass) {
+      loggingModule.logDebug("[task-engine-http] network failure classified", {
+        taskId: normalizeString(next.id),
+        kind: networkClass.kind,
+        causeCode: networkClass.causeCode,
+        phase: failurePhase || null,
+      });
+    }
     releaseLeaseSafe();
     return await patchTaskRecord(next, {
       status: TASK_STATUS.FAILED,
@@ -569,7 +591,7 @@ const executeHttpTask = async (
             code: ERROR_CODES.TASK_EXECUTION_FAILED,
             message: String(error),
             userMessage: networkClass.userMessage,
-            retryable: true,
+            retryable: networkClass.retryable,
           }
         : {
             code: ERROR_CODES.TASK_EXECUTION_FAILED,

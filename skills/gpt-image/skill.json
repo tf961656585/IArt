@@ -1,6 +1,0 @@
-{
-  "id": "gpt-image",
-  "version": "2.0.2",
-  "name": "GPT Image",
-  "description": "使用本软件已保存的 Provider 配置，离线调用当前激活的 gpt-image-2 部署完成文生图与图生图。"
-}

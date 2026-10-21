@@ -23,7 +23,6 @@ import { createProviderConnectionRoutes } from "./routes/provider-connection-rou
 import { createMediaRoutes } from "./routes/media-routes.cts";
 import { createProxyRoutes } from "./routes/proxy-routes.cts";
 import { createPromptPresetRoutes } from "./routes/prompt-preset-routes.cts";
-import { createSkillProxyRoutes } from "./routes/skill-proxy-routes.cts";
 import { createSystemRoutes } from "./routes/system-routes.cts";
 import { createTaskRoutes } from "./routes/task-routes.cts";
 import { createThinkingTierRoutes } from "./routes/thinking-tier-routes.cts";
@@ -125,7 +124,7 @@ const createRequestHandler = (options: unknown = {}) => {
     ...createCustomGenerationModelRoutes(),
     ...createGenerationFamilyTemplateRoutes(),
     ...createOnboardingRoutes(),
-    ...createProviderConnectionRoutes({ getServerPort }),
+    ...createProviderConnectionRoutes(),
     ...createThinkingTierRoutes(),
     ...createMediaRoutes({ getServerPort }),
     ...createUploadRoutes({ buildFileTooLargeMessage, getServerPort, ensureProjectFilesResolvable }),
@@ -134,7 +133,6 @@ const createRequestHandler = (options: unknown = {}) => {
     ...createGenerationBatchRoutes(),
     ...createPromptPresetRoutes(),
     ...createProxyRoutes(),
-    ...createSkillProxyRoutes(),
   ];
 
   return async (req: RouterRequest, res: RouterResponse) => {

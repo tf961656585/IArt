@@ -1,4 +1,4 @@
-// @spec: CLI-027, CLI-028, CLI-029, CLI-030, CLI-032, CLI-048
+// @spec: CLI-027, CLI-028, CLI-029, CLI-030, CLI-032, CLI-048, CLI-049
 //
 // CLI 代理执行通道 · 画布操作四命令映射测试（2026-10-14 批次新增，从 cliProxyReceiver.test.ts
 // 拆分——该文件受 max-lines 门禁约束）。
@@ -138,6 +138,17 @@ const findNode = (id: string): GraphNode | undefined => {
 /** 消费端纪律断言：响应必须能通过契约 schema parse，不合法让用例直接失败。 */
 const parseResponse = (raw: unknown): CliProxyCommandResponse =>
   CliProxyCommandResponseSchema.parse(raw);
+
+/** 按命令名构造成员归属代理命令（判别字段保持字面量，避免联合命令名通过 satisfies 收窄失败）。 */
+const membershipCommand = (
+  command: 'canvas.group.add' | 'canvas.group.remove',
+  requestId: string,
+  group: string,
+  members: string[],
+): CliProxyCommand =>
+  command === 'canvas.group.add'
+    ? { command: 'canvas.group.add', request_id: requestId, group, members }
+    : { command: 'canvas.group.remove', request_id: requestId, group, members };
 
 describe('CLI 代理执行通道 · 画布操作四命令', () => {
   beforeEach(() => {
@@ -679,6 +690,246 @@ describe('CLI 代理执行通道 · 画布操作四命令', () => {
       expect(posOf('m2').x).toBeGreaterThan(posOf('m1').x);
       expect(posOf('m2').y).toBe(posOf('m1').y);
       expect(posOf('m3').y).toBeGreaterThan(posOf('m1').y);
+    });
+  });
+
+  // @spec: CLI-049
+  describe('canvas.group.add / canvas.group.remove（CLI-049，成员归属）', () => {
+    it('add：未归属成员直接加入、已在目标组成员 no-op；响应按加入前归属分类', async () => {
+      addGroupNode('g0');
+      addTextInputNode('free1', 10, 20);
+      addTextInputNode('member1', 30, 40, 'g0');
+      useCanvasStore.getState().saveToHistory();
+      const historyBefore = useCanvasStore.getState().history.length;
+
+      const command: CliProxyCommand = {
+        command: 'canvas.group.add',
+        request_id: 'req-ga1',
+        group: 'g0',
+        members: ['free1', 'member1', 'free1'],
+      };
+      const response = parseResponse(await executeCliProxyCommand(command));
+
+      if (!('added_node_ids' in response)) throw new Error('expected group add success response');
+      expect(response.group_node_id).toBe('g0');
+      expect(response.added_node_ids).toEqual(['free1']);
+      expect(response.moved_node_ids).toEqual([]);
+      expect(response.unchanged_node_ids).toEqual(['member1']);
+      expect(findNode('free1')?.groupId).toBe('g0');
+      // 加入不改变成员位置
+      expect(findNode('free1')?.position).toEqual({ x: 10, y: 20 });
+      expect(useCanvasStore.getState().history.length).toBe(historyBefore + 1);
+    });
+
+    it('add：跨组迁移与新增同批分类，一次撤销全部还原到加入前归属', async () => {
+      addGroupNode('g0');
+      addGroupNode('g1');
+      addTextInputNode('m1', 0, 0, 'g1');
+      addTextInputNode('m2', 10, 10, 'g0');
+      addTextInputNode('m3', 20, 20);
+      useCanvasStore.getState().saveToHistory();
+      const historyBefore = useCanvasStore.getState().history.length;
+
+      const command: CliProxyCommand = {
+        command: 'canvas.group.add',
+        request_id: 'req-ga2',
+        group: 'g0',
+        members: ['m1', 'm2', 'm3'],
+      };
+      const response = parseResponse(await executeCliProxyCommand(command));
+
+      if (!('added_node_ids' in response)) throw new Error('expected group add success response');
+      expect(response.added_node_ids).toEqual(['m3']);
+      expect(response.moved_node_ids).toEqual(['m1']);
+      expect(response.unchanged_node_ids).toEqual(['m2']);
+      expect(findNode('m1')?.groupId).toBe('g0');
+      expect(findNode('m2')?.groupId).toBe('g0');
+      expect(findNode('m3')?.groupId).toBe('g0');
+      // 整批一条撤销记录（新增 + 迁移不各落一条）
+      expect(useCanvasStore.getState().history.length).toBe(historyBefore + 1);
+
+      useCanvasStore.getState().undo();
+      expect(findNode('m1')?.groupId).toBe('g1');
+      expect(findNode('m2')?.groupId).toBe('g0');
+      expect(findNode('m3')?.groupId).toBeUndefined();
+    });
+
+    it('add：整批已在目标组时成功且零写入（不落历史）', async () => {
+      addGroupNode('g0');
+      addTextInputNode('m1', 0, 0, 'g0');
+      const historyBefore = useCanvasStore.getState().history.length;
+
+      const command: CliProxyCommand = {
+        command: 'canvas.group.add',
+        request_id: 'req-ga3',
+        group: 'g0',
+        members: ['m1'],
+      };
+      const response = parseResponse(await executeCliProxyCommand(command));
+
+      if (!('added_node_ids' in response)) throw new Error('expected group add success response');
+      expect(response.added_node_ids).toEqual([]);
+      expect(response.moved_node_ids).toEqual([]);
+      expect(response.unchanged_node_ids).toEqual(['m1']);
+      expect(useCanvasStore.getState().history.length).toBe(historyBefore);
+    });
+
+    it('add：成员不存在 → node_not_found；组节点作为成员 → command_rejected（整批零写入）', async () => {
+      addGroupNode('g0');
+      addGroupNode('g1');
+      addTextInputNode('free1', 0, 0);
+
+      const missing = parseResponse(
+        await executeCliProxyCommand({
+          command: 'canvas.group.add',
+          request_id: 'req-ga4',
+          group: 'g0',
+          members: ['free1', 'ghost-node'],
+        } satisfies CliProxyCommand),
+      );
+      if (!('error' in missing)) throw new Error('expected group add error response');
+      expect(missing.error.code).toBe('node_not_found');
+      expect(missing.error.message).toContain('ghost-node');
+      expect(findNode('free1')?.groupId).toBeUndefined();
+
+      const groupMember = parseResponse(
+        await executeCliProxyCommand({
+          command: 'canvas.group.add',
+          request_id: 'req-ga5',
+          group: 'g0',
+          members: ['free1', 'g1'],
+        } satisfies CliProxyCommand),
+      );
+      if (!('error' in groupMember)) throw new Error('expected group add error response');
+      expect(groupMember.error.code).toBe('command_rejected');
+      expect(groupMember.error.message).toContain('g1');
+      expect(findNode('free1')?.groupId).toBeUndefined();
+    });
+
+    it('remove：成员移出目标组、保留画布原位；一次撤销恢复归属', async () => {
+      addGroupNode('g0');
+      addTextInputNode('m1', 12, 34, 'g0');
+      addTextInputNode('m2', 56, 78, 'g0');
+      useCanvasStore.getState().saveToHistory();
+      const historyBefore = useCanvasStore.getState().history.length;
+
+      const command: CliProxyCommand = {
+        command: 'canvas.group.remove',
+        request_id: 'req-gr1',
+        group: 'g0',
+        members: ['m1'],
+      };
+      const response = parseResponse(await executeCliProxyCommand(command));
+
+      if (!('removed_node_ids' in response)) throw new Error('expected group remove success response');
+      expect(response.group_node_id).toBe('g0');
+      expect(response.removed_node_ids).toEqual(['m1']);
+      expect(findNode('m1')?.groupId).toBeUndefined();
+      expect(findNode('m1')?.position).toEqual({ x: 12, y: 34 });
+      expect(findNode('m2')?.groupId).toBe('g0');
+      expect(useCanvasStore.getState().history.length).toBe(historyBefore + 1);
+
+      useCanvasStore.getState().undo();
+      expect(findNode('m1')?.groupId).toBe('g0');
+    });
+
+    it('remove：任一成员不属于目标组 → command_rejected 点名并整批拒绝', async () => {
+      addGroupNode('g0');
+      addGroupNode('g1');
+      addTextInputNode('m1', 0, 0, 'g0');
+      addTextInputNode('otherGroupMember', 10, 10, 'g1');
+      addTextInputNode('free1', 20, 20);
+
+      const command: CliProxyCommand = {
+        command: 'canvas.group.remove',
+        request_id: 'req-gr2',
+        group: 'g0',
+        members: ['m1', 'otherGroupMember', 'free1'],
+      };
+      const response = parseResponse(await executeCliProxyCommand(command));
+
+      if (!('error' in response)) throw new Error('expected group remove error response');
+      expect(response.error.code).toBe('command_rejected');
+      expect(response.error.message).toContain('otherGroupMember');
+      expect(response.error.message).toContain('free1');
+      // 整批拒绝：属于目标组的成员也不被移出
+      expect(findNode('m1')?.groupId).toBe('g0');
+    });
+
+    it('remove：成员不存在 → node_not_found；组节点作为成员 → command_rejected', async () => {
+      addGroupNode('g0');
+      addGroupNode('g1');
+      addTextInputNode('m1', 0, 0, 'g0');
+
+      const missing = parseResponse(
+        await executeCliProxyCommand({
+          command: 'canvas.group.remove',
+          request_id: 'req-gr3',
+          group: 'g0',
+          members: ['m1', 'ghost-node'],
+        } satisfies CliProxyCommand),
+      );
+      if (!('error' in missing)) throw new Error('expected group remove error response');
+      expect(missing.error.code).toBe('node_not_found');
+      expect(missing.error.message).toContain('ghost-node');
+
+      const groupMember = parseResponse(
+        await executeCliProxyCommand({
+          command: 'canvas.group.remove',
+          request_id: 'req-gr4',
+          group: 'g0',
+          members: ['g1'],
+        } satisfies CliProxyCommand),
+      );
+      if (!('error' in groupMember)) throw new Error('expected group remove error response');
+      expect(groupMember.error.code).toBe('command_rejected');
+      expect(groupMember.error.message).toContain('g1');
+      expect(findNode('m1')?.groupId).toBe('g0');
+    });
+
+    it('add/remove：目标不存在 → group_not_found；目标非节点组（含 Agent 容器）→ command_rejected', async () => {
+      addTextInputNode('plainNode', 0, 0);
+      addAgentNode('agent0');
+      addGroupNode('g0');
+      addTextInputNode('m1', 10, 10, 'g0');
+
+      for (const commandName of ['canvas.group.add', 'canvas.group.remove'] as const) {
+        const notFound = parseResponse(
+          await executeCliProxyCommand(membershipCommand(commandName, `${commandName}-ghost`, 'ghost-group', ['m1'])),
+        );
+        if (!('error' in notFound)) throw new Error('expected error response');
+        expect(notFound.error.code).toBe('group_not_found');
+
+        const plainTarget = parseResponse(
+          await executeCliProxyCommand(membershipCommand(commandName, `${commandName}-plain`, 'plainNode', ['m1'])),
+        );
+        if (!('error' in plainTarget)) throw new Error('expected error response');
+        expect(plainTarget.error.code).toBe('command_rejected');
+
+        const agentTarget = parseResponse(
+          await executeCliProxyCommand(membershipCommand(commandName, `${commandName}-agent`, 'agent0', ['m1'])),
+        );
+        if (!('error' in agentTarget)) throw new Error('expected error response');
+        expect(agentTarget.error.code).toBe('command_rejected');
+        expect(agentTarget.error.message).toContain('Agent 容器');
+      }
+      // 全程零改动
+      expect(findNode('m1')?.groupId).toBe('g0');
+    });
+
+    it('nodeGraph 未载入时 add/remove 均返回 project_not_open', async () => {
+      useCanvasStore.setState((state) => {
+        state.nodeGraph = null;
+      });
+      const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+      for (const commandName of ['canvas.group.add', 'canvas.group.remove'] as const) {
+        const response = parseResponse(
+          await executeCliProxyCommand(membershipCommand(commandName, `${commandName}-closed`, 'g0', ['m1'])),
+        );
+        if (!('error' in response)) throw new Error('expected error response');
+        expect(response.error.code).toBe('project_not_open');
+      }
+      expect(debugSpy).toHaveBeenCalled();
     });
   });
 

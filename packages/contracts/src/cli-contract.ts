@@ -10,10 +10,15 @@ import {
   CliCanvasPositionSchema,
   CliCanvasNodeEntrySchema,
   CliCanvasGroupSummarySchema,
+  CliCanvasGroupAddOutcomeSchema,
+  CliCanvasGroupRemoveOutcomeSchema,
   CliCanvasSelectionSchema,
   CliTaskCanvasIdentitySchema,
+  CliCanvasGroupCreateParamsSchema, CliCanvasGroupDissolveParamsSchema, CliCanvasGroupMembersParamsSchema,
+  CliCanvasNodeMoveParamsSchema, CliCanvasNodeDeleteParamsSchema, CliCanvasLayoutParamsSchema,
 } from './cli-canvas-contract';
 import { CliAssetImportParamsSchema, CliAssetImportResultSchema } from './cli-asset-import-contract';
+import { CliGenerationWarningSchema } from './cli-generation-warning-contract';
 
 /**
  * CLI 与本地 Agent 集成契约（contracts 层）—— `iart` 命令面、代理执行通道与设置页状态 DTO 的
@@ -65,7 +70,7 @@ export type { CliErrorCode, CliError } from './cli-error-code';
 
 /**
  * 命令名清单：`iart <名词> <动作>` 的线上一面，顺序对齐 spec §5.1–§5.5（batch.get 归 §5.2 只读查询）。
- * 共 25 条：项目生命周期 6 + 只读查询 9 + 画布命令 6（asset.import 入口在资产域、执行归画布命令
+ * 共 27 条：项目生命周期 6 + 只读查询 9 + 画布命令 8（asset.import 入口在资产域、执行归画布命令
  * 通道与撤销语义）+ 生成与任务 3 + 应用状态感知 1。
  */
 export const CLI_COMMANDS = [
@@ -84,6 +89,8 @@ export const CLI_COMMANDS = [
   'asset.import',
   'canvas.group.create',
   'canvas.group.dissolve',
+  'canvas.group.add',
+  'canvas.group.remove',
   'canvas.node.move',
   'canvas.node.delete',
   'canvas.layout',
@@ -112,84 +119,9 @@ const ProjectNameSchema = z
     message: 'project name must not contain path separators',
   });
 
-/**
- * `canvas group create` 参数：组名 + 成员节点标识（spec §5.3）。
- * members 允许空数组（CLI-044 空组建组，仅 CLI 侧放开：界面多选入口保持 ≥2 语义）——
- * 空组建组由执行侧经防重叠搜索在视口安全区定位初始位置。
- */
-export const CliCanvasGroupCreateParamsSchema = z
-  .object({
-    name: z.string().min(1),
-    members: z.array(z.string().min(1)),
-  })
-  .strict();
-export type CliCanvasGroupCreateParams = z.infer<typeof CliCanvasGroupCreateParamsSchema>;
-
-/**
- * `canvas group dissolve` 参数：目标容器节点标识（组或 Agent 容器，spec §5.3 / CLI-027）。
- * 解散语义按容器类型分述（docs/runtime/画布节点组.md「解散」）：组删除组节点、成员保留原位；
- * Agent 容器解除成员关系、头节点保留并回落单节点形态、会话保留。
- */
-export const CliCanvasGroupDissolveParamsSchema = z
-  .object({
-    group: z.string().min(1),
-  })
-  .strict();
-export type CliCanvasGroupDissolveParams = z.infer<typeof CliCanvasGroupDissolveParamsSchema>;
-
-/**
- * `canvas node move` 参数：目标节点标识 + 目标画布坐标（spec §5.3 / CLI-028）。
- * 坐标为任意有限数值（可负、可小数）；容器节点（组 | Agent 容器）位置是成员包围盒的
- * 派生量、不独立可写，执行侧拒绝容器目标（移动一律成员级）。
- */
-export const CliCanvasNodeMoveParamsSchema = z
-  .object({
-    node: z.string().min(1),
-    x: z.number(),
-    y: z.number(),
-  })
-  .strict();
-export type CliCanvasNodeMoveParams = z.infer<typeof CliCanvasNodeMoveParamsSchema>;
-
-/**
- * `canvas node delete` 参数：待删节点标识列表（至少一个）+ 可选显式确认（spec §5.3 / CLI-029）。
- * 删除语义与界面删除同一删除咽喉（removeNodes，不连删：删除组节点即解散，成员保留）；
- * 请求集直接命中 Agent 节点时 `yes` 必须为 true（界面删除确认框的 CLI 对应物，AG-CT-011）。
- */
-export const CliCanvasNodeDeleteParamsSchema = z
-  .object({
-    nodes: z.array(z.string().min(1)).min(1),
-    yes: z.boolean().optional(),
-  })
-  .strict();
-export type CliCanvasNodeDeleteParams = z.infer<typeof CliCanvasNodeDeleteParamsSchema>;
-
-/** `canvas layout` 的 `--scope all|containers|group:<id>`：字符串 all/containers 或 `{ group }` 对象形态。 */
-export const CliLayoutScopeSchema = z.union([
-  z.literal('all'),
-  z.literal('containers'),
-  z
-    .object({
-      group: z.string().min(1),
-    })
-    .strict(),
-]);
-export type CliLayoutScope = z.infer<typeof CliLayoutScopeSchema>;
-
-/** `canvas layout` 参数：scope + 可选列数（正整数，映射既有自动布局列数语义）+ 可选显式顺序。 */
-export const CliCanvasLayoutParamsSchema = z
-  .object({
-    scope: CliLayoutScopeSchema,
-    columns: z.number().int().min(1).optional(),
-    /**
-     * `--order` 显式摆放顺序（可选，spec CLI-030）：数组序即最高优先摆放序，未指定的参与节点
-     * 按现状数组序跟排在指定节点之后；缺省时整理的默认排序行为完全不变（数组序）。
-     * order 中的节点标识必须存在且属于本次整理作用域，执行侧前置校验。
-     */
-    order: z.array(z.string().min(1)).min(1).optional(),
-  })
-  .strict();
-export type CliCanvasLayoutParams = z.infer<typeof CliCanvasLayoutParamsSchema>;
+// 画布命令参数形状（group create/dissolve/add/remove、node move/delete、layout）承载在
+// cli-canvas-contract.ts（行数预算拆分）；此处 import 供请求/代理判别变体组合复用，
+// 并 re-export 保持 '@iart/contracts' 单一取用面不变（见下方画布域 re-export 段）。
 
 /** 任务取消参数：目标任务标识。 */
 export const CliTaskCancelParamsSchema = z
@@ -311,6 +243,20 @@ export const CliCommandRequestSchema = z.discriminatedUnion('command', [
       command: z.literal('canvas.group.dissolve'),
       project: ProjectParamSchema,
       ...CliCanvasGroupDissolveParamsSchema.shape,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal('canvas.group.add'),
+      project: ProjectParamSchema,
+      ...CliCanvasGroupMembersParamsSchema.shape,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal('canvas.group.remove'),
+      project: ProjectParamSchema,
+      ...CliCanvasGroupMembersParamsSchema.shape,
     })
     .strict(),
   z
@@ -453,14 +399,22 @@ export {
   CliCanvasNodeEntrySchema,
   CliTaskCanvasIdentitySchema,
   CliCanvasGroupSummarySchema,
+  CliCanvasGroupAddOutcomeSchema,
+  CliCanvasGroupRemoveOutcomeSchema,
   CliCanvasSelectionSchema,
+  CliCanvasGroupCreateParamsSchema, CliCanvasGroupDissolveParamsSchema, CliCanvasGroupMembersParamsSchema,
+  CliCanvasNodeMoveParamsSchema, CliCanvasNodeDeleteParamsSchema, CliLayoutScopeSchema, CliCanvasLayoutParamsSchema,
 } from './cli-canvas-contract';
 export type {
   CliCanvasPosition,
   CliCanvasNodeEntry,
   CliTaskCanvasIdentity,
   CliCanvasGroupSummary,
+  CliCanvasGroupAddOutcome,
+  CliCanvasGroupRemoveOutcome,
   CliCanvasSelection,
+  CliCanvasGroupCreateParams, CliCanvasGroupDissolveParams, CliCanvasGroupMembersParams,
+  CliCanvasNodeMoveParams, CliCanvasNodeDeleteParams, CliLayoutScope, CliCanvasLayoutParams,
 } from './cli-canvas-contract';
 
 // 素材导入 DTO（asset import：参数 / 产物条目 / 结果）承载在 cli-asset-import-contract.ts
@@ -492,17 +446,23 @@ export const CliAppStatusOpenedProjectSchema = z
   .strict();
 export type CliAppStatusOpenedProject = z.infer<typeof CliAppStatusOpenedProjectSchema>;
 
+// 生成终态信息性提示 DTO（CLI-050）承载在 cli-generation-warning-contract.ts（行数预算拆分，先例同 cli-canvas-contract）；re-export 保持单一取用面。
+export { CliGenerationWarningSchema, type CliGenerationWarning } from './cli-generation-warning-contract';
+
 /**
  * 单个任务终态结果（spec §5.4 generate --wait / task wait：终态 + 产物资产）。
  * 任务状态复用 RuntimeTaskViewSchema（失败任务经 failure/error 字段如实逐任务承载，不整体掩盖）；
  * 产物资产复用 CliAssetWithLocalPath（资产标识 + 本地媒体文件绝对路径）；
  * 画布投影身份（node_id/group_id，CLI-046）经画布存储投影按 task_id 关联，读不到为 null。
+ * warnings（CLI-050）只做终态对照提示，缺省为空数组；不进入运行域共享 DTO。
  */
 export const CliTaskTerminalResultSchema = z
   .object({
     task: RuntimeTaskViewSchema,
     /** 产物资产列表；失败/取消任务可为空数组。 */
     assets: z.array(CliAssetWithLocalPathSchema),
+    /** 信息性提示（如请求尺寸未兑现）；无提示为空数组，任务状态与 ok 不变。 */
+    warnings: z.array(CliGenerationWarningSchema),
     ...CliTaskCanvasIdentitySchema.shape,
   })
   .strict();
@@ -614,6 +574,22 @@ export const CliCommandSuccessResponseSchema = z.discriminatedUnion('command', [
       member_ids: z.array(z.string().min(1)),
     })
     .strict(),
+  // 成员加入/移出结果与代理执行通道共享同一形状（CliCanvasGroupAddOutcomeSchema /
+  // CliCanvasGroupRemoveOutcomeSchema，不复制字段）。
+  z
+    .object({
+      command: z.literal('canvas.group.add'),
+      ok: z.literal(true),
+      ...CliCanvasGroupAddOutcomeSchema.shape,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal('canvas.group.remove'),
+      ok: z.literal(true),
+      ...CliCanvasGroupRemoveOutcomeSchema.shape,
+    })
+    .strict(),
   /** 移动结果：目标节点最终坐标 + 实际发生位移的节点集合（目标 + 连带跟随的伴随节点）。 */
   z
     .object({
@@ -642,8 +618,8 @@ export const CliCommandSuccessResponseSchema = z.discriminatedUnion('command', [
       // 受理结果与代理执行通道共享同一形状（CliGenerateAcceptanceSchema，不复制字段）。
       ...CliGenerateAcceptanceSchema.shape,
       /**
-       * 逐任务终态与产物：`--wait` 时承载每个任务的终态与产物资产（部分失败如实逐任务输出）；
-       * 非 wait 提交恒为空数组。
+       * 逐任务终态与产物：`--wait` 时承载每个任务的终态、产物资产与 warnings（信息性提示，CLI-050；
+       * 部分失败如实逐任务输出）；非 wait 提交恒为空数组。
        */
       task_results: z.array(CliTaskTerminalResultSchema),
     })
@@ -697,6 +673,8 @@ export const CliCommandErrorResponseSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('asset.import'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.group.create'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.group.dissolve'), ok: z.literal(false), error: CliErrorSchema }).strict(),
+  z.object({ command: z.literal('canvas.group.add'), ok: z.literal(false), error: CliErrorSchema }).strict(),
+  z.object({ command: z.literal('canvas.group.remove'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.node.move'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.node.delete'), ok: z.literal(false), error: CliErrorSchema }).strict(),
   z.object({ command: z.literal('canvas.layout'), ok: z.literal(false), error: CliErrorSchema }).strict(),
@@ -745,6 +723,20 @@ export const CliProxyCommandSchema = z.discriminatedUnion('command', [
       command: z.literal('canvas.group.dissolve'),
       request_id: z.string().min(1),
       ...CliCanvasGroupDissolveParamsSchema.shape,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal('canvas.group.add'),
+      request_id: z.string().min(1),
+      ...CliCanvasGroupMembersParamsSchema.shape,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal('canvas.group.remove'),
+      request_id: z.string().min(1),
+      ...CliCanvasGroupMembersParamsSchema.shape,
     })
     .strict(),
   z
@@ -820,6 +812,21 @@ export const CliProxyCommandResultSchema = z.discriminatedUnion('command', [
       group_node_id: z.string().min(1),
       /** 解散前归属该容器的成员节点 id 列表（成员保留画布原位、归属解除）。 */
       member_ids: z.array(z.string().min(1)),
+    })
+    .strict(),
+  // 成员加入/移出结果与 B 命令面共享同一形状（不复制字段）。
+  z
+    .object({
+      command: z.literal('canvas.group.add'),
+      request_id: z.string().min(1),
+      ...CliCanvasGroupAddOutcomeSchema.shape,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal('canvas.group.remove'),
+      request_id: z.string().min(1),
+      ...CliCanvasGroupRemoveOutcomeSchema.shape,
     })
     .strict(),
   z
@@ -899,6 +906,21 @@ export const CliProxyCommandErrorSchema = z.discriminatedUnion('command', [
   z
     .object({
       command: z.literal('canvas.group.dissolve'),
+      request_id: z.string().min(1),
+      error: CliErrorSchema,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal('canvas.group.add'),
+      request_id: z.string().min(1),
+      /** 成员资格校验不通过（组不可入组 / 目标非节点组 / 成员不存在等）时携带定位信息。 */
+      error: CliErrorSchema,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal('canvas.group.remove'),
       request_id: z.string().min(1),
       error: CliErrorSchema,
     })

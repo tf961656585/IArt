@@ -7,9 +7,10 @@ import {
   type CliCommandResponse,
   type CliCommandSuccessResponse,
   type CliError,
+  type CliGenerationWarning,
 } from "@iart/contracts";
 import { readDiscoveryFile, resolveDefaultDiscoveryFilePath, type CliDiscoveryFile } from "./cli-discovery.cjs";
-import { CLI_USAGE_HINT, CLI_USAGE_TEXT, parseCliArgs } from "./cli-arg-parser.cjs";
+import { CLI_USAGE_HINT, parseCliArgs, renderCliHelpText } from "./cli-arg-parser.cjs";
 
 /**
  * CLI 客户端（spec docs/integrations/CLI与本地Agent集成.md §4.1：薄的无状态转发层）。
@@ -107,13 +108,20 @@ const readTaskFailureReason = (task: {
 
 /**
  * 任务画布投影身份的人读后缀（spec §5.4 / CLI-046）：node_id/group_id 非空时随行展示，
- * null（无投影或项目已关闭）缺省不展示——不伪造。
+ * null（无投影或项目库读不到）缺省不展示——不伪造。
  */
 const renderTaskCanvasIdentitySuffix = (identity: { node_id: string | null; group_id: string | null }): string => {
   if (identity.node_id === null && identity.group_id === null) return "";
   const groupNote = identity.group_id !== null ? `，所属组 ${identity.group_id}` : "";
   return `，画布节点 ${identity.node_id ?? "未知"}${groupNote}`;
 };
+
+/**
+ * 任务终态信息性提示的人读后缀（spec §5.4 / CLI-050）：结果行在前，每条提示另起一行缩进展示。
+ * message 已是面向用户的完整句子，不附加内部术语；无提示返回空串。
+ */
+const renderGenerationWarningsSuffix = (warnings: readonly CliGenerationWarning[]): string =>
+  warnings.map((warning) => `\n  提示：${warning.message}`).join("");
 
 const safeJsonParse = (text: string): unknown => {
   try {
@@ -298,6 +306,15 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
       return `组已创建：${response.group_node_id}`;
     case "canvas.group.dissolve":
       return `组已解散：${response.group_node_id}，${response.member_ids.length} 个成员保留在画布上`;
+    case "canvas.group.add": {
+      const parts: string[] = [];
+      if (response.added_node_ids.length > 0) parts.push(`加入 ${response.added_node_ids.length} 个`);
+      if (response.moved_node_ids.length > 0) parts.push(`从其他组迁入 ${response.moved_node_ids.length} 个`);
+      if (response.unchanged_node_ids.length > 0) parts.push(`已在组内 ${response.unchanged_node_ids.length} 个`);
+      return `组 ${response.group_node_id} 成员已更新：${parts.length > 0 ? parts.join("，") : "没有需要变更的成员"}`;
+    }
+    case "canvas.group.remove":
+      return `组 ${response.group_node_id}：已移出 ${response.removed_node_ids.length} 个成员（节点保留在画布原位）`;
     case "canvas.node.move":
       return `节点 ${response.node_id} 已移动到 (${response.position.x}, ${response.position.y})`;
     case "canvas.node.delete":
@@ -316,7 +333,7 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
       }
       const lines = response.task_results.map(
         (result) =>
-          `- ${result.task.taskId}：${result.task.status}，产物 ${result.assets.length} 个${readTaskFailureReason(result.task)}${renderTaskCanvasIdentitySuffix(result)}`,
+          `- ${result.task.taskId}：${result.task.status}，产物 ${result.assets.length} 个${readTaskFailureReason(result.task)}${renderTaskCanvasIdentitySuffix(result)}${renderGenerationWarningsSuffix(result.warnings)}`,
       );
       const replayNote =
         response.replayed === true ? `（幂等键命中既有批次，未重复创建）` : "";
@@ -333,7 +350,7 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
     case "task.cancel":
       return `取消已受理：${response.task_id}`;
     case "task.wait":
-      return `任务 ${response.task_result.task.taskId}：${response.task_result.task.status}，产物 ${response.task_result.assets.length} 个${readTaskFailureReason(response.task_result.task)}${renderTaskCanvasIdentitySuffix(response.task_result)}`;
+      return `任务 ${response.task_result.task.taskId}：${response.task_result.task.status}，产物 ${response.task_result.assets.length} 个${readTaskFailureReason(response.task_result.task)}${renderTaskCanvasIdentitySuffix(response.task_result)}${renderGenerationWarningsSuffix(response.task_result.warnings)}`;
     case "batch.get":
       return `生成档案（批次 ${response.generation.batch_id}）：模型 ${response.generation.model_id}，参考 ${response.generation.references.length} 个，任务 ${response.generation.task_ids.length} 个；提示词全文与完整内容用 --json 查看`;
     case "app.status": {
@@ -456,6 +473,7 @@ const runGenerateWait = async (
       task_id: taskId,
     });
     if (outcome.kind === "response" && outcome.response.ok && outcome.response.command === "task.wait") {
+      // 终态结果整项原样保留（含 warnings，CLI-050）：客户端只编排轮询，不改写任务结果字段。
       taskResults.push(outcome.response.task_result);
     } else {
       return describeSendOutcome(outcome, json);
@@ -489,7 +507,9 @@ export const runCliClient = async (argv: readonly string[], deps: CliClientDeps 
   const parsed = parseCliArgs(argv);
   if (!parsed.ok) {
     if (parsed.reason === "help") {
-      return { exitCode: 0, stdout: CLI_USAGE_TEXT, stderr: "" };
+      // 帮助分层（spec §5 / CLI-041）：顶层 --help、`iart <名词> --help` 与
+      // `iart <命令短语> --help` 输出不同粒度的帮助，均由解析定义同一份命令表渲染。
+      return { exitCode: 0, stdout: renderCliHelpText(parsed.topic), stderr: "" };
     }
     // --version 是客户端本地命令（spec §5.5 / CLI-042）：版本数据源是发现文件随应用启动
     // 写出的应用版本；读不到（应用未在运行等）如实输出未知 + 启动提示，命令仍成功。

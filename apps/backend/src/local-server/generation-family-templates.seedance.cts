@@ -122,6 +122,14 @@ const MEDIA_SLOT_FIELD_KEYS: Record<(typeof SEEDANCE_2_0_V1_SUPPORTED_MEDIA_SLOT
   reference_audio: 'reference_audios',
 };
 
+/**
+ * 本族「素材位 → 参数字段键」映射的对外出口（族模板注册表消费）。
+ *
+ * 注册表用它给后端可执行目录下发素材位清单。直接导出同一对象，不复制数据，
+ * 避免出现第二份映射事实。
+ */
+export const SEEDANCE_MEDIA_SLOT_FIELD_KEYS = MEDIA_SLOT_FIELD_KEYS;
+
 // ---------------------------------------------------------------------------
 // 参数表单字段（提炼自 seedance 2.0 在役包，label/description 为本地化键）
 // ---------------------------------------------------------------------------

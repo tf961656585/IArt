@@ -13,6 +13,8 @@ const {
   FEED_FILES,
   readPackageVersion,
   assertPromotable,
+  assertReleasePublished,
+  assertLatestRelease,
   findExactTagRef,
   resolveTagAction,
 } = __test_only__;
@@ -95,6 +97,43 @@ test('findExactTagRef 精确匹配 refs/tags/<tag>，前缀同名（v9.9.9 对 v
   assert.equal(findExactTagRef([{ ref: 'refs/tags/v9.9.90' }], 'v9.9.9'), null);
   assert.equal(findExactTagRef([], 'v9.9.9'), null);
   assert.equal(findExactTagRef(null, 'v9.9.9'), null);
+});
+
+test('assertReleasePublished：非草稿且非预发布才放行', () => {
+  assert.doesNotThrow(() => assertReleasePublished({ isDraft: false, isPrerelease: false, tagName: 'v9.9.9' }, 'v9.9.9'));
+});
+
+test('assertReleasePublished：预发布标记残留判红并给出取消勾选/命令两条修复路径', () => {
+  assert.throws(
+    () => assertReleasePublished({ isDraft: false, isPrerelease: true, tagName: 'v9.9.9' }, 'v9.9.9'),
+    /预发布/,
+  );
+  assert.throws(
+    () => assertReleasePublished({ isDraft: false, isPrerelease: true, tagName: 'v9.9.9' }, 'v9.9.9'),
+    /--prerelease=false/,
+  );
+});
+
+test('assertReleasePublished：草稿、未知状态、tag 不一致均拒绝放行', () => {
+  assert.throws(() => assertReleasePublished({ isDraft: true, isPrerelease: false, tagName: 'v9.9.9' }, 'v9.9.9'), /草稿/);
+  assert.throws(() => assertReleasePublished({}, 'v9.9.9'), /草稿/);
+  assert.throws(() => assertReleasePublished(null, 'v9.9.9'), /草稿/);
+  assert.throws(
+    () => assertReleasePublished({ isDraft: false, isPrerelease: false, tagName: 'v9.9.10' }, 'v9.9.9'),
+    /不一致/,
+  );
+});
+
+test('assertLatestRelease：最新正式发布指向本 tag 才放行', () => {
+  assert.doesNotThrow(() => assertLatestRelease('v9.9.9', 'v9.9.9'));
+  assert.doesNotThrow(() => assertLatestRelease(' v9.9.9 ', 'v9.9.9'));
+});
+
+test('assertLatestRelease：无最新正式发布（404）或指向别的 tag 时判红', () => {
+  assert.throws(() => assertLatestRelease(null, 'v9.9.9'), /最新正式发布/);
+  assert.throws(() => assertLatestRelease('', 'v9.9.9'), /最新正式发布/);
+  assert.throws(() => assertLatestRelease(undefined, 'v9.9.9'), /最新正式发布/);
+  assert.throws(() => assertLatestRelease('v9.9.8', 'v9.9.9'), /指向 v9\.9\.8/);
 });
 
 test('resolveTagAction：tag 不存在→create；同提交→skip（幂等）', () => {

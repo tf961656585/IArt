@@ -5,6 +5,7 @@ import type { GraphNode } from '@/features/canvas/types/node';
 import type { AssetNodeData } from '@/features/canvas/types/taskNode';
 import { usePromptDockStore } from './promptDockStore';
 import type { PromptDockReference } from './PromptDock.types';
+import { defaultSlotId } from './referenceSlotModel';
 
 /**
  * PromptDock 参考区共享操作层（单一事实源）。
@@ -214,6 +215,13 @@ export type ReferenceMergeEntry = { label: string; candidate: ReferenceCandidate
 export const mergeReferences = (
   existing: PromptDockReference[],
   candidates: readonly ReferenceMergeEntry[],
+  /**
+   * 新引用的默认用途解析器（设计 §4.3 的默认落位）。
+   *
+   * 由调用方注入而不是在纯函数里读 store：本层只做「合并与去重」，用途语义归
+   * `referenceSlotModel`。不传即视为「无用途模型」，新引用落未指定。
+   */
+  resolveDefaultSlotId: (mediaType: PromptDockReference['mediaType']) => string | null = () => null,
 ): { outcome: AddReferencesOutcome; next: PromptDockReference[] } => {
   const outcome: AddReferencesOutcome = { added: [], alreadyInRefs: [], rejected: [] };
   let next = existing;
@@ -235,6 +243,7 @@ export const mergeReferences = (
       assetId: candidate.assetId,
       mediaType: candidate.mediaType,
       label: candidate.label,
+      slotId: resolveDefaultSlotId(candidate.mediaType),
     };
     outcome.added.push(ref);
     next = [...next, ref];
@@ -254,7 +263,11 @@ export const isAssetInReferences = (
  */
 const commitReferences = (candidates: readonly ReferenceMergeEntry[]): AddReferencesResult => {
   const store = usePromptDockStore.getState();
-  const { outcome, next } = mergeReferences(store.draft.references, candidates);
+  // 新引用的默认用途按「当前所选模型」判定（§4.3）：多张位绑多张位、全单张位落未指定。
+  const entry = store.catalog.find((item) => item.model_id === store.draft.modelId) ?? null;
+  const { outcome, next } = mergeReferences(store.draft.references, candidates, (mediaType) =>
+    defaultSlotId(entry, mediaType),
+  );
   if (outcome.added.length > 0) {
     store.setDraft({ references: next });
     return {

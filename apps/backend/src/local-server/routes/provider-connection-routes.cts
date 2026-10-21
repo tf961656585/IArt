@@ -32,7 +32,6 @@ import {
   resolveActiveTargetRecord,
   setActiveDeployment,
 } from '../provider-connection/active-route-store.cts';
-import { createSkillRuntimeConfigRefresher } from '../skill-runtime/skill-runtime-config-store.cts';
 
 /**
  * Provider 连接与 ActiveRoute 管理路由（spec 03 §4/§6 + spec 45 v4）。
@@ -107,13 +106,7 @@ const ActiveRoutePutBodySchema = z
   .object({ deployment_id: z.string().regex(/^up_dep_[a-z0-9][a-z0-9-_]*$/).nullable() })
   .strict();
 
-const createProviderConnectionRoutes = (options?: {
-  getServerPort?: () => number | null;
-}): RouteDefinition[] => {
-  const getServerPort = options?.getServerPort;
-  const refreshSkillRuntimeConfig = getServerPort
-    ? createSkillRuntimeConfigRefresher(getServerPort)
-    : (): void => {};
+const createProviderConnectionRoutes = (): RouteDefinition[] => {
   const routes: RouteDefinition[] = [
   // ----- ProviderConnection -----
   {
@@ -361,17 +354,7 @@ const createProviderConnectionRoutes = (options?: {
     },
   },
   ];
-  // skill 运行时配置的端点与凭证据取自模型的 active 接入目标，因此本组的任何写操作
-  // （连接、凭证、active 路由）都可能改变它——统一在写操作后刷新一次。
-  return routes.map((route) => ({
-    ...route,
-    handle: async (context: Parameters<RouteDefinition['handle']>[0]) => {
-      await route.handle(context);
-      if (context.req.method !== 'GET') {
-        refreshSkillRuntimeConfig();
-      }
-    },
-  }));
+  return routes;
 };
 
 export { createProviderConnectionRoutes };

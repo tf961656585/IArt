@@ -84,6 +84,11 @@
     "comment": "原生 <button> 三条件边界（spec §7）：①复合控件组成件、②宿主场景完整定义的局部控件、③白名单登记。condition 字段登记命中出路；白名单按文件粒度放行。",
     "whitelist": [
       {
+        "file": "apps/editor/src/features/promptdock/components/PromptDockReferenceSlotBadge.tsx",
+        "condition": "①②",
+        "note": "① 用途徽章触发器（复合控件组成件：徽章开用途菜单，视觉语义由参考 chip 行承载）；② 用途菜单项 ×N（下拉菜单选项 role=option，hover/focus/selected 由菜单宿主完整定义；28px 最小档会把菜单行撑高一倍，破坏菜单密度）"
+      },
+      {
         "file": "apps/hub/src/features/settings/provider-connection/ThinkingTierFields.tsx",
         "condition": "①+②",
         "note": "① dnd 拖动排序手柄（可排序行复合控件组成件）；② 移除档位图标钮（图标 h-3.5=14px，icon-sm 32px 撑高档位行 8px，几何不变红线）"

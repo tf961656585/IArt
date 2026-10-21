@@ -5,11 +5,16 @@
 //   - releases/latest/download 只服务最新正式 release 的资产，draft 资产对更新 feed 不可见；
 //     「人工把 draft 转正式」因此是发版激活动作。该步被遗漏时，已装客户端的更新检查
 //     会持续 404（2026-10-16 实证：v0.6.3–v0.6.11 多个 draft 滞留，客户端更新天天失败）。
-//   - 本脚本把「落版本 tag + 转正式 + feed 生效自检」合成一步：转正前先校验根 package.json
-//     的 version（在制版本）与 tag 一致，再按 GitHub API 把 tag 落在草稿记录的来源提交
-//     （targetCommitish）上——本地 git 历史与公开仓不同源，禁止用本地 git tag + push。
-//     随后翻正式（只翻状态不重新构建），立即探测三份 feed 文件可达且 version 与 tag 一致；
+//   - 本脚本把「落版本 tag + 转正式 + 发布状态断言 + feed 生效自检」合成一步：转正前先校验根
+//     package.json 的 version（在制版本）与 tag 一致，再按 GitHub API 把 tag 落在草稿记录的来源
+//     提交（targetCommitish）上——本地 git 历史与公开仓不同源，禁止用本地 git tag + push。
+//     随后翻正式（只翻状态不重新构建）并显式清除预发布标记，断言 release 状态（非草稿、非预发布、
+//     releases/latest 指向本 tag），最后探测三份 feed 文件可达且 version 与 tag 一致；
 //     feed 未生效视同未发版。
+//   - 「预发布」与草稿对更新 feed 等价：GitHub 的 releases/latest 只解析非草稿、非预发布的最新
+//     release，预发布标记残留时资产齐全、按版本直链可达，feed 仍全 404（2026-10-20 实证：v0.6.4
+//     在网页端发布时勾选预发布，客户端更新检查持续失败）。脚本只能约束自己发出的命令，发布动作
+//     被网页端绕过时，靠发布后的状态断言把这种状态判红并给出修复命令。
 //   - feed 基址读根 package.json 的 build.publish.url（generic provider）——与打包进
 //     安装包 app-update.yml 的是同一事实源，本脚本不维护第二份 feed 地址。
 //
@@ -18,7 +23,8 @@
 //   node tooling/scripts/release-promote.mjs v0.6.3 --verify-only  # 只验证，不改 release 状态、不落 tag
 //
 // 失败语义：任一步失败立即非零退出；tag 已存在且指向不同提交、package.json version 与 tag
-// 不一致均拒绝执行（不覆盖已有 tag）；feed 探测逐项给出 ✓/✗ 后统一收口，✗ 行附下一步动作提示。
+// 不一致均拒绝执行（不覆盖已有 tag）；发布后状态断言（仍为草稿 / 带预发布标记 / releases/latest
+// 未指向本 tag）与 feed 探测逐项给出 ✓/✗ 并附下一步动作提示，任一 ✗ 即非零退出。
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -99,6 +105,49 @@ export function assertPromotable(tag, packageVersion) {
   }
 }
 
+// 发布状态断言：转正 = 非草稿 + 非预发布。GitHub 的 releases/latest 只解析「非草稿、非预发布」
+// 的最新 release（REST 文档 make_latest：Drafts and prereleases cannot be set as latest）。
+// 预发布标记残留时，资产齐全、按版本直链可达也无济于事——feed 与稳定下载直链一起 404。
+// 2026-10-20 实证：v0.6.4 发布时带 prerelease=true，14 个资产与三份 feed 全部上传成功，
+// 已装客户端更新检查持续失败。脚本只能约束自己发出的命令，发布被网页端绕过时靠此处兜底。
+export function assertReleasePublished(view, tag) {
+  const state = view !== null && typeof view === 'object' && !Array.isArray(view) ? view : {};
+  const tagName = typeof state.tagName === 'string' ? state.tagName.trim() : '';
+  if (tagName !== '' && tagName !== tag) {
+    throw new Error(`release 视图 tag=${tagName} 与目标 ${tag} 不一致，无法断言发布状态`);
+  }
+  if (state.isDraft !== false) {
+    throw new Error(
+      `release ${tag} 仍是草稿（isDraft=${String(state.isDraft)}）：草稿不进更新 feed，先转正式`,
+    );
+  }
+  if (state.isPrerelease !== false) {
+    throw new Error(
+      `release ${tag} 被标记为预发布（prerelease=true）：GitHub 的 releases/latest 不服务预发布，` +
+        '客户端更新 feed 与稳定下载直链会持续 404。修复：release 页面取消「预发布」勾选，' +
+        `或运行 gh release edit ${tag} --prerelease=false --latest`,
+    );
+  }
+}
+
+// releases/latest 解析结果断言：latestTag 为空 = 仓库没有任何正式发布（API 404）或查询失败。
+// 与 assertReleasePublished 分工：前者看本稿自身标记，后者看「更新源实际指向谁」。
+export function assertLatestRelease(latestTag, tag) {
+  const latest = typeof latestTag === 'string' ? latestTag.trim() : '';
+  if (latest === '') {
+    throw new Error(
+      '仓库当前没有可解析的「最新正式发布」（releases/latest 返回 404）：' +
+        '确认是否存在未转正的草稿，或现有发布全部为预发布',
+    );
+  }
+  if (latest !== tag) {
+    throw new Error(
+      `releases/latest 指向 ${latest} 而不是本次转正的 ${tag}：更新 feed 仍在服务别的版本，客户端收不到本稿；` +
+        '确认是否有更新版本已发布，或本稿被标为预发布',
+    );
+  }
+}
+
 // 从 git/matching-refs 响应中取精确匹配 refs/tags/<tag> 的 ref。matching-refs 按前缀匹配
 // （查 v0.6.3 会带上 v0.6.30 等），必须精确比对 ref 字符串。不存在返回 null。
 export function findExactTagRef(refs, tag) {
@@ -146,6 +195,19 @@ const readRefCommitSha = (ref) => {
   throw new Error(`tag ref 指向未知对象类型 ${String(object.type)}`);
 };
 
+// 读 releases/latest 的 tag。API 404（没有任何正式发布）或响应缺 tag_name 归一为 null：
+// gh 的原始报错已透传 stderr，调用方按 null 给出可行动提示。
+const readLatestReleaseTag = () => {
+  try {
+    const latest = JSON.parse(ghOut(['api', 'repos/{owner}/{repo}/releases/latest']));
+    if (latest === null || typeof latest !== 'object' || Array.isArray(latest)) return null;
+    const tagName = typeof latest.tag_name === 'string' ? latest.tag_name.trim() : '';
+    return tagName === '' ? null : tagName;
+  } catch {
+    return null;
+  }
+};
+
 const probeFeedFile = async (baseUrl, fileName, expectedVersion) => {
   const url = `${baseUrl}/${fileName}`;
   let response;
@@ -157,7 +219,7 @@ const probeFeedFile = async (baseUrl, fileName, expectedVersion) => {
   if (!response.ok) {
     return {
       ok: false,
-      detail: `HTTP ${response.status}（404 = draft 未转正式或 Actions 未上传该文件）`,
+      detail: `HTTP ${response.status}（发布状态已通过断言，404 说明最新正式版的资产里没有该文件：确认 Actions 是否上传了三份 feed）`,
     };
   }
   const version = parseFeedVersion(await response.text());
@@ -218,11 +280,19 @@ const main = async () => {
       console.log(`    - tag ${tag} 已存在且指向 ${targetCommitish}（幂等跳过）`);
     }
 
-    ghOut(['release', 'edit', tag, '--draft=false']);
-    console.log('  ✓ 已转正式');
+    ghOut(['release', 'edit', tag, '--draft=false', '--prerelease=false']);
+    console.log('  ✓ 已转正式（并清除预发布标记）');
   } else if (view.isDraft) {
     console.log('  - --verify-only：保持 draft 状态（此时 feed 预期不可达）');
   }
+
+  console.log('  - 发布状态断言（releases/latest 只解析非草稿、非预发布的最新 release）');
+  const publishedView = JSON.parse(ghOut(['release', 'view', tag, '--json', 'isDraft,isPrerelease,tagName']));
+  assertReleasePublished(publishedView, tag);
+  console.log('    ✓ 非草稿、非预发布');
+  const latestTag = readLatestReleaseTag();
+  assertLatestRelease(latestTag, tag);
+  console.log(`    ✓ releases/latest → ${latestTag}`);
 
   console.log('[3/3] 探测更新 feed（releases/latest/download）');
   let probeFailed = false;
@@ -237,8 +307,9 @@ const main = async () => {
   }
   if (probeFailed) {
     fail(
-      `更新 feed 未生效，视同未发版。下一步：确认 ${tag} 的 draft 已转正式且 Actions 已上传全部资产；` +
-        `draft 未转正式时可运行 node tooling/scripts/release-promote.mjs ${tag}（不带 --verify-only）转正式并复验。`,
+      `更新 feed 未生效，视同未发版。发布状态已通过断言（${tag} 已正式、releases/latest 指向它），` +
+        '因此问题在资产侧：确认 Actions 已上传并保留三份 feed 文件，必要时重跑矩阵构建；' +
+        `--verify-only 可随时复验：node tooling/scripts/release-promote.mjs ${tag} --verify-only`,
     );
   }
   console.log(`✓ 更新 feed 已生效：${tag} 发版完成`);
@@ -255,6 +326,8 @@ export const __test_only__ = {
   FEED_FILES,
   readPackageVersion,
   assertPromotable,
+  assertReleasePublished,
+  assertLatestRelease,
   findExactTagRef,
   resolveTagAction,
 };

@@ -12,6 +12,7 @@ import type {
   RuntimeMediaAssetRow,
   RuntimeMediaAssetView,
   RuntimeTaskFailure,
+  RuntimeTaskRow,
   RuntimeTaskView,
 } from './schemas/runtime-transaction.schema';
 import {
@@ -289,6 +290,21 @@ const parseMediaAssetThumbnail = (value: unknown): MediaAssetThumbnail => {
   };
 };
 
+/**
+ * task-state-machine.legal_combinations：failed / cancelled 只允许 progressPhase=null。
+ *
+ * 历史任务行可能残留 requesting / downloading 等阶段；共享投影是存储读（Main）
+ * 与运行域视图的唯一水合咽喉，在这里按 status 归一，避免各消费方各修一套。
+ * succeeded 的 `completed` 与 null 均合法，其他非终态保持原值，不做过度归一。
+ */
+const normalizeTaskProgressPhase = (
+  status: RuntimeTaskRow['status'],
+  progressPhase: string | null | undefined,
+): string | null => {
+  if (status === 'failed' || status === 'cancelled') return null;
+  return progressPhase ?? null;
+};
+
 export const runtimeTaskRowToView = (
   rowInput: unknown,
   options: RuntimeHydrationProjectorOptions = DEFAULT_PROJECTOR_OPTIONS,
@@ -329,7 +345,7 @@ export const runtimeTaskRowToView = (
     remoteRequestId: row.remoteRequestId ?? null,
     progressPercent: row.progressPercent ?? null,
     progressMessage: row.progressMessage ?? null,
-    progressPhase: row.progressPhase ?? null,
+    progressPhase: normalizeTaskProgressPhase(row.status, row.progressPhase),
     errorMessage: row.errorMessage ?? null,
     errorCode: row.errorCode ?? null,
     failure: parseTaskFailureJson(row.failureJson, row.taskId, options),

@@ -24,7 +24,6 @@ import {
   scheduleProjectThumbnailRepair,
 } from './local-server/thumbnail-reconcile-service.cjs';
 import { loadRuntimeEnv } from './runtime-env-loader.cjs';
-import { writeSkillRuntimeConfig } from './local-server/skill-runtime/skill-runtime-config-store.cts';
 import { retireLegacyModelDeploymentCarrier } from './local-server/legacy-carrier-retirement.cts';
 import {
   setCredentialCryptoProvider,
@@ -424,15 +423,6 @@ server.listen({ host: HOST, port: PORT }, () => {
   if (typeof process.send === 'function') {
     process.send({ type: 'listening', port: serverPort, baseUrl });
   }
-
-  // skill 运行时配置文件刷新触发点：listen 回调后端口确定，写入真实端口。
-  // spec docs/hub/skill-store.md：端口漂移由该机制解决。
-  // 刷新为异步（需异步读取服务商凭证明文）；失败只记日志，不阻塞监听。
-  void writeSkillRuntimeConfig(serverPort).catch((error: unknown) => {
-    logInfo('skill-runtime: refresh on listen failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
 
   // Hub 重启后自动续跑未完成的 Task
   setTimeout(() => {

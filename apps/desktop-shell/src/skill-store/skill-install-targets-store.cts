@@ -14,7 +14,7 @@
  *     CustomSkillInstallTargetSchema。
  *   - 读取每次现读不缓存；外层形状（版本/数组）异常按空注册表处理（警告留痕，不阻塞后续
  *     写覆盖）；条目逐条形状守卫，非法条目丢弃并留 debug 日志（单条脏数据不丢整份注册表）。
- *   - 写入临时文件 + rename 原子写（照 skill-runtime-config-store 先例；非敏感数据无需 0600），
+ *   - 写入临时文件 + rename 原子写（非敏感数据无需 0600），
  *     落盘前用包装 schema 自检（不落读不回来的形状）。
  *
  * 防呆（add 时 O(n) 前缀判断，含尾部分隔符归一；update 重跑同一整套校验，仅重复/嵌套
@@ -173,7 +173,7 @@ const writeRegistryFile = (targets: CustomSkillInstallTarget[]): void => {
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-  // 原子写：临时文件 → rename（照 skill-runtime-config-store 先例）。
+  // 原子写：临时文件 → rename。
   const tmpPath = `${filePath}.tmp.${process.pid}`;
   fs.writeFileSync(tmpPath, JSON.stringify(fileCheck.data, null, 2), "utf8");
   fs.renameSync(tmpPath, filePath);

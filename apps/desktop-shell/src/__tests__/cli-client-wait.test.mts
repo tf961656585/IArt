@@ -1,5 +1,5 @@
 // @vitest-environment node
-// @spec: CLI-004, CLI-009, CLI-015
+// @spec: CLI-004, CLI-009, CLI-015, CLI-050
 //
 // CLI 客户端等待语义测试：
 // 1) task.wait 至终态——对真实控制服务（executorDeps 注入假 forwarder：两次响应不同状态），
@@ -45,9 +45,22 @@ const PROJECT_PATH = join(tempRoot, "demo-project");
 const ASSET = {
   assetId: "asset-1",
   mediaType: "image",
-  original: { url: "local-media://spid_test/file-a.png", fileKey: "file-a.png", mimeType: "image/png" },
+  // 实际产物尺寸与请求尺寸（2560x1440）不一致：终态 warnings 的触发源（CLI-050）。
+  original: { url: "local-media://spid_test/file-a.png", fileKey: "file-a.png", mimeType: "image/png", width: 1903, height: 2560 },
   thumbnail: { url: null, status: "ready" },
   lifecycle: { createdAt: 1, updatedAt: 2 },
+};
+
+/** 任务请求（multipart 摘要形态的真实提交字段）：请求尺寸 2560x1440。 */
+const REQUESTED_SIZE_REQUEST = {
+  method: "POST",
+  body: {
+    __formData: {
+      kind: "form_data_summary",
+      fieldCount: 1,
+      fields: [{ name: "size", filename: null, contentType: null, hasDataBase64: false, value: "2560x1440" }],
+    },
+  },
 };
 
 describe("cli-client 等待语义（真实控制服务 + 假 forwarder）", () => {
@@ -72,7 +85,12 @@ describe("cli-client 等待语义（真实控制服务 + 假 forwarder）", () =
               catalogCallCount += 1;
               return {
                 ok: true,
-                payload: { task: taskView("t1", catalogCallCount === 1 ? "generating" : "succeeded") },
+                payload: {
+                  task: {
+                    ...taskView("t1", catalogCallCount === 1 ? "generating" : "succeeded"),
+                    request: REQUESTED_SIZE_REQUEST,
+                  },
+                },
               };
             }
             if (pathname.includes("/api/tasks/t2")) {
@@ -121,13 +139,35 @@ describe("cli-client 等待语义（真实控制服务 + 假 forwarder）", () =
     const body = JSON.parse(result.stdout) as {
       ok: boolean;
       command: string;
-      task_result: { task: { taskId: string; status: string }; assets: { local_file_path: string }[] };
+      task_result: {
+        task: { taskId: string; status: string };
+        assets: { local_file_path: string }[];
+        warnings: { code: string; message: string; requested_size: string; actual_sizes: string[] }[];
+      };
     };
     expect(body.ok).toBe(true);
     expect(body.command).toBe("task.wait");
     expect(body.task_result.task.status).toBe("succeeded");
     expect(body.task_result.assets).toHaveLength(1);
     expect(body.task_result.assets[0]?.local_file_path).toBe(join(PROJECT_PATH, "media", "file-a.png"));
+    // 请求 2560x1440、实际 1903x2560：成功状态不变，另给一条信息性提示（CLI-050）
+    expect(body.task_result.warnings).toHaveLength(1);
+    expect(body.task_result.warnings[0]).toMatchObject({
+      code: "requested_size_not_honored",
+      requested_size: "2560x1440",
+      actual_sizes: ["1903x2560"],
+    });
+    expect(body.task_result.warnings[0]?.message).toContain("生成任务已成功");
+  });
+
+  it("task.wait 人读模式：尺寸不一致提示追加在任务结果行后（CLI-050）", async () => {
+    const result = await client.runCliClient(["task", "wait", "t1", "--project", PROJECT_PATH], {
+      discoveryFilePath,
+      pollIntervalMs: 10,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("任务 t1：succeeded");
+    expect(result.stdout).toContain("提示：请求尺寸 2560x1440，实际产出 1903x2560");
   });
 
   it("task.wait --timeout 到期：退出码 1 + 超时错误，任务不受影响继续执行", async () => {
@@ -199,13 +239,26 @@ describe("cli-client generate --wait（桩控制服务）", () => {
             respond(res, {
               command: "task.wait",
               ok: true,
-              task_result: { task: taskView("t1", "succeeded"), assets: [{ asset: ASSET, local_file_path: join(tempRoot, "media", "file-a.png") }], node_id: null, group_id: null },
+              task_result: {
+                task: taskView("t1", "succeeded"),
+                assets: [{ asset: ASSET, local_file_path: join(tempRoot, "media", "file-a.png") }],
+                warnings: [
+                  {
+                    code: "requested_size_not_honored",
+                    message: "请求尺寸 2560x1440，实际产出 1903x2560。生成任务已成功，尺寸以实际产物为准。",
+                    requested_size: "2560x1440",
+                    actual_sizes: ["1903x2560"],
+                  },
+                ],
+                node_id: null,
+                group_id: null,
+              },
             });
           } else {
             respond(res, {
               command: "task.wait",
               ok: true,
-              task_result: { task: { ...taskView("t2", "failed"), errorMessage: "生成失败" }, assets: [], node_id: null, group_id: null },
+              task_result: { task: { ...taskView("t2", "failed"), errorMessage: "生成失败" }, assets: [], warnings: [], node_id: null, group_id: null },
             });
           }
           return;
@@ -241,7 +294,11 @@ describe("cli-client generate --wait（桩控制服务）", () => {
       ok: boolean;
       command: string;
       batch_id: string;
-      task_results: { task: { taskId: string; status: string; errorMessage?: string | null }; assets: unknown[] }[];
+      task_results: {
+        task: { taskId: string; status: string; errorMessage?: string | null };
+        assets: unknown[];
+        warnings: { code: string; requested_size: string; actual_sizes: string[] }[];
+      }[];
     };
     expect(body.ok).toBe(true);
     expect(body.batch_id).toBe("batch-1");
@@ -250,6 +307,14 @@ describe("cli-client generate --wait（桩控制服务）", () => {
     const failed = body.task_results.find((entry) => entry.task.taskId === "t2");
     expect(succeeded?.task.status).toBe("succeeded");
     expect(succeeded?.assets).toHaveLength(1);
+    // task.wait 的 warnings 原样随行（CLI-050）：任务成功但尺寸不一致不翻转 ok/状态
+    expect(succeeded?.warnings).toHaveLength(1);
+    expect(succeeded?.warnings[0]).toMatchObject({
+      code: "requested_size_not_honored",
+      requested_size: "2560x1440",
+      actual_sizes: ["1903x2560"],
+    });
+    expect(failed?.warnings).toEqual([]);
     // 部分失败逐任务如实输出，不整体掩盖
     expect(failed?.task.status).toBe("failed");
     expect(failed?.task.errorMessage).toBe("生成失败");

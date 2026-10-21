@@ -25,7 +25,6 @@ export type DesktopEnv = {
   IART_BACKEND_BASE_URL: string | undefined;
   IART_SQLITE_RUNTIME: string | undefined;
   IART_MODEL_ASSET_PACKAGES_DIR: string | undefined;
-  IART_SKILL_RUNTIME_DIR: string | undefined;
   IART_E2E_REPORT_PATH: string | undefined;
   IART_E2E_AUTO_EXIT: string | undefined;
   IART_E2E_OPEN_EDITOR_PROJECT_PATH: string | undefined;

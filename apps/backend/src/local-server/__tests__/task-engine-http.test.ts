@@ -4,6 +4,21 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import {
+  clearCacheForTest as clearConnectionCache,
+  createConnection,
+  setConnectionCredential,
+} from "../provider-connection/connection-store.cts";
+import {
+  clearCacheForTest as clearActiveRouteCache,
+  setActiveDeployment,
+} from "../provider-connection/active-route-store.cts";
+import {
+  addCustomGenerationModel,
+  clearCacheForTest as clearCustomGenerationModelCache,
+} from "../provider-connection/custom-generation-model-store.cts";
+import { setCredentialForConnection } from "../provider-connection/credential-store.cts";
+
 const writeJson = (filePath: string, value: unknown) => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
@@ -377,5 +392,114 @@ void test("executeHttpTask: fetch 抛出非网络异常时任务失败，error �
     ),
     false,
     "配置阻断 error 不应包含 retryable 字段",
+  );
+});
+
+const seedActiveGenerationModel = async (modelId: string) => {
+  const connection = createConnection({
+    display_name: "task-http-network",
+    base_url: "https://snapshot.example.invalid/v1",
+  });
+  const credential = await setCredentialForConnection(
+    connection.connection_id,
+    "sk-task-http-network",
+  );
+  assert.ok(credential, "credential should be stored");
+  if (!credential) throw new Error("credential setup failed");
+  setConnectionCredential(
+    connection.connection_id,
+    credential.credentialRef,
+    credential.version,
+    true,
+  );
+  const record = addCustomGenerationModel({
+    model_id: modelId,
+    connection_id: connection.connection_id,
+    family_adapter_id: "openai-image-v1",
+    remote_model_id: `remote-${modelId}`,
+  });
+  assert.equal(record.ok, true, "generation model record should be created");
+  if (!record.ok) throw new Error("model setup failed");
+  assert.equal(
+    setActiveDeployment(modelId, record.model.record_id),
+    record.model.record_id,
+    "active route should point at the seeded record",
+  );
+};
+
+void test("executeHttpTask: 网络失败读取 cause 分类，且只发一次请求（不自动重试）", async (t) => {
+  const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-http-net-cause-"));
+  const previousRoot = process.env["IART_STORAGE_ROOT"];
+  process.env["IART_STORAGE_ROOT"] = storageRoot;
+  clearConnectionCache();
+  clearActiveRouteCache();
+  clearCustomGenerationModelCache();
+
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), {
+        code: "ECONNREFUSED",
+      }),
+    });
+  };
+
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    if (previousRoot === undefined) delete process.env["IART_STORAGE_ROOT"];
+    else process.env["IART_STORAGE_ROOT"] = previousRoot;
+    clearConnectionCache();
+    clearActiveRouteCache();
+    clearCustomGenerationModelCache();
+    fs.rmSync(storageRoot, { recursive: true, force: true });
+  });
+
+  const modelId = "model-http-net-cause";
+  await seedActiveGenerationModel(modelId);
+  const executeHttpTask = await loadExecuteHttpTask();
+  const result = await executeHttpTask(
+    {
+      id: "task-http-net-cause",
+      type: "http",
+      status: "submitting",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      request: {
+        url: "https://snapshot.example.invalid/v1/images/generations",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: { prompt: "hello" },
+      },
+      metadata: { modelId, model_id: modelId },
+    },
+    new AbortController(),
+  );
+
+  const resultRecord = result as {
+    status?: unknown;
+    progress?: { phase?: unknown };
+    error?: {
+      code?: unknown;
+      userMessage?: unknown;
+      retryable?: unknown;
+      message?: unknown;
+    };
+  };
+
+  assert.equal(fetchCalls, 1, "网络失败不得自动重试");
+  assert.equal(resultRecord.status, "failed");
+  assert.equal(resultRecord.error?.code, "task_execution_failed");
+  assert.equal(
+    resultRecord.error?.userMessage,
+    "服务商地址拒绝连接，请检查地址与端口是否正确后重新提交",
+  );
+  assert.equal(resultRecord.error?.retryable, true);
+  assert.equal(resultRecord.progress?.phase, null, "失败任务 progressPhase 必须归零");
+  assert.match(
+    String(resultRecord.error?.message),
+    /ECONNREFUSED|fetch failed/,
+    "backend message 保留原始错误细节",
   );
 });

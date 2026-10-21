@@ -6,75 +6,16 @@ import * as z from 'zod';
  * spec: docs/hub/skill-store.md（唯一稳定锚点）
  *
  * 本文件承载 app 与外部消费者的可执行边界契约：
- *   - SkillRuntimeConfigSchema：backend 写入 ~/.iart-studio/skills-runtime/<id>.runtime.json，
- *     skill bash 读取该文件。是 app 与外部 bash 进程的文件边界契约。
  *   - SkillCatalogSchema（index.json）、SkillBundleSchema（bundle JSON）：Hub 渲染进程与
  *     desktop-shell 主进程从 R2 fetch 后必须 .parse()，是 app 与外部分发层的边界。
  *   - SkillInstall* / SkillInstalledState：Hub renderer ↔ desktop-shell main 的 IPC DTO。
  *   - CustomSkillInstallTarget / SkillCustomTarget*：自定义安装目标注册表的管理 IPC DTO
  *     （注册表文件本身是主进程私有持久化，包装 schema 归 desktop-shell）。
  *
- * 严格说前四类不是跨 Electron 进程 DTO，但它们是 app 与外部消费者的可执行边界契约，
+ * 严格说第一类不是跨 Electron 进程 DTO，但它们是 app 与外部消费者的可执行边界契约，
  * 与云策略 bundle schema 的既有归属先例同类（见 docs/hub/api-key-policy-cloud-sync.md）。
  * guard:contract-ownership 做最终裁定。
  */
-
-// ---------------------------------------------------------------------------
-// SkillRuntimeConfig：backend 写入、skill bash 读取的运行时配置文件
-// ---------------------------------------------------------------------------
-
-/**
- * 单个候选 Key 条目。
- *
- * skill bash 按数组顺序逐个尝试：首选模型低价 tier → 首选模型高价 tier。
- * 失败（HTTP 非 2xx 或 body 含 error）即换下一个候选。tier display_order 越小
- * = 价位越低 = 越优先尝试。
- *
- * 字段语义：
- *   - modelId：该候选对应的模型 id（gpt-image-2）。
- *     每个模型只用自己绑定的 policy Key，不串用别的模型的 Key。
- *   - tierKey：档位标识。null 表示 policy 默认 Key（无 dimension/tier，或 tier
- *     未配置时回退）。代理模式下经 x-iart-tier 头传给 backend 解析对应 tier Key。
- *   - apiKey：缓存 Key 明文（0600 文件保护）。仅直连模式使用；代理模式 Key 不出
- *     backend，此字段留空串占位。
- */
-export const SkillRuntimeKeyCandidateSchema = z
-  .object({
-    modelId: z.string().min(1),
-    tierKey: z.string().nullable(),
-    apiKey: z.string(),
-  })
-  .strict();
-
-export type SkillRuntimeKeyCandidate = z.infer<typeof SkillRuntimeKeyCandidateSchema>;
-
-/**
- * skill 运行时配置文件 schema。
- *
- * 写入路径：~/.iart-studio/skills-runtime/<id>.runtime.json（权限 0600，原子写入）。
- * dev 路径：~/.iart-studio-dev/skills-runtime/<id>.runtime.json。
- *
- * 字段语义：
- *   - proxyBaseUrl：backend 代理端点（含真实监听端口），形如 http://127.0.0.1:39000。
- *     skill 探测可达后走 /api/skill/images/* 代理，Key 不出 backend。
- *   - gatewayBaseUrl：直连 base URL，取 skill 目标模型（gpt-image-2）active deployment
- *     所用服务商连接的 base_url；代理不可达时 skill 用 candidates 中的 apiKey 直连。
- *   - candidates：有序候选 Key 列表。按「首选模型低价 tier → 首选模型高价 tier」
- *     排列。空数组表示无可用 Key（未登录）。
- *   - modelId：默认首选模型 id（gpt-image-2），供脚本默认排序与 --model 参数参考。
- *   - updatedAt：最近一次刷新时间（UTC ISO 8601，内部存储口径，非用户展示）。
- */
-export const SkillRuntimeConfigSchema = z
-  .object({
-    proxyBaseUrl: z.string().min(1),
-    gatewayBaseUrl: z.string().min(1),
-    candidates: z.array(SkillRuntimeKeyCandidateSchema),
-    modelId: z.string().min(1),
-    updatedAt: z.string().min(1),
-  })
-  .strict();
-
-export type SkillRuntimeConfig = z.infer<typeof SkillRuntimeConfigSchema>;
 
 // ---------------------------------------------------------------------------
 // SkillBundle：R2 分发的 bundle JSON

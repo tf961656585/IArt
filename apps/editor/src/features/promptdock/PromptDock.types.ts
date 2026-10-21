@@ -21,6 +21,20 @@ export type PromptDockReference = {
   mediaType: 'image' | 'video' | 'audio';
   /** 加入时的资产显示标签（chip 与 hover 预览识别资产用；仅呈现，不参与提交） */
   label: string;
+  /**
+   * 该图在本次生成里扮演的素材位（用途），取值为当前模型媒体素材位清单里的 `slotId`。
+   *
+   * - 有值：提交时把该素材位对应的 `fieldKey` 写进媒体条目的显式绑定，后端据此分桶；
+   * - `null` / 缺省：未指定。只可能出现在「该媒体类型的候选位全部是单张位」的模型上，
+   *   由前置校验阻断，要求用户指定。
+   *
+   * 用可选而不是必填 `| null`：未指定本就是「没有这个信息」，可选更贴合语义；同时避免
+   * 所有既有构造点（含快照恢复、复用回填）都要显式写一个 `null`——那会掩盖「这里真的
+   * 想过用途吗」与「只是被迫补值」的区别。读取侧一律按 `?? null` 归一。
+   *
+   * 语义见 `docs/editor/PromptDock参考区用途标注-design.md`。
+   */
+  slotId?: string | null;
 };
 
 /**
@@ -123,7 +137,11 @@ export type PromptDockPreflightIssue = {
     | 'required-param-missing'
     | 'deployment-not-executable'
     | 'incompatible-reference'
-    | 'preset-token-invalid';
+    | 'preset-token-invalid'
+    /** 必填素材位没有任何参考图占用（如可灵图生视频的首帧）。 */
+    | 'slot-required-empty'
+    /** 参考图在参考区里但还没有指定用途。 */
+    | 'slot-unspecified';
   /** 用户可读原因，已定位到问题输入 */
   message: string;
   /** 问题字段（参数 fieldKey、引用 assetId 或失效预设 presetId） */

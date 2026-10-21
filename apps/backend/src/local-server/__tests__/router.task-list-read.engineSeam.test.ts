@@ -31,6 +31,7 @@ const readModelEntry = path.join(distStorageDir, 'editor-storage-read-model.cjs'
 
 type SqliteDb = {
   pragma: (statement: string) => unknown;
+  prepare: (statement: string) => { run: (...params: unknown[]) => unknown };
   close: () => void;
 };
 
@@ -47,6 +48,7 @@ type ReadModelModule = {
     db: unknown,
     options: { status?: string | undefined; limit?: number | undefined; offset?: number | undefined } | undefined,
   ) => unknown[];
+  readTaskById: (db: unknown, taskId: string) => unknown;
 };
 
 // backend 测试按 commonjs 编译（apps/backend type: commonjs），用 __filename 建 require。
@@ -301,4 +303,71 @@ void test('seam: /api/tasks 的 status 过滤参数在真实读取链路上生�
     `${baseUrl}/api/tasks?projectPath=${encodeURIComponent(projectPath)}&status=not-a-status`,
   );
   assert.equal(invalidResponse.status, 400, 'seam: 非法 status 参数应返回 400');
+});
+
+void test('seam: /api/tasks/:id 对历史失败行归一 progressPhase=null', async (t) => {
+  const { schema, runtimeWriter, readModel } = loadDistModules();
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'router-task-get-phase-'));
+  const projectPath = path.join(tempDir, 'demo.iartproj');
+  fs.mkdirSync(projectPath, { recursive: true });
+  const db = createProjectDb(schema);
+  seedTaskRows(db, runtimeWriter, projectPath);
+  // 模拟写侧归一上线前落库的历史行：failed 仍残留 requesting。
+  db.prepare("UPDATE tasks SET status = 'failed', progressPhase = 'requesting' WHERE taskId = ?").run(
+    'task-seam-full',
+  );
+
+  setBackendIpcTestHandler(async (message) => {
+    if (message.type !== 'runtime:read-task-by-id') {
+      return {
+        type: 'runtime:transaction-result',
+        transactionId: message.transactionId,
+        success: false,
+        error: `unexpected message type: ${message.type}`,
+      };
+    }
+    return {
+      type: 'runtime:transaction-result',
+      transactionId: message.transactionId,
+      success: true,
+      data: readModel.readTaskById(db, message.taskId),
+    };
+  });
+
+  const { server, baseUrl } = await startServer();
+  t.after(async () => {
+    setBackendIpcTestHandler(null);
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    db.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const views = readModel.readAllTasks(db, {
+    status: undefined,
+    limit: undefined,
+    offset: undefined,
+  }) as Array<{ taskId?: unknown; status?: unknown; progressPhase?: unknown }>;
+  const failedView = views.find((view) => view.taskId === 'task-seam-full');
+  assert.equal(failedView?.status, 'failed');
+  assert.equal(
+    failedView?.progressPhase,
+    null,
+    'readAllTasks 水合的历史 failed 行 progressPhase 必须为 null（共享投影归一）',
+  );
+
+  const response = await fetch(
+    `${baseUrl}/api/tasks/task-seam-full?projectPath=${encodeURIComponent(projectPath)}`,
+  );
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as {
+    task?: { status?: unknown; progressPhase?: unknown };
+  };
+  assert.equal(payload.task?.status, 'failed');
+  assert.equal(
+    payload.task?.progressPhase,
+    null,
+    'failed 任务读取视图的 progressPhase 必须归零（历史行读侧兜底）',
+  );
 });

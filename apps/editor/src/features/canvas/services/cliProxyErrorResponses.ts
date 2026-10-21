@@ -22,6 +22,23 @@ export const buildErrorResponse = (
   error: { code, message },
 });
 
+/** 项目上下文缺失（nodeGraph 未载入）时的统一拒绝；条件跳过按仓库纪律留 debug 痕。 */
+export const projectNotOpenResponse = (
+  commandName: CliProxyCommand['command'],
+  requestId: string,
+): CliProxyCommandError => {
+  console.debug('[cliProxyReceiver] command skipped: canvas graph not loaded', {
+    request_id: requestId,
+    command: commandName,
+  });
+  return buildErrorResponse(
+    commandName,
+    requestId,
+    'project_not_open',
+    '这个项目还没有在画布中打开，请先在应用中打开项目后再试。',
+  );
+};
+
 /** 从 unknown 记录读取一个字符串字段（不命中返回 null）。 */
 export const readRecordStringField = (value: unknown, key: string): string | null => {
   if (typeof value !== 'object' || value === null) return null;

@@ -45,7 +45,15 @@ const fail = (msg) => {
 // stderr 透传终端（克隆/推送进度与报错直接可见）。失败抛带命令上下文的 Error。
 const gitOut = (args, { cwd = REPO_ROOT, encoding = 'utf8' } = {}) => {
   try {
-    return execFileSync('git', args, { cwd, encoding, stdio: ['ignore', 'pipe', 'inherit'] });
+    // maxBuffer 必须显式放大：bundle 以 Buffer 读回，node 默认 1 MiB，
+    // 超过即抛 ERR_CHILD_PROCESS_STDIO_MAXBUFFER（实测 1.07 MB 的 ppt-builder bundle
+    // 让推送后校验误报失败，而推送本身已成功）。
+    return execFileSync('git', args, {
+      cwd,
+      encoding,
+      stdio: ['ignore', 'pipe', 'inherit'],
+      maxBuffer: 64 * 1024 * 1024,
+    });
   } catch (err) {
     throw new Error(`git ${args.join(' ')} 执行失败（详见上方 git 输出）`, { cause: err });
   }

@@ -139,6 +139,15 @@ const MEDIA_SLOT_FIELD_KEYS: Record<BuildableMediaSlot, string> = {
   reference_image: 'referenceImages',
 };
 
+/**
+ * 本族「素材位 → 参数字段键」映射的对外出口（族模板注册表消费）。
+ *
+ * 注意本表键集是「构建器可表达全集」（含 `reference_image`），可能**大于**
+ * 族上限 `VEO_V1_SUPPORTED_MEDIA_SLOTS`；注册表只按族上限取键，不据此推断能力。
+ * 直接导出同一对象，不复制数据，避免出现第二份映射事实。
+ */
+export const VEO_MEDIA_SLOT_FIELD_KEYS = MEDIA_SLOT_FIELD_KEYS;
+
 // ---------------------------------------------------------------------------
 // 参数表单字段（提炼自在役包，label/description 为本地化键）
 // ---------------------------------------------------------------------------

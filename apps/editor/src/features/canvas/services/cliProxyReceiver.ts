@@ -14,20 +14,8 @@
  *
  * 映射口径：
  * - `asset.import` → 既有导入链（前置校验原子性 → 写盘登记 → 素材节点落图 → 整批一条撤销；复用边界见 cliAssetImport.ts）。
- * - `canvas.group.create` → `createGroup`（组语义 docs/runtime/画布节点组.md）：
- *   成员不存在 → `node_not_found`；成员含组节点 → `command_rejected`（组不得入组，AG-CN-001；
- *   createGroup 对非法成员按静默过滤处理，映射层在此显式拒绝，避免静默丢成员的假成功）。
- *   已归属其他容器的成员先解除归属再建组（spec §5.3「成员已归属其他组时按空间归属改写语义
- *   重新归属，与界面拖拽同语义」），解除归属与建组在同一历史合批内收口为一条撤销记录
- *   （historyBatchActive 既有合批模式，本映射不自建第二套入栈）；组名经 `renameGroup`
- *   落到组节点（renameGroup 非合批感知，独立成一条历史，用户可逐步撤销）。
- * - `canvas.group.dissolve` → 按容器类型分述（spec CLI-027；docs/runtime/画布节点组.md「解散」）：
- *   组 → 删除咽喉 `removeNodes([groupId], { deleteGroupMembers: false })`——画布级删除组与
- *   解散是同一解散数据动作，成员关系解除、组节点删除、绑定组注释级联在同一存储写入路径收口
- *   （不连删，成员保留原位）；Agent 容器 → `dissolveAgentContainer`（纯解除成员关系，头节点
- *   保留回落单节点形态，会话与历史保留）。目标不存在 → `group_not_found`；目标非容器节点 →
- *   `command_rejected`；无成员（单节点形态）的 Agent 节点 → `command_rejected`（AG-CN-015）。
- *   响应回传解散前成员 id 列表。
+ * - `canvas.group.create / dissolve / add / remove` → 组/容器命令映射拆到
+ *   `cliProxyGroupCommands.ts`（建组、解散、成员加入与移出；复用既有编辑 action 与删除咽喉）。
  * - `canvas.node.move` → `updateNodePositionsBatch`（与界面拖拽同一位置写入 action，伴随节点
  *   跟随与容器 position 重派生走其既有展开逻辑，spec CLI-028）。目标不存在 → `node_not_found`；
  *   目标是容器节点 → `command_rejected`（组位置是成员包围盒的派生量、不独立可写，移动一律
@@ -82,15 +70,16 @@ import {
 } from '@/features/canvas/services/groupMembership';
 import {
   buildErrorResponse,
+  projectNotOpenResponse,
   readBackendRejectionDetail,
   readRecordStringField,
 } from './cliProxyErrorResponses';
+import { executeGroupCommand } from './cliProxyGroupCommands';
 import { expandRemovalWithCompanions } from '@/features/canvas/services/nodeCompanion/nodeCompanionManager';
 import {
   buildProgrammaticIntentFromCliParams,
   submitGenerationBatchFromIntent,
 } from '@/features/promptdock/programmaticSubmission';
-import { createBirthGroup } from '@/features/promptdock/projection/taskProjectionService';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
 import type { NodeGraph } from '@/features/canvas/types';
 import { executeAssetImport } from './cliAssetImport';
@@ -117,23 +106,6 @@ const enqueueCommand = (task: () => Promise<void>): Promise<void> => {
 // 三条命令的执行映射
 // ---------------------------------------------------------------------------
 
-/** 项目上下文缺失（nodeGraph 未载入）时的统一拒绝；条件跳过按仓库纪律留 debug 痕。 */
-const projectNotOpenResponse = (
-  commandName: CliProxyCommand['command'],
-  requestId: string,
-): CliProxyCommandError => {
-  console.debug('[cliProxyReceiver] command skipped: canvas graph not loaded', {
-    request_id: requestId,
-    command: commandName,
-  });
-  return buildErrorResponse(
-    commandName,
-    requestId,
-    'project_not_open',
-    '这个项目还没有在画布中打开，请先在应用中打开项目后再试。',
-  );
-};
-
 /** 从 store 现值读取受影响节点的最终位置映射（缺失节点静默跳过）。 */
 const readFinalPositions = (
   requestId: string,
@@ -152,212 +124,8 @@ const readFinalPositions = (
   return { command: 'canvas.layout', request_id: requestId, positions };
 };
 
-const executeGroupCreate = (
-  command: Extract<CliProxyCommand, { command: 'canvas.group.create' }>,
-): CliProxyCommandResponse => {
-  const requestId = command.request_id;
-  const store = useCanvasStore.getState();
-  const nodeGraph = store.nodeGraph;
-  if (nodeGraph === null) {
-    return projectNotOpenResponse('canvas.group.create', requestId);
-  }
-
-  // 成员去重保序：同一 id 重复出现按一个成员处理
-  const memberIds = [...new Set(command.members)];
-
-  // 空组建组（spec CLI-044，仅 CLI 侧放开；界面多选入口保持 ≥2 语义）：复用出生组自动建组
-  // 实现——视口安全区防重叠块搜索定位（零坐标兜底）+ 空组建组（allowEmpty 专用通道）+ 命名。
-  if (memberIds.length === 0) {
-    const emptyGroupId = createBirthGroup(command.name);
-    if (emptyGroupId === null) {
-      console.debug('[cliProxyReceiver] empty group create failed', { request_id: requestId });
-      return buildErrorResponse(
-        'canvas.group.create',
-        requestId,
-        'internal_error',
-        '无法创建节点组，请稍后重试。',
-      );
-    }
-    return {
-      command: 'canvas.group.create',
-      request_id: requestId,
-      group_node_id: emptyGroupId,
-    };
-  }
-
-  const nodeById = new Map(nodeGraph.nodes.map((node) => [node.id, node] as const));
-
-  // 映射层前置校验（createGroup 对非法成员是静默过滤，CLI 面必须显式拒绝而不是假成功）
-  const missingIds: string[] = [];
-  const groupNodeIds: string[] = [];
-  const reassignedIds: string[] = [];
-  for (const id of memberIds) {
-    const node = nodeById.get(id);
-    if (!node) {
-      missingIds.push(id);
-      continue;
-    }
-    if (node.type === 'group') {
-      groupNodeIds.push(id);
-      continue;
-    }
-    if (isGroupMember(node)) {
-      reassignedIds.push(id);
-    }
-  }
-  if (missingIds.length > 0) {
-    console.debug('[cliProxyReceiver] group create rejected: member nodes not found', {
-      request_id: requestId,
-      missing: missingIds,
-    });
-    return buildErrorResponse(
-      'canvas.group.create',
-      requestId,
-      'node_not_found',
-      `画布上找不到这些节点：${missingIds.join('、')}。请确认节点标识后重试。`,
-    );
-  }
-  if (groupNodeIds.length > 0) {
-    console.debug('[cliProxyReceiver] group create rejected: group nodes in members', {
-      request_id: requestId,
-      groupNodes: groupNodeIds,
-    });
-    return buildErrorResponse(
-      'canvas.group.create',
-      requestId,
-      'command_rejected',
-      `这些节点本身是节点组，不能作为另一个组的成员：${groupNodeIds.join('、')}。请调整成员清单后重试。`,
-    );
-  }
-
-  // 解除既有归属 + 建组在同一历史合批内收口为一条撤销记录（historyBatchActive 既有合批模式，
-  // 与 AgentNodeChrome dissolve 的编排先例一致）；映射层不重复入栈、不重复标脏。
-  let groupId: string | null = null;
-  useCanvasStore.setState((state) => {
-    state.historyBatchActive = true;
-  });
-  try {
-    if (reassignedIds.length > 0) {
-      store.removeNodesFromGroup(reassignedIds);
-    }
-    groupId = store.createGroup(memberIds, undefined);
-  } finally {
-    useCanvasStore.setState((state) => {
-      state.historyBatchActive = false;
-    });
-  }
-
-  if (groupId === null) {
-    // 前置校验已排除全部失败原因，此处是防御分支；解除归属若已生效仍落一条历史保持存储一致。
-    console.debug('[cliProxyReceiver] group create returned no group id', {
-      request_id: requestId,
-    });
-    if (reassignedIds.length > 0) {
-      useCanvasStore.getState().saveToHistory();
-    }
-    return buildErrorResponse(
-      'canvas.group.create',
-      requestId,
-      'internal_error',
-      '无法创建节点组，请稍后重试。',
-    );
-  }
-
-  useCanvasStore.getState().saveToHistory();
-
-  const groupName = command.name.trim();
-  if (groupName.length > 0) {
-    // renameGroup 非合批感知，独立成一条历史：用户可在界面上逐步撤销 Agent 的建组与命名。
-    useCanvasStore.getState().renameGroup(groupId, groupName);
-  }
-
-  return {
-    command: 'canvas.group.create',
-    request_id: requestId,
-    group_node_id: groupId,
-  };
-};
-
-/**
- * canvas.group.dissolve → 按容器类型分述的解散（spec CLI-027；docs/runtime/画布节点组.md「解散」）。
- *
- * 组：映射删除咽喉 removeNodes（deleteGroupMembers=false，不连删）——画布级删除组与解散是
- * 同一个解散数据动作，成员关系解除、组节点删除、绑定组注释级联在同一存储写入路径收口；
- * Agent 容器：映射 dissolveAgentContainer（纯解除成员关系，头节点保留、会话保留）。
- * 成员列表在动作执行前从 store 现值捕获，随响应回传。
- */
-const executeGroupDissolve = (
-  command: Extract<CliProxyCommand, { command: 'canvas.group.dissolve' }>,
-): CliProxyCommandResponse => {
-  const requestId = command.request_id;
-  const store = useCanvasStore.getState();
-  const nodeGraph = store.nodeGraph;
-  if (nodeGraph === null) {
-    return projectNotOpenResponse('canvas.group.dissolve', requestId);
-  }
-
-  const target = nodeGraph.nodes.find((node) => node.id === command.group);
-  if (!target) {
-    console.debug('[cliProxyReceiver] group dissolve rejected: container not found', {
-      request_id: requestId,
-      group: command.group,
-    });
-    return buildErrorResponse(
-      'canvas.group.dissolve',
-      requestId,
-      'group_not_found',
-      `画布上找不到这个组：${command.group}。请确认组标识后重试。`,
-    );
-  }
-  if (!isContainerNode(target)) {
-    console.debug('[cliProxyReceiver] group dissolve rejected: target is not a container', {
-      request_id: requestId,
-      group: command.group,
-      nodeType: target.type,
-    });
-    return buildErrorResponse(
-      'canvas.group.dissolve',
-      requestId,
-      'command_rejected',
-      `这个节点不是节点组：${command.group}。解散命令只作用于节点组或 Agent 容器。`,
-    );
-  }
-  if (target.type === 'agent') {
-    // Agent 容器解散仅对容器形态（有成员）可用（AG-CN-015）：无成员已是单节点形态、无组织关系可解除
-    const members = getGroupMembers(nodeGraph, command.group);
-    const dissolved = store.dissolveAgentContainer(command.group);
-    if (!dissolved) {
-      console.debug('[cliProxyReceiver] group dissolve rejected: agent node has no members', {
-        request_id: requestId,
-        group: command.group,
-      });
-      return buildErrorResponse(
-        'canvas.group.dissolve',
-        requestId,
-        'command_rejected',
-        `这个 Agent 节点当前没有成员，已呈单节点形态，无需解散：${command.group}。`,
-      );
-    }
-    return {
-      command: 'canvas.group.dissolve',
-      request_id: requestId,
-      dissolved: true,
-      group_node_id: command.group,
-      member_ids: members.map((member) => member.id),
-    };
-  }
-
-  // 组解散 = 画布级删除组的同一解散数据动作：走删除咽喉（不连删），成员保留原位、归属解除。
-  const members = getGroupMembers(nodeGraph, command.group);
-  store.removeNodes([command.group], { deleteGroupMembers: false });
-  return {
-    command: 'canvas.group.dissolve',
-    request_id: requestId,
-    dissolved: true,
-    group_node_id: command.group,
-    member_ids: members.map((member) => member.id),
-  };
-};
+// 组/容器命令映射（create / dissolve / add / remove）拆到 cliProxyGroupCommands.ts
+// （行数预算拆分，先例同 cliProxyErrorResponses / cliAssetImport）；接收器只保留分派。
 
 /**
  * canvas.node.move → updateNodePositionsBatch（spec CLI-028）。
@@ -843,9 +611,10 @@ export const executeCliProxyCommand = async (
     case 'asset.import':
       return executeAssetImport(command);
     case 'canvas.group.create':
-      return executeGroupCreate(command);
     case 'canvas.group.dissolve':
-      return executeGroupDissolve(command);
+    case 'canvas.group.add':
+    case 'canvas.group.remove':
+      return executeGroupCommand(command);
     case 'canvas.node.move':
       return executeNodeMove(command);
     case 'canvas.node.delete':
@@ -932,6 +701,8 @@ export const handleCliProxyPayload = (
       rawCommand === 'asset.import' ||
       rawCommand === 'canvas.group.create' ||
       rawCommand === 'canvas.group.dissolve' ||
+      rawCommand === 'canvas.group.add' ||
+      rawCommand === 'canvas.group.remove' ||
       rawCommand === 'canvas.node.move' ||
       rawCommand === 'canvas.node.delete' ||
       rawCommand === 'canvas.layout' ||

@@ -43,14 +43,16 @@ const MEDIA_UPLOAD_COMPONENT_TO_KIND: Record<string, string> = {
 };
 
 /**
- * 从 projection 的 parameter_schema.fields 建立 media_kind → field_key 映射。
- * 例如 component="imageUpload" → mediaKind="image" → fieldKey="images"
- * 如果模型未声明某类型字段，该 media_kind 无映射。
+ * 从 projection 的 parameter_schema.fields 建立 media_kind → 全部候选字段键的映射。
+ *
+ * 一个媒体类型可能对应**多个**素材位（如视频生成的首帧 + 尾帧都是 imageUpload）。
+ * 旧实现用 Map<string,string> 逐个覆盖，结果是「后声明的位胜出」——图片被整体倒进最后
+ * 那一个位，且不报错。这里保留全部候选，交给分桶逻辑判断是否无歧义。
  */
-const buildMediaKindToFieldKeyMap = (
+const buildMediaKindToFieldKeysMap = (
   projection: PlainObject,
-): Map<string, string> => {
-  const mapping = new Map<string, string>();
+): Map<string, string[]> => {
+  const mapping = new Map<string, string[]>();
   const parameterSchema = readOpenField(projection, "parameter_schema");
   if (!isPlainObject(parameterSchema)) return mapping;
   const schemaFields = readOpenField(parameterSchema, "fields");
@@ -62,7 +64,12 @@ const buildMediaKindToFieldKeyMap = (
     if (!fieldKey) continue;
     const mediaKind = MEDIA_UPLOAD_COMPONENT_TO_KIND[component];
     if (mediaKind === undefined) continue;
-    mapping.set(mediaKind, fieldKey);
+    const existing = mapping.get(mediaKind);
+    if (existing === undefined) {
+      mapping.set(mediaKind, [fieldKey]);
+    } else if (!existing.includes(fieldKey)) {
+      existing.push(fieldKey);
+    }
   }
   return mapping;
 };
@@ -246,7 +253,7 @@ const normalizeMediaInputBuckets = async (
   projection: PlainObject,
   projectPath: string | null = null,
 ): Promise<MediaInputBuckets> => {
-  const mediaKindToFieldKey = buildMediaKindToFieldKeyMap(projection);
+  const mediaKindToFieldKeys = buildMediaKindToFieldKeysMap(projection);
   const buckets: MediaInputBuckets = {};
   if (mediaInputs === undefined || mediaInputs === null) {
     const projectionRaw = asProjectionRaw(projection);
@@ -281,9 +288,34 @@ const normalizeMediaInputBuckets = async (
       );
     }
     ensureProjectionSupportsMediaKind(projection, mediaKind);
-    const fieldKey = mediaKindToFieldKey.get(mediaKind) || mediaKind;
-    if (!buckets[fieldKey]) {
-      buckets[fieldKey] = [];
+    // 分桶键优先级：显式字段绑定 > 该媒体类型唯一候选位 > 明确失败。
+    //
+    // 不做「按声明顺序取一个」的启发式：多素材位模型上猜错位不会报错，只会产出一张语义
+    // 错了的图（首帧被当成尾帧），比直接失败更难发现。
+    const explicitFieldKey = normalizeString(mediaInput.field_key);
+    const candidates = mediaKindToFieldKeys.get(mediaKind) ?? [];
+    let fieldKey: string;
+    if (explicitFieldKey) {
+      if (candidates.length > 0 && !candidates.includes(explicitFieldKey)) {
+        throw invalidArguments(
+          `media_inputs field_key "${explicitFieldKey}" is not a media field of this model (candidates: ${candidates.join(', ')})`,
+        );
+      }
+      fieldKey = explicitFieldKey;
+    } else if (candidates.length === 1) {
+      // 长度已判为 1，索引 0 必然存在；显式兜底避免 noUncheckedIndexedAccess 下的可选类型。
+      fieldKey = candidates[0] ?? mediaKind;
+    } else if (candidates.length === 0) {
+      fieldKey = mediaKind;
+    } else {
+      throw invalidArguments(
+        `media_inputs requires an explicit field_key: this model declares ${candidates.length} fields accepting ${mediaKind} (${candidates.join(', ')}); set field_key on the media entry to say which one it belongs to`,
+      );
+    }
+    const existingBucket = buckets[fieldKey];
+    const bucket = existingBucket ?? [];
+    if (existingBucket === undefined) {
+      buckets[fieldKey] = bucket;
     }
     const source = resolveMediaSourceValue(
       sourceKind,
@@ -291,7 +323,7 @@ const normalizeMediaInputBuckets = async (
       mediaInput.mime_type,
       projectPath,
     );
-    buckets[fieldKey].push(
+    bucket.push(
       projectResolvedMediaSourceForDraft(
         source,
         mediaKind,

@@ -32,27 +32,23 @@ import type { CliGenerationArchive } from "@iart/contracts";
 import { buildGenerationArchive, resolveTaskBatchId } from "./cli-generation-archive.cjs";
 import type { CliProxyCommandCandidate, CliProxyDispatchOutcome } from "./cli-proxy-dispatcher.cjs";
 import { resolveCliProject, type CliProjectRegistryReader, type CliResolvedProject } from "./cli-project-resolver.cjs";
+import { buildGenerationWarnings, toCliAssetWithLocalPath } from "./cli-task-result-projection.cjs";
+
+// 纯函数出口（尺寸提示单测按执行器模块取用）；实现承载在 cli-task-result-projection（行数预算拆分）。
+export { buildGenerationWarnings };
 
 /**
  * CLI 命令执行器注册表（spec docs/integrations/CLI与本地Agent集成.md §4.2 分派规则）。
- *
- * 本批次（批次四）接入 21 条：项目生命周期 6 + 只读查询 7 + 画布命令 5 + 生成与任务 3
- * （画布命令含 2026-10-14 增补的 group dissolve / node move / node delete 与 layout --order）；
- * 另有应用状态感知 app.status（spec §5.5，CLI-020/021）：主进程直答打开集合，
- * 选中态逐窗口经代理执行通道只读查询（canvas.selection.get，不映射 action、不产生写入）。
- *
+ * 本批次（批次四）接入 21 条：项目生命周期 6 + 只读查询 7 + 画布命令 8 + 生成与任务 3
+ * （画布命令含 group dissolve / node move / node delete / layout 与 group add / group remove）；
+ * 另有应用状态感知 app.status（spec §5.5，CLI-020/021）。
  * 分派规则是固定语义（spec §4.2），同一命令不得因调用方不同而改变执行后端或前提条件：
  * - 项目生命周期 → 主进程存储服务与窗口控制（全部复用既有实现，不另建执行路径）；
  * - 只读查询 → 运行域代理转发（模型/任务）或存储只读投影（资产/画布节点），项目未打开也可用；
- * - 画布命令 / 生成提交 → 代理执行通道 → 画布窗口，**要求项目已打开**：无窗口一律
- *   project_not_open 拒绝（CLI-007），编辑域存储无任何写入、不做任何降级（spec §13）；
- * - task.cancel → 项目已打开走代理通道（复用用户取消链）；项目未打开走运行域取消端点
- *   （CLI-012 两形态）；
- * - task.wait → 运行域轮询（本地控制服务内轮询 backend 任务端点至终态，产物资产经存储只读投影）。
- *
- * 依赖全部注入（可测性）：测试以假实现构造本模块，不经 Electron 与 better-sqlite3。
- * 执行器返回 { response, errorCode }：业务错误以 ok:false 响应返回（命令日志记 errorCode），
- * 未预期异常向上抛由控制服务兜底 internal_error。
+ * - 画布命令 / 生成提交 → 代理执行通道 → 画布窗口，**要求项目已打开**：无窗口一律 project_not_open（CLI-007），不做任何降级（spec §13）；
+ * - task.cancel → 项目已打开走代理通道（复用用户取消链），未打开走运行域取消端点（CLI-012）；
+ * - task.wait → 运行域轮询至终态，产物资产经存储只读投影。
+ * 依赖全部注入（可测性）；执行器返回 { response, errorCode }：业务错误以 ok:false 响应返回（命令日志记 errorCode），未预期异常向上抛由控制服务兜底 internal_error。
  */
 
 export type CliExecutorResult = { response: unknown; errorCode: CliErrorCode | null };
@@ -253,6 +249,12 @@ const proxyOutcomeToResult = (
         group_node_id: response.group_node_id,
         member_ids: response.member_ids,
       });
+    case "canvas.group.add":
+    case "canvas.group.remove": {
+      // 成员加入/移出结果直通（加入三组标识按加入前归属分类；移出为实际移出集合）。
+      const { command: _command, request_id: _requestId, ...membershipOutcome } = response;
+      return okResult(command, membershipOutcome);
+    }
     case "canvas.node.move":
       return okResult(command, {
         node_id: response.node_id,
@@ -283,16 +285,6 @@ const proxyOutcomeToResult = (
       // 防御分支：画布状态只读查询不经本映射（app.status 执行器直读 selection），不应到达此处。
       return errorResult(command, "internal_error", "命令执行出现内部错误，请稍后重试。");
   }
-};
-
-/** 产物资产 → 带本地绝对路径的契约条目；无法定位本地文件的资产跳过并留痕。 */
-const toCliAssetWithLocalPath = (
-  projectPath: string,
-  asset: RuntimeMediaAssetView,
-): { asset: RuntimeMediaAssetView; local_file_path: string } | null => {
-  const localFilePath = resolveLocalMediaFilePath(projectPath, asset);
-  if (localFilePath === null) return null;
-  return { asset, local_file_path: localFilePath };
 };
 
 export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<CliCommandRequest["command"], CliCommandExecutor> => {
@@ -729,6 +721,8 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
             task_result: {
               task: parsed.task,
               assets,
+              // 生成终态尺寸对照（CLI-050）：信息性提示，不改变任务状态与 ok。
+              warnings: buildGenerationWarnings(parsed.task, assets),
               node_id: identity?.node_id ?? null,
               group_id: identity?.group_id ?? null,
             },
@@ -789,6 +783,22 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
     });
     return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
   });
+
+  for (const membershipCommand of ["canvas.group.add", "canvas.group.remove"] as const) {
+    registry.set(membershipCommand, async (request) => {
+      if (request.command !== "canvas.group.add" && request.command !== "canvas.group.remove") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
+      const resolution = resolveProjectOrFail(request, deps);
+      if (!resolution.ok) return resolution.result;
+      const guard = guardProjectOpenOrFail(membershipCommand, resolution.project.path, deps);
+      if (guard !== null) return guard;
+      const fields = { group: request.group, members: request.members };
+      const candidate = membershipCommand === "canvas.group.add"
+        ? { command: "canvas.group.add" as const, ...fields }
+        : { command: "canvas.group.remove" as const, ...fields };
+      const outcome = await deps.proxy.dispatch(resolution.project.path, candidate);
+      return proxyOutcomeToResult(membershipCommand, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
+    });
+  }
 
   registry.set("canvas.node.move", async (request) => {
     if (request.command !== "canvas.node.move") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");

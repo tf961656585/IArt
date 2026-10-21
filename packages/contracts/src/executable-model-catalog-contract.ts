@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { GenerationMediaSlotIdSchema } from './custom-generation-model-contract';
 import { ThinkingTierSchema } from './thinking-tier-contract';
 
 /**
@@ -135,6 +136,27 @@ export type ExecutableCatalogDeployment = z.infer<typeof ExecutableCatalogDeploy
 // 可执行模型目录条目与响应
 // ---------------------------------------------------------------------------
 
+/** 单个媒体素材位：模型当前记录实际启用的某个「放媒体的位置」（首帧 / 尾帧 / 参考图 …）。 */
+export const ExecutableCatalogMediaSlotSchema = z
+  .object({
+    /** 素材位标识，复用记录契约的生成媒体位枚举（reference_image / first_frame / last_frame …） */
+    slotId: GenerationMediaSlotIdSchema,
+    /** 该素材位对应的参数字段键（如 firstFrameImage）；Editor 据此把用途映射到提交字段。
+     *  命名与同文件 `ExecutableCatalogParameterFieldSchema.fieldKey` 保持一致。 */
+    fieldKey: z.string().min(1),
+    /** 该位是否必填（与 parameter_schema.required_fields 必须同口径） */
+    required: z.boolean(),
+    /** 该位可放几张 */
+    maxFiles: z.number().int().min(1),
+    /** 该位接受的媒体类型 */
+    mediaKind: z.enum(['image', 'video', 'audio']),
+    /** 中文展示名（来自族模板本地化资源；缺失时为空串，消费端回退到 fieldKey） */
+    label: z.string(),
+  })
+  .strict();
+
+export type ExecutableCatalogMediaSlot = z.infer<typeof ExecutableCatalogMediaSlotSchema>;
+
 export const ExecutableModelDirectoryEntrySchema = z
   .object({
     model_id: z.string().min(1),
@@ -151,6 +173,16 @@ export const ExecutableModelDirectoryEntrySchema = z
      */
     display_order: z.number().optional(),
     capability: ExecutableCatalogModelCapabilitySchema,
+    /**
+     * 该模型当前记录实际启用的媒体素材位；无素材位的族为空数组。
+     *
+     * **可选而不是 `.default([])`**：Zod 的 `.default()` 会让**输出**类型变成必填，所有手工
+     * 构造本 DTO 的消费方（含大量测试夹具）都要为一个它们不关心的字段补值。本字段是
+     * 「有素材位才需要」的补充信息，缺省等价于无素材位——消费端按 `?? []` 读。
+     *
+     * 生产侧（Runtime Backend 的目录投影）恒写该字段，不会省略。
+     */
+    media_slots: z.array(ExecutableCatalogMediaSlotSchema).optional(),
     parameter_schema: ExecutableCatalogParameterSchemaSchema,
     deployment: ExecutableCatalogDeploymentSchema,
   })

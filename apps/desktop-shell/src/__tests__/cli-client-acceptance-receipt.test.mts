@@ -88,6 +88,7 @@ const makeFetchStub = (events: string[]): typeof fetch => {
         task_result: {
           task: { taskId, status: "succeeded", projectPath: PROJECT_PATH, createdAt: 1, updatedAt: 2 },
           assets: [],
+          warnings: [],
           node_id: null,
           group_id: null,
         },

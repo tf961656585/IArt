@@ -1,0 +1,160 @@
+import type { ExecutableCatalogMediaSlot } from '@iart/contracts';
+
+import type { PromptDockReference } from './PromptDock.types';
+
+/**
+ * 本模块需要的模型目录信息（结构子集）。
+ *
+ * 只声明 `media_slots` 一个字段：用途域的全部判据只依赖素材位清单，不读模型的其他属性。
+ * 用结构子集而不是绑死 `PromptDockCatalogEntry`，让本模块在测试里能用窄替身、也让
+ * 「它到底依赖什么」写在签名上。
+ */
+export type SlotCatalogEntry = {
+  /**
+   * `| undefined` 是必需的：`exactOptionalPropertyTypes` 下 `?: X` 只表示「键可缺席」，
+   * 不接受「键存在且值为 undefined」；而目录契约里该字段正是 `X | undefined`。
+   */
+  media_slots?: readonly ExecutableCatalogMediaSlot[] | undefined;
+};
+
+/**
+ * PromptDock 参考区「用途」域模型（纯逻辑，无 React / 无 i18n）。
+ *
+ * 设计依据：`docs/editor/PromptDock参考区用途标注-design.md`。
+ *
+ * 单一事实源纪律：候选用途只来自模型目录下发的 `media_slots`，本文件不保存任何
+ * 「哪族支持哪些位」的表；本文件只做「给定模型 + 给定媒体类型 → 候选用途」与
+ * 「给定草稿 → 阻断结论」的推导。
+ */
+
+/** 某媒体类型在当前模型上的候选用途（按目录下发顺序）。 */
+export const candidateSlots = (
+  entry: SlotCatalogEntry | null | undefined,
+  mediaType: 'image' | 'video' | 'audio',
+): ExecutableCatalogMediaSlot[] =>
+  (entry?.media_slots ?? []).filter((slot) => slot.mediaKind === mediaType);
+
+/**
+ * 引用的用途取值（归一）：`undefined` 与 `null` 同义，都是「未指定」。
+ *
+ * 条目类型上 `slotId` 是可选，读取侧一律经此归一，避免 `undefined !== null` 这类判错。
+ */
+export const slotIdOf = (reference: PromptDockReference): string | null => reference.slotId ?? null;
+
+/** 该用途位是否可放多张（多张位即「普通参考」这类用途）。 */
+export const slotIsMulti = (slot: ExecutableCatalogMediaSlot): boolean => slot.maxFiles > 1;
+
+/**
+ * 加入参考时的默认落位（设计 §4.3，一次判定、不做二次推断）：
+ * - 只有一个候选 → 直接绑该用途；
+ * - 有多个候选且存在多张位 → 绑该多张位；
+ * - 有多个候选且全是单张位 → 未指定（**刻意不按 schema 第一位自动占用**：
+ *   把「用户没表达」当成「用户先要首帧」，推错就产出语义错且不报错的结果）。
+ */
+export const defaultSlotId = (
+  entry: SlotCatalogEntry | null | undefined,
+  mediaType: 'image' | 'video' | 'audio',
+): string | null => {
+  const candidates = candidateSlots(entry, mediaType);
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0]?.slotId ?? null;
+  const multi = candidates.find((slot) => slotIsMulti(slot));
+  return multi?.slotId ?? null;
+};
+
+/** 某用途位当前被哪张图占用（单张位同一时刻只允许一张；多张位不占用）。 */
+export const slotOccupant = (
+  references: readonly PromptDockReference[],
+  slot: ExecutableCatalogMediaSlot,
+): PromptDockReference | null => {
+  if (slotIsMulti(slot)) return null;
+  return references.find((ref) => slotIdOf(ref) === slot.slotId) ?? null;
+};
+
+/** 把某条引用的用途改为 `slotId`；若目标单张位已被另一张占用，原占用者退回「未指定」。 */
+export const reassignSlot = (
+  references: readonly PromptDockReference[],
+  refId: string,
+  slotId: string | null,
+  entry: SlotCatalogEntry | null | undefined,
+): PromptDockReference[] => {
+  const target = references.find((ref) => ref.refId === refId);
+  if (target === undefined) return [...references];
+  const candidates = candidateSlots(entry, target.mediaType);
+  const slot = candidates.find((candidate) => candidate.slotId === slotId);
+  return references.map((ref) => {
+    if (ref.refId === refId) return { ...ref, slotId };
+    // 换绑：目标为单张位且已被别人占用时，原占用者退回未指定（不删图、不出现「选不了」死角）。
+    if (slot !== undefined && !slotIsMulti(slot) && slotIdOf(ref) === slotId) {
+      return { ...ref, slotId: null };
+    }
+    return ref;
+  });
+};
+
+/** 模型切换后的用途重判（设计 §4.5）。 */
+export const rejudgeReferencesForModel = (
+  references: readonly PromptDockReference[],
+  entry: SlotCatalogEntry | null | undefined,
+): PromptDockReference[] =>
+  references.map((ref) => {
+    const candidates = candidateSlots(entry, ref.mediaType);
+    const currentSlotId = slotIdOf(ref);
+    if (currentSlotId !== null && candidates.some((slot) => slot.slotId === currentSlotId)) {
+      // 新模型仍有同名素材位 → 原样保留。
+      return ref;
+    }
+    const next = defaultSlotId(entry, ref.mediaType);
+    // 重判出的单张位若已被其它引用占用，保持未指定（不抢位、不静默删图）。
+    if (next !== null) {
+      const nextSlot = candidates.find((slot) => slot.slotId === next);
+      if (nextSlot !== undefined && !slotIsMulti(nextSlot)) {
+        const taken = references.some((other) => other.refId !== ref.refId && slotIdOf(other) === next);
+        if (taken) return { ...ref, slotId: null };
+      }
+    }
+    return { ...ref, slotId: next };
+  });
+
+/** 用途阻断的两类原因（供前置校验与界面呈现共用同一判据）。 */
+export type SlotProblem =
+  | { kind: 'required-slot-empty'; fieldKey: string; slotId: string; label: string }
+  | { kind: 'unspecified-reference'; refId: string; label: string };
+
+/**
+ * 参考区用途层面的问题（设计 §6）。
+ *
+ * 只读草稿的参考条目与模型目录条目，不读参数值、不读后端组装结果——
+ * 「`[]` 能过校验」那条旧判据因此被就地关掉，而不是在组装期兜。
+ */
+export const collectSlotProblems = (
+  references: readonly PromptDockReference[],
+  entry: SlotCatalogEntry | null | undefined,
+): SlotProblem[] => {
+  const problems: SlotProblem[] = [];
+  if (entry === null || entry === undefined) return problems;
+  const slots = entry.media_slots ?? [];
+  if (slots.length === 0) return problems;
+
+  // 必填素材位必须有某张已标用途的引用占用。
+  for (const slot of slots) {
+    if (!slot.required) continue;
+    const occupied = references.some((ref) => slotIdOf(ref) === slot.slotId);
+    if (!occupied) {
+      problems.push({
+        kind: 'required-slot-empty',
+        fieldKey: slot.fieldKey,
+        slotId: slot.slotId,
+        label: slot.label.length > 0 ? slot.label : slot.fieldKey,
+      });
+    }
+  }
+
+  // 存在未指定用途的引用（仅当该引用有可选用途时才要求指定）。
+  for (const ref of references) {
+    if (slotIdOf(ref) !== null) continue;
+    if (candidateSlots(entry, ref.mediaType).length === 0) continue;
+    problems.push({ kind: 'unspecified-reference', refId: ref.refId, label: ref.label });
+  }
+  return problems;
+};

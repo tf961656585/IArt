@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   buildRuntimeTaskRow,
+  buildRuntimeTaskView,
   normalizeRuntimeTaskFailure,
 } from '../task-payload-builder.cts';
 
@@ -118,5 +119,39 @@ void describe('task-payload-builder failure normalization', () => {
     assert.equal(withoutTimes.finishedAt, null);
     assert.equal('startedAt' in withoutTimes, true);
     assert.equal('finishedAt' in withoutTimes, true);
+  });
+
+  void it('normalizes progressPhase to null in failed and cancelled task views', () => {
+    for (const status of ['failed', 'cancelled'] as const) {
+      const view = buildRuntimeTaskView({
+        id: `task-${status}-view`,
+        status,
+        projectPath: '/tmp/demo.iartproj',
+        progress: { phase: 'requesting', percent: 37 },
+        error: { code: 'task_execution_failed', message: 'boom' },
+      });
+      assert.equal(view.progressPhase, null, `${status} 视图不得残留 progressPhase`);
+      assert.equal(view.progressPercent, 37, '其余 progress 字段应保留');
+    }
+  });
+
+  void it('keeps progressPhase for non-terminal statuses', () => {
+    const row = buildRuntimeTaskRow({
+      id: 'task-submitting-phase',
+      status: 'submitting',
+      projectPath: '/tmp/demo.iartproj',
+      progress: { phase: 'requesting' },
+    });
+    assert.equal(row.progressPhase, 'requesting');
+  });
+
+  void it('keeps the legal succeeded completed phase', () => {
+    const view = buildRuntimeTaskView({
+      id: 'task-succeeded-view',
+      status: 'succeeded',
+      projectPath: '/tmp/demo.iartproj',
+      progress: { phase: 'completed', percent: 100 },
+    });
+    assert.equal(view.progressPhase, 'completed');
   });
 });

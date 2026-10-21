@@ -1,5 +1,5 @@
 // @vitest-environment node
-// @spec: CLI-038, CLI-039, CLI-040, CLI-041, CLI-042
+// @spec: CLI-038, CLI-039, CLI-040, CLI-041, CLI-042, CLI-050
 //
 // 生成档案读取接缝测试（spec docs/integrations/CLI与本地Agent集成.md §5.2 batch get /
 // asset get 内联 / task get 内联、§5.5 --version、解析失败输出口径）。
@@ -62,6 +62,7 @@ type ReadModelModule = {
   readBatchById: (db: unknown, batchId: string) => Record<string, unknown> | null;
   readTaskById: (db: unknown, taskId: string) => Record<string, unknown> | null;
   readTaskOutputAssetIndex: (db: unknown) => Map<string, string>;
+  readMediaAssetsByTaskId: (db: unknown, taskId: string) => Record<string, unknown>[];
   readMediaAssetById: (db: unknown, assetId: string) => Record<string, unknown> | null;
   readAllMediaAssets: (db: unknown) => Record<string, unknown>[];
 };
@@ -152,6 +153,17 @@ const seedRealRecords = (): void => {
         projectPath,
         batchId: BATCH_ID,
         metadataJson: JSON.stringify({ batchId: BATCH_ID, taskIndex: 0 }),
+        // 请求尺寸（multipart 摘要形态）16x9，真实产物 8x8：task wait 终态尺寸提示的接缝数据源。
+        requestJson: JSON.stringify({
+          method: "POST",
+          body: {
+            __formData: {
+              kind: "form_data_summary",
+              fieldCount: 1,
+              fields: [{ name: "size", filename: null, contentType: null, hasDataBase64: false, value: "16x9" }],
+            },
+          },
+        }),
         createdAt: 10,
         updatedAt: 20,
       },
@@ -260,7 +272,9 @@ const buildExecutorDeps = (): Record<string, unknown> => {
       readMediaAssetById: (path: string, assetId: string) =>
         path === projectPath ? readModel.readMediaAssetById(db, assetId) : null,
       readAssetTaskIndex: (path: string) => (path === projectPath ? readModel.readTaskOutputAssetIndex(db) : new Map()),
-      readTaskOutputAssets: () => [],
+      // task wait 的产物资产走真实读取链（task_outputs → media_assets）；尺寸提示据此对照请求尺寸。
+      readTaskOutputAssets: (path: string, taskId: string) =>
+        path === projectPath ? readModel.readMediaAssetsByTaskId(db, taskId) : [],
       readBatchByClientRequestId: () => null,
       readTaskViewsByBatchId: () => [],
       readTaskById: (path: string, taskId: string): unknown =>
@@ -354,6 +368,23 @@ describe("生成档案读取接缝（真实存储 + 真实读取链 + 真实执�
     expect(archive).toEqual(batchArchive);
   });
 
+  it("task wait：请求 16x9、真实产物 8x8 → warnings 非空，ok 与任务状态不变（CLI-050）", async () => {
+    const result = await runCli(["task", "wait", TASK_A, "--project", projectPath, "--json"]);
+    expect(result.exitCode).toBe(0);
+    const parsed = parseCliResponse(result);
+    if (!parsed.ok || parsed.command !== "task.wait") throw new Error("unexpected response");
+    expect(parsed.task_result.task.status).toBe("succeeded");
+    expect(parsed.task_result.assets).toHaveLength(1);
+    expect(parsed.task_result.warnings).toEqual([
+      {
+        code: "requested_size_not_honored",
+        message: "请求尺寸 16x9，实际产出 8x8。生成任务已成功，尺寸以实际产物为准。",
+        requested_size: "16x9",
+        actual_sizes: ["8x8"],
+      },
+    ]);
+  });
+
   it("旧快照（无 reference_asset_ids）：由 media_refs fileKey 内容指纹反查资产", async () => {
     const result = await runCli(["task", "get", TASK_LEGACY, "--project", projectPath, "--json"]);
     expect(result.exitCode).toBe(0);
@@ -399,8 +430,8 @@ describe("生成档案读取接缝（真实存储 + 真实读取链 + 真实执�
     });
   });
 
-  it("命令表共 25 条且含 batch.get / canvas.group.list / asset.import（契约命令表守卫）", () => {
-    expect(CLI_COMMANDS.length).toBe(25);
+  it("命令表共 27 条且含 batch.get / canvas.group.list / asset.import（契约命令表守卫）", () => {
+    expect(CLI_COMMANDS.length).toBe(27);
     expect(CLI_COMMANDS).toContain("canvas.group.list");
     expect(CLI_COMMANDS).toContain("batch.get");
     expect(CLI_COMMANDS).toContain("asset.import");

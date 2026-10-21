@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// @spec: CLI-043, CLI-044, CLI-046, CLI-033
+// @spec: CLI-043, CLI-044, CLI-046, CLI-033, CLI-049
 //
 // CLI 出生组接缝测试（spec docs/integrations/CLI与本地Agent集成.md §5.4 --group / §5.3 空组建组）：
 // 输入从真实链路源头产生（真实 CliProxyCommandSchema 构造命令 → 真实接收器 → 真实程序化提交
@@ -283,6 +283,58 @@ describe('CLI 出生组接缝（CLI-043/CLI-044/CLI-046）', () => {
     expect(groupNodes().length).toBe(groupsBefore + 1);
     const created = groupByName('空组');
     expect(created?.id).toBe(response.group_node_id);
+  });
+
+  it('组成员加入/移出接缝：未归属加入与跨组迁移同批一条撤销，移出保留原位（CLI-049）', async () => {
+    const first = await seedGroup('组一', 1);
+    const second = await seedGroup('组二', 1);
+    const freeNode = useCanvasStore.getState().addNode('asset', { x: 900, y: 900 }, {
+      label: '素材',
+      sourceBatchId: '',
+      sourceTaskId: '',
+      sourceModelId: '',
+      mediaType: 'image',
+      assetId: 'asset_free',
+    } satisfies AssetNodeData);
+    if (!freeNode) throw new Error('seed free node failed');
+    const findMember = (groupId: string) =>
+      useCanvasStore.getState().nodeGraph?.nodes.find((node) => node.groupId === groupId) ?? null;
+    const secondMember = findMember(second.groupId);
+    if (!secondMember) throw new Error('seed second group member failed');
+
+    const addResponse = parseResponse(
+      await executeCliProxyCommand(
+        CliProxyCommandSchema.parse({
+          command: 'canvas.group.add',
+          request_id: 'req-members-1',
+          group: first.groupId,
+          members: [freeNode.id, secondMember.id],
+        }),
+      ),
+    );
+    if (!('added_node_ids' in addResponse)) throw new Error('expected group add success response');
+    expect(addResponse.added_node_ids).toEqual([freeNode.id]);
+    expect(addResponse.moved_node_ids).toEqual([secondMember.id]);
+    const graphAfterAdd = useCanvasStore.getState().nodeGraph;
+    expect(graphAfterAdd?.nodes.find((node) => node.id === freeNode.id)?.groupId).toBe(first.groupId);
+    expect(graphAfterAdd?.nodes.find((node) => node.id === secondMember.id)?.groupId).toBe(first.groupId);
+    expect(findMember(second.groupId)).toBeNull();
+
+    const removeResponse = parseResponse(
+      await executeCliProxyCommand(
+        CliProxyCommandSchema.parse({
+          command: 'canvas.group.remove',
+          request_id: 'req-members-2',
+          group: first.groupId,
+          members: [freeNode.id],
+        }),
+      ),
+    );
+    if (!('removed_node_ids' in removeResponse)) throw new Error('expected group remove success response');
+    expect(removeResponse.removed_node_ids).toEqual([freeNode.id]);
+    const freeAfter = useCanvasStore.getState().nodeGraph?.nodes.find((node) => node.id === freeNode.id);
+    expect(freeAfter?.groupId).toBeUndefined();
+    expect(freeAfter?.position).toEqual(freeNode.position);
   });
 
   it('幂等重放带组：不重复建组建节点，回执回既有投影身份（CLI-033/CLI-043）', async () => {

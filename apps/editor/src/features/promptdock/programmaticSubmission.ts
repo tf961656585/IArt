@@ -133,6 +133,7 @@ export type GenerationSubmissionOutcome =
 const buildReferenceMediaInputs = (
   references: readonly PromptDockReference[],
   mediaAssets: ProjectMediaAssets,
+  entry: PromptDockCatalogEntry | null = null,
 ): TaskSubmitMediaInput[] => {
   const mediaInputs: TaskSubmitMediaInput[] = [];
   for (const ref of references) {
@@ -141,12 +142,20 @@ const buildReferenceMediaInputs = (
       | undefined;
     const url = typeof asset?.original?.url === 'string' ? asset.original.url : '';
     if (!url) continue;
+    // 用途 → 该素材位的参数字段键，作为显式绑定随媒体条目下发（§5.2）。
+    // 不带绑定时，多素材位模型在后端会被明确拒绝（不会静默塞错位）。
+    const refSlotId = ref.slotId ?? null;
+    const slot =
+      refSlotId === null
+        ? undefined
+        : entry?.media_slots?.find((candidate) => candidate.slotId === refSlotId);
     mediaInputs.push({
       media_kind: ref.mediaType,
       source_kind: 'attachment',
       value: url,
       mime_type: typeof asset?.original?.mimeType === 'string' ? asset.original.mimeType : null,
       filename: null,
+      ...(slot === undefined ? {} : { field_key: slot.fieldKey }),
     });
   }
   return mediaInputs;
@@ -301,7 +310,7 @@ export const runGenerationBatchSubmission = async (
   // 提交正文：预设 token 展开为正文（spec「提交契约边界」）；失效 token 已被前置校验阻断，
   // 此处展开不会走 missing:'throw' 兜底。
   const submitPrompt = resolvePromptDockSubmitPrompt(preflightDraft);
-  const mediaInputs = buildReferenceMediaInputs(references, mediaAssets);
+  const mediaInputs = buildReferenceMediaInputs(references, mediaAssets, entry);
   const mentionMap = buildMentionMap(references);
   const response = await submitGenerationBatch({
     model_id: entry.model_id,
@@ -512,6 +521,18 @@ const mapPreflightIssueToCliError = (
       return {
         code: 'command_rejected',
         message: `提示词包含未知的预设引用（${field}），请直接给出提示词正文。`,
+      };
+    case 'slot-required-empty':
+      // CLI 没有用途语法（用途是素材属性，只能在画布侧表达），因此这里不复述可修复动作，
+      // 只说明缺什么、并指向界面上能补的位置。
+      return {
+        code: 'command_rejected',
+        message: `该模型要求「${field}」有一张图，但当前没有图被指定到这个位置。请在画布创作区为该图选择用途后重试。`,
+      };
+    case 'slot-unspecified':
+      return {
+        code: 'command_rejected',
+        message: '有参考图还没有指定用途。请在画布创作区为每张图选择用途后重试。',
       };
   }
 };

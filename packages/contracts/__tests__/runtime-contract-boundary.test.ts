@@ -295,4 +295,41 @@ describe('runtime contract boundary schemas', () => {
     expect(view).not.toBeNull();
     expect(view?.request).toEqual(summaryRequest);
   });
+
+  it('normalizes failed/cancelled progressPhase to null in the shared read projector', () => {
+    const projectRow = (status: string, progressPhase: string | null) =>
+      runtimeTaskRowToView({
+        taskId: `task-phase-${status}`,
+        status,
+        projectPath: '/tmp/runtime-contract.iartproj',
+        progressPhase,
+        createdAt: 1,
+        updatedAt: 2,
+      });
+
+    // 历史行可能残留 requesting / downloading；failed 与 cancelled 的合法阶段只有 null。
+    expect(projectRow('failed', 'requesting')?.progressPhase).toBeNull();
+    expect(projectRow('failed', 'downloading')?.progressPhase).toBeNull();
+    expect(projectRow('cancelled', 'requesting')?.progressPhase).toBeNull();
+    expect(projectRow('cancelled', null)?.progressPhase).toBeNull();
+  });
+
+  it('preserves legal succeeded and non-terminal progressPhase values', () => {
+    const projectRow = (status: string, progressPhase: string | null) =>
+      runtimeTaskRowToView({
+        taskId: `task-phase-${status}`,
+        status,
+        projectPath: '/tmp/runtime-contract.iartproj',
+        progressPhase,
+        createdAt: 1,
+        updatedAt: 2,
+      });
+
+    // succeeded 的 completed 与 null 都合法，投影不得改写。
+    expect(projectRow('succeeded', 'completed')?.progressPhase).toBe('completed');
+    expect(projectRow('succeeded', null)?.progressPhase).toBeNull();
+    // 非终态阶段属于 status 的从属细化字段，投影保持原值。
+    expect(projectRow('submitting', 'requesting')?.progressPhase).toBe('requesting');
+    expect(projectRow('downloading', null)?.progressPhase).toBeNull();
+  });
 });

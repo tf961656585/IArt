@@ -1,5 +1,5 @@
 // @vitest-environment node
-// @spec: CLI-007, CLI-012, CLI-014, CLI-015, CLI-020, CLI-021, CLI-027, CLI-028, CLI-029, CLI-030
+// @spec: CLI-007, CLI-012, CLI-014, CLI-015, CLI-020, CLI-021, CLI-027, CLI-028, CLI-029, CLI-030, CLI-049, CLI-050
 //
 // 画布命令 / 生成提交 / 任务取消执行器测试（spec §4.2 分派规则固定语义）：
 // - canvas.group.create / canvas.layout / generate：无窗口 → project_not_open（CLI-007，
@@ -27,6 +27,24 @@ type ProxyCall = { projectPath: string; candidate: Record<string, unknown> };
 
 type ExecutorModule = {
   createCliCommandExecutors: (deps: Record<string, unknown>) => Registry;
+  buildGenerationWarnings: (
+    task: { request?: Record<string, unknown> | null },
+    assets: readonly GenerationWarningAsset[],
+  ) => GenerationWarning[];
+};
+
+type GenerationWarning = {
+  code: string;
+  message: string;
+  requested_size: string;
+  actual_sizes: string[];
+};
+
+type GenerationWarningAsset = {
+  asset: {
+    mediaType: string;
+    original: { width?: number | null; height?: number | null };
+  };
 };
 
 const loadExecutorModule = (): ExecutorModule => requireDesktop(executorsEntry) as ExecutorModule;
@@ -341,6 +359,106 @@ describe("cli-command-executors 画布命令 / 生成提交（代理执行通道
   });
 });
 
+// @spec: CLI-049
+describe("cli-command-executors canvas.group.add / canvas.group.remove（成员归属）", () => {
+  it("项目未打开 → project_not_open（CLI-007），不触达代理通道", async () => {
+    const { registry, proxyCalls } = buildRegistry({ windowOpen: false });
+    for (const command of ["canvas.group.add", "canvas.group.remove"] as const) {
+      const result = await runExecutor(registry, command, {
+        command,
+        project: "demo",
+        group: "g-1",
+        members: ["n-1", "n-2"],
+      });
+      expect(parseResponse(result)).toMatchObject({ ok: false, error: { code: "project_not_open" } });
+      expect(result.errorCode).toBe("project_not_open");
+    }
+    expect(proxyCalls).toHaveLength(0);
+  });
+
+  it("有窗口 → group/members 原样进代理候选、加入结果直通", async () => {
+    const { registry, proxyCalls } = buildRegistry({
+      windowOpen: true,
+      dispatchOutcome: {
+        ok: true,
+        response: {
+          command: "canvas.group.add",
+          request_id: "r-ga1",
+          group_node_id: "g-1",
+          added_node_ids: ["n-1"],
+          moved_node_ids: ["n-2"],
+          unchanged_node_ids: ["n-3"],
+        },
+      },
+    });
+    const result = await runExecutor(registry, "canvas.group.add", {
+      command: "canvas.group.add",
+      project: "demo",
+      group: "g-1",
+      members: ["n-1", "n-2", "n-3"],
+    });
+    const parsed = parseResponse(result);
+    if (!parsed.ok || parsed.command !== "canvas.group.add") throw new Error("unexpected");
+    expect(parsed.group_node_id).toBe("g-1");
+    expect(parsed.added_node_ids).toEqual(["n-1"]);
+    expect(parsed.moved_node_ids).toEqual(["n-2"]);
+    expect(parsed.unchanged_node_ids).toEqual(["n-3"]);
+    expect(result.errorCode).toBeNull();
+    expect(proxyCalls[0]).toMatchObject({
+      projectPath: PROJECT_PATH,
+      candidate: { command: "canvas.group.add", group: "g-1", members: ["n-1", "n-2", "n-3"] },
+    });
+  });
+
+  it("有窗口 → 移出结果直通，Editor 错误码原样透传", async () => {
+    const { registry, proxyCalls } = buildRegistry({
+      windowOpen: true,
+      dispatchOutcome: {
+        ok: true,
+        response: {
+          command: "canvas.group.remove",
+          request_id: "r-gr1",
+          group_node_id: "g-1",
+          removed_node_ids: ["n-1"],
+        },
+      },
+    });
+    const result = await runExecutor(registry, "canvas.group.remove", {
+      command: "canvas.group.remove",
+      project: "demo",
+      group: "g-1",
+      members: ["n-1"],
+    });
+    const parsed = parseResponse(result);
+    if (!parsed.ok || parsed.command !== "canvas.group.remove") throw new Error("unexpected");
+    expect(parsed.removed_node_ids).toEqual(["n-1"]);
+    expect(proxyCalls[0]?.candidate).toMatchObject({ command: "canvas.group.remove", group: "g-1" });
+
+    const rejected = buildRegistry({
+      windowOpen: true,
+      dispatchOutcome: {
+        ok: true,
+        response: {
+          command: "canvas.group.remove",
+          request_id: "r-gr2",
+          error: { code: "command_rejected", message: "这些节点当前不属于这个组：n-9。" },
+        },
+      },
+    });
+    const rejectedResult = await runExecutor(rejected.registry, "canvas.group.remove", {
+      command: "canvas.group.remove",
+      project: "demo",
+      group: "g-1",
+      members: ["n-9"],
+    });
+    expect(parseResponse(rejectedResult)).toMatchObject({
+      ok: false,
+      error: { code: "command_rejected", message: expect.stringContaining("n-9") },
+    });
+    expect(rejectedResult.errorCode).toBe("command_rejected");
+  });
+});
+
 // @spec: CLI-047
 describe("cli-command-executors asset.import（素材导入，代理执行通道）", () => {
   it("项目未打开 → project_not_open（CLI-007），不触达代理通道", async () => {
@@ -647,5 +765,91 @@ describe("cli-command-executors app.status 应用状态感知（CLI-020/CLI-021�
     expect(parsed.opened_projects).toEqual([
       { name: "demo", path: PROJECT_PATH, focused: true, selection: null },
     ]);
+  });
+});
+
+// @spec: CLI-050
+describe("cli-command-executors 生成终态尺寸对照（buildGenerationWarnings 纯函数）", () => {
+  const imageAsset = (width: number | null, height: number | null): GenerationWarningAsset => ({
+    asset: { mediaType: "image", original: { width, height } },
+  });
+  const videoAsset: GenerationWarningAsset = {
+    asset: { mediaType: "video", original: { width: 640, height: 360 } },
+  };
+  const multipartRequest = (sizeValue: unknown): { request: Record<string, unknown> } => ({
+    request: {
+      body: {
+        __formData: {
+          kind: "form_data_summary",
+          fieldCount: 1,
+          fields: [{ name: "size", filename: null, contentType: null, hasDataBase64: false, value: sizeValue }],
+        },
+      },
+    },
+  });
+  const jsonBodyRequest = (sizeValue: unknown): { request: Record<string, unknown> } => ({
+    request: { body: { size: sizeValue } },
+  });
+
+  it("请求 2560x1440、实际 1903x2560 → 一条 warning（状态与 ok 不参与）", () => {
+    const mod = loadExecutorModule();
+    const warnings = mod.buildGenerationWarnings(multipartRequest("2560x1440"), [imageAsset(1903, 2560)]);
+    expect(warnings).toEqual([
+      {
+        code: "requested_size_not_honored",
+        message: "请求尺寸 2560x1440，实际产出 1903x2560。生成任务已成功，尺寸以实际产物为准。",
+        requested_size: "2560x1440",
+        actual_sizes: ["1903x2560"],
+      },
+    ]);
+  });
+
+  it("JSON 请求体形态 body.size 同口径；大小写 X 规范化为小写", () => {
+    const mod = loadExecutorModule();
+    const warnings = mod.buildGenerationWarnings(jsonBodyRequest("2560X1440"), [imageAsset(1903, 2560)]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.requested_size).toBe("2560x1440");
+  });
+
+  it("实际尺寸去重并按字典序排序；任一不同即只产出一条", () => {
+    const mod = loadExecutorModule();
+    const warnings = mod.buildGenerationWarnings(multipartRequest("2560x1440"), [
+      imageAsset(1903, 2560),
+      imageAsset(2560, 1440),
+      imageAsset(1903, 2560),
+    ]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.actual_sizes).toEqual(["1903x2560", "2560x1440"]);
+    expect(warnings[0]?.message).toContain("1903x2560、2560x1440");
+  });
+
+  it("请求尺寸与实际匹配 → 空数组", () => {
+    const mod = loadExecutorModule();
+    expect(mod.buildGenerationWarnings(multipartRequest("1903x2560"), [imageAsset(1903, 2560)])).toEqual([]);
+  });
+
+  it("auto / 档位值 / 非字面量 / 请求缺失 → 空数组", () => {
+    const mod = loadExecutorModule();
+    expect(mod.buildGenerationWarnings(multipartRequest("auto"), [imageAsset(1903, 2560)])).toEqual([]);
+    expect(mod.buildGenerationWarnings(multipartRequest("2k"), [imageAsset(1903, 2560)])).toEqual([]);
+    expect(mod.buildGenerationWarnings(jsonBodyRequest("1024"), [imageAsset(1903, 2560)])).toEqual([]);
+    expect(mod.buildGenerationWarnings({}, [imageAsset(1903, 2560)])).toEqual([]);
+    expect(mod.buildGenerationWarnings({ request: null }, [imageAsset(1903, 2560)])).toEqual([]);
+    expect(mod.buildGenerationWarnings({ request: { body: null } }, [imageAsset(1903, 2560)])).toEqual([]);
+  });
+
+  it("无图片资产 / 图片缺宽高 / 非图片资产跳过 → 空数组", () => {
+    const mod = loadExecutorModule();
+    expect(mod.buildGenerationWarnings(multipartRequest("2560x1440"), [])).toEqual([]);
+    expect(mod.buildGenerationWarnings(multipartRequest("2560x1440"), [imageAsset(null, null)])).toEqual([]);
+    expect(mod.buildGenerationWarnings(multipartRequest("2560x1440"), [videoAsset])).toEqual([]);
+  });
+
+  it("请求字段不是 size 时不取该字段", () => {
+    const mod = loadExecutorModule();
+    const request = {
+      body: { __formData: { fields: [{ name: "quality", value: "2560x1440" }] } },
+    };
+    expect(mod.buildGenerationWarnings(request, [imageAsset(1, 1)])).toEqual([]);
   });
 });

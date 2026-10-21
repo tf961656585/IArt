@@ -1,5 +1,5 @@
 // @vitest-environment node
-// @spec: CLI-001, CLI-004, CLI-014, CLI-015, CLI-027, CLI-028, CLI-029, CLI-030
+// @spec: CLI-001, CLI-004, CLI-014, CLI-015, CLI-027, CLI-028, CLI-029, CLI-030, CLI-049, CLI-050
 //
 // CLI 客户端测试：对真实控制服务发真实请求（--json/人读输出、退出码三档）、
 // not_running（发现文件缺失 / 指向无监听端口）、响应被篡改成非法形状 → 退出码 2、
@@ -31,7 +31,8 @@ type ClientModule = {
 type ParserModule = {
   parseCliArgs: (argv: readonly string[]) =>
     | { ok: true; request: unknown; json: boolean }
-    | { ok: false; help: boolean; message?: string };
+    | { ok: false; reason?: string; message?: string; topic?: { kind: string } };
+  renderCliHelpText: (topic: { kind: "top" } | { kind: "noun"; noun: string } | { kind: "command"; phrase: string }) => string;
   CLI_USAGE_TEXT: string;
 };
 
@@ -203,6 +204,22 @@ describe("cli-client（对真实控制服务）", () => {
     expect(unknownCommand.stderr).toContain("用法见 iart --help");
   });
 
+  // @spec: CLI-041
+  it("命令不消费的参数按用法错误拒绝：task list / app status 的 --limit 退出码 2 并附单行用法指引", async () => {
+    for (const argv of [
+      ["task", "list", "--project", "P", "--limit", "2"],
+      ["app", "status", "--limit", "2"],
+    ]) {
+      const result = await client.runCliClient(argv, { discoveryFilePath });
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("不适用于命令");
+      expect(result.stderr).toContain("用法见 iart --help");
+      // 与既有解析失败口径一致：不全量倾倒用法提示
+      expect(result.stderr).not.toContain("退出码：");
+    }
+  });
+
   it("project delete 缺 --yes → 发送前 schema 校验本地报错，退出码 2（CLI-014）", async () => {
     const result = await client.runCliClient(["project", "delete", "--project", "X"], { discoveryFilePath });
     expect(result.exitCode).toBe(2);
@@ -226,6 +243,32 @@ describe("cli-client（对真实控制服务）", () => {
     const result = await client.runCliClient(["--help"], { discoveryFilePath });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("iart project list");
+  });
+
+  // @spec: CLI-041
+  it("命令级 --help 输出该命令自己的参数说明（不是顶层用法表），退出码 0", async () => {
+    const topLevel = await client.runCliClient(["--help"], { discoveryFilePath });
+    const commandHelp = await client.runCliClient(["task", "list", "--help"], { discoveryFilePath });
+    expect(commandHelp.exitCode).toBe(0);
+    expect(commandHelp.stderr).toBe("");
+    expect(commandHelp.stdout).toContain("iart task list —");
+    expect(commandHelp.stdout).toContain("--status <状态>");
+    expect(commandHelp.stdout).toContain("submitting|generating|polling|downloading|succeeded|failed|cancelled");
+    expect(commandHelp.stdout).not.toBe(topLevel.stdout);
+    expect(commandHelp.stdout).not.toContain("iart project list");
+  });
+
+  // @spec: CLI-041
+  it("名词级 --help 输出该名词下的子命令摘要，退出码 0", async () => {
+    const result = await client.runCliClient(["canvas", "--help"], { discoveryFilePath });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("iart canvas —");
+    expect(result.stdout).toContain("子命令：");
+    expect(result.stdout).toContain("iart canvas group create");
+    expect(result.stdout).toContain("创建组并加入成员");
+    // 顶层总表独有的退出码说明不出现在名词级帮助里
+    expect(result.stdout).not.toContain("退出码：");
   });
 });
 
@@ -387,6 +430,38 @@ describe("parseCliArgs（参数名 → 契约字段映射表）", () => {
     expect(missing.ok).toBe(false);
   });
 
+  // @spec: CLI-049
+  it("canvas group add/remove：--group 与 --members 映射契约字段，members 缺少时报错", () => {
+    const add = parser.parseCliArgs([
+      "canvas", "group", "add", "--project", "P", "--group", "g1", "--members", "n1,n2",
+    ]);
+    expect(add.ok).toBe(true);
+    if (!add.ok) throw new Error("unreachable");
+    expect(add.request).toEqual({
+      command: "canvas.group.add",
+      project: "P",
+      group: "g1",
+      members: ["n1", "n2"],
+    });
+
+    const remove = parser.parseCliArgs([
+      "canvas", "group", "remove", "--project", "P", "--group", "g1", "--members", "n1",
+    ]);
+    expect(remove.ok).toBe(true);
+    if (!remove.ok) throw new Error("unreachable");
+    expect(remove.request).toEqual({
+      command: "canvas.group.remove",
+      project: "P",
+      group: "g1",
+      members: ["n1"],
+    });
+
+    const missingMembers = parser.parseCliArgs([
+      "canvas", "group", "add", "--project", "P", "--group", "g1",
+    ]);
+    expect(missingMembers.ok).toBe(false);
+  });
+
   it("canvas node move：--node/--x/--y 解析，坐标允许负数与小数（CLI-028）", () => {
     const parsed = parser.parseCliArgs(["canvas", "node", "move", "--project", "P", "--node", "n1", "--x", "-120", "--y", "240.5"]);
     expect(parsed.ok).toBe(true);
@@ -502,6 +577,49 @@ describe("parseCliArgs（参数名 → 契约字段映射表）", () => {
 
     const extra = parser.parseCliArgs(["app", "status", "extra"]);
     expect(extra.ok).toBe(false);
+  });
+
+  // @spec: CLI-041
+  it("按命令参数白名单拒绝：task list / app status 的 --limit 被拒，asset list 的 --limit 正常", () => {
+    const taskRejected = parser.parseCliArgs(["task", "list", "--project", "P", "--limit", "2"]);
+    expect(taskRejected.ok).toBe(false);
+    if (taskRejected.ok) throw new Error("unreachable");
+    expect(taskRejected.message).toContain("参数 --limit 不适用于命令 task list");
+
+    const appRejected = parser.parseCliArgs(["app", "status", "--limit", "2"]);
+    expect(appRejected.ok).toBe(false);
+    if (appRejected.ok) throw new Error("unreachable");
+    expect(appRejected.message).toContain("参数 --limit 不适用于命令 app status");
+
+    // 合法命令与合法参数组合行为不变：asset list 是唯一支持分页的列表命令
+    const assetAccepted = parser.parseCliArgs(["asset", "list", "--project", "P", "--limit", "2"]);
+    expect(assetAccepted.ok).toBe(true);
+    if (!assetAccepted.ok) throw new Error("unreachable");
+    expect(assetAccepted.request).toMatchObject({ command: "asset.list", project: "P", limit: 2 });
+  });
+
+  // @spec: CLI-041
+  it("命令级帮助补齐参数缺口：asset get 位置参数名、task get 必填 --project、canvas layout --columns 默认值、task wait --timeout 默认不设", () => {
+    const assetGetHelp = parser.renderCliHelpText({ kind: "command", phrase: "asset get" });
+    expect(assetGetHelp).toContain("iart asset get <assetId> --project P");
+    expect(assetGetHelp).toContain("--project <路径或名称>");
+    expect(assetGetHelp).toContain("（必填）");
+
+    const taskGetHelp = parser.renderCliHelpText({ kind: "command", phrase: "task get" });
+    expect(taskGetHelp).toContain("iart task get <taskId> --project P");
+    expect(taskGetHelp).toContain("--project <路径或名称>");
+
+    const layoutHelp = parser.renderCliHelpText({ kind: "command", phrase: "canvas layout" });
+    expect(layoutHelp).toContain("--columns <N>");
+    expect(layoutHelp).toContain("缺省 1");
+
+    const waitHelp = parser.renderCliHelpText({ kind: "command", phrase: "task wait" });
+    expect(waitHelp).toContain("--timeout <秒>");
+    expect(waitHelp).toContain("缺省不设时限");
+
+    // 顶层仍保留完整命令面（含 batch get 与 status 七枚举）
+    expect(parser.CLI_USAGE_TEXT).toContain("iart batch get <batchId> --project P");
+    expect(parser.CLI_USAGE_TEXT).toContain("--version");
   });
 });
 
@@ -621,6 +739,103 @@ describe("cli-client 人读失败原因与幂等键回执（fetchImpl 注入）"
     });
     expect(result.stdout).toContain("t-ok：succeeded");
     expect(result.stdout).toContain("t-bad：failed，失败原因：参数越界");
+  });
+
+  // @spec: CLI-050
+  it("task wait 人读：终态尺寸提示追加在结果行后，成功语义不变", async () => {
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { command?: string };
+      if (body.command === "task.get") {
+        return jsonResponse({
+          command: "task.get",
+          ok: true,
+          task: { taskId: "t-size", status: "succeeded", projectPath: "/tmp/p", createdAt: 1, updatedAt: 2 },
+          node_id: null,
+          group_id: null,
+        });
+      }
+      return jsonResponse({
+        command: "task.wait",
+        ok: true,
+        task_result: {
+          task: { taskId: "t-size", status: "succeeded", projectPath: "/tmp/p", createdAt: 1, updatedAt: 2 },
+          assets: [],
+          warnings: [
+            {
+              code: "requested_size_not_honored",
+              message: "请求尺寸 2560x1440，实际产出 1903x2560。生成任务已成功，尺寸以实际产物为准。",
+              requested_size: "2560x1440",
+              actual_sizes: ["1903x2560"],
+            },
+          ],
+          node_id: null,
+          group_id: null,
+        },
+      });
+    };
+    const result = await client.runCliClient(["task", "wait", "t-size", "--project", "P"], {
+      discoveryFilePath,
+      fetchImpl,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("任务 t-size：succeeded");
+    expect(result.stdout).toContain("提示：请求尺寸 2560x1440，实际产出 1903x2560");
+  });
+
+  // @spec: CLI-049
+  it("canvas group add/remove 人读：加入按新增/迁移/未变分类输出，移出说明保留原位", async () => {
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { command?: string };
+      if (body.command === "canvas.group.add") {
+        return jsonResponse({
+          command: "canvas.group.add",
+          ok: true,
+          group_node_id: "g1",
+          added_node_ids: ["n1"],
+          moved_node_ids: ["n2"],
+          unchanged_node_ids: ["n3"],
+        });
+      }
+      return jsonResponse({
+        command: "canvas.group.remove",
+        ok: true,
+        group_node_id: "g1",
+        removed_node_ids: ["n1"],
+      });
+    };
+
+    const added = await client.runCliClient(
+      ["canvas", "group", "add", "--project", "P", "--group", "g1", "--members", "n1,n2,n3"],
+      { discoveryFilePath, fetchImpl },
+    );
+    expect(added.exitCode).toBe(0);
+    expect(added.stdout).toContain("组 g1 成员已更新");
+    expect(added.stdout).toContain("加入 1 个");
+    expect(added.stdout).toContain("从其他组迁入 1 个");
+    expect(added.stdout).toContain("已在组内 1 个");
+
+    const removed = await client.runCliClient(
+      ["canvas", "group", "remove", "--project", "P", "--group", "g1", "--members", "n1"],
+      { discoveryFilePath, fetchImpl },
+    );
+    expect(removed.exitCode).toBe(0);
+    expect(removed.stdout).toContain("组 g1：已移出 1 个成员");
+    expect(removed.stdout).toContain("保留在画布原位");
+  });
+
+  // @spec: CLI-018, CLI-041
+  it("asset list --limit：合法分页参数照常发送并成功（命令白名单不误伤）", async () => {
+    const requestBodies: unknown[] = [];
+    const fetchImpl: typeof fetch = (async (_url, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as unknown);
+      return jsonResponse({ command: "asset.list", ok: true, assets: [] });
+    }) as typeof fetch;
+    const result = await client.runCliClient(["asset", "list", "--project", "P", "--limit", "2"], {
+      discoveryFilePath,
+      fetchImpl,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(requestBodies[0]).toMatchObject({ command: "asset.list", project: "P", limit: 2 });
   });
 
   // @spec: CLI-033

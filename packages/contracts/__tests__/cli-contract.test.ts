@@ -125,6 +125,8 @@ const requestSamples: Record<CliCommandName, Record<string, unknown>> = {
   'asset.import': { project: PROJECT, file: ['/tmp/media/a.png', '/tmp/media/b.mp4'] },
   'canvas.group.create': { project: PROJECT, name: '角色组', members: ['node_1'] },
   'canvas.group.dissolve': { project: PROJECT, group: 'group_1' },
+  'canvas.group.add': { project: PROJECT, group: 'group_1', members: ['node_1', 'node_2'] },
+  'canvas.group.remove': { project: PROJECT, group: 'group_1', members: ['node_1'] },
   'canvas.node.move': { project: PROJECT, node: 'node_1', x: -120, y: 240.5 },
   'canvas.node.delete': { project: PROJECT, nodes: ['node_1', 'node_2'] },
   'canvas.layout': { project: PROJECT, scope: 'all' },
@@ -168,6 +170,13 @@ const successSamples: Record<CliCommandName, Record<string, unknown>> = {
   },
   'canvas.group.create': { group_node_id: 'group_1' },
   'canvas.group.dissolve': { dissolved: true, group_node_id: 'group_1', member_ids: ['node_1', 'node_2'] },
+  'canvas.group.add': {
+    group_node_id: 'group_1',
+    added_node_ids: ['node_1'],
+    moved_node_ids: ['node_2'],
+    unchanged_node_ids: ['node_3'],
+  },
+  'canvas.group.remove': { group_node_id: 'group_1', removed_node_ids: ['node_1'] },
   'canvas.node.move': { node_id: 'node_1', position: { x: -120, y: 240.5 }, moved_node_ids: ['node_1'] },
   'canvas.node.delete': { deleted: true, deleted_node_ids: ['node_1'] },
   'canvas.layout': { positions: { node_1: { x: 10, y: 20 } } },
@@ -184,6 +193,7 @@ const successSamples: Record<CliCommandName, Record<string, unknown>> = {
     task_result: {
       task: taskView(),
       assets: [{ asset: mediaAsset(), local_file_path: '/tmp/media/asset_1.png' }],
+      warnings: [],
       node_id: 'node_t1',
       group_id: 'group_1',
     },
@@ -229,9 +239,9 @@ describe('CLI 错误码枚举（spec §9）', () => {
 });
 
 describe('CLI 命令请求判别联合（spec §5）', () => {
-  it('命令清单共 25 条且判别值唯一', () => {
-    expect(CLI_COMMANDS).toHaveLength(25);
-    expect(new Set(CLI_COMMANDS).size).toBe(25);
+  it('命令清单共 27 条且判别值唯一', () => {
+    expect(CLI_COMMANDS).toHaveLength(27);
+    expect(new Set(CLI_COMMANDS).size).toBe(27);
     expect(() => CliCommandNameSchema.parse('project.list')).not.toThrow();
   });
 
@@ -282,6 +292,12 @@ describe('CLI 命令请求判别联合（spec §5）', () => {
       { command: 'canvas.group.create', project: PROJECT, name: 'g' },
       // canvas.group.dissolve：目标组标识必填（spec §5.3 / CLI-027）
       { command: 'canvas.group.dissolve', project: PROJECT },
+      // canvas.group.add / remove：目标组标识与成员清单（≥1）必填（spec §5.3 / CLI-049）
+      { command: 'canvas.group.add', project: PROJECT, members: ['node_1'] },
+      { command: 'canvas.group.add', project: PROJECT, group: 'group_1' },
+      { command: 'canvas.group.add', project: PROJECT, group: 'group_1', members: [] },
+      { command: 'canvas.group.remove', project: PROJECT, members: ['node_1'] },
+      { command: 'canvas.group.remove', project: PROJECT, group: 'group_1', members: [] },
       // canvas.node.move：node / x / y 必填（spec §5.3 / CLI-028）
       { command: 'canvas.node.move', project: PROJECT, x: 1, y: 2 },
       { command: 'canvas.node.move', project: PROJECT, node: 'node_1', y: 2 },
@@ -404,12 +420,14 @@ describe('CLI 命令响应判别联合（spec §5 统一信封）', () => {
         {
           task: taskView(),
           assets: [{ asset: mediaAsset(), local_file_path: '/tmp/media/asset_1.png' }],
+          warnings: [],
           node_id: 'node_t1',
           group_id: 'group_1',
         },
         {
           task: { ...taskView(), taskId: 'task_2', status: 'failed' },
           assets: [],
+          warnings: [],
           node_id: 'node_t2',
           group_id: 'group_1',
         },
@@ -420,7 +438,29 @@ describe('CLI 命令响应判别联合（spec §5 统一信封）', () => {
     expect(
       CliCommandResponseSchema.safeParse({
         ...body,
-        task_results: [{ task: taskView(), assets: [], node_id: null, group_id: null }],
+        task_results: [{ task: taskView(), assets: [], warnings: [], node_id: null, group_id: null }],
+      }).success,
+    ).toBe(true);
+    // 信息性 warning（CLI-050）：形状合法，不改变 ok 与任务状态
+    expect(
+      CliCommandResponseSchema.safeParse({
+        ...body,
+        task_results: [
+          {
+            task: taskView(),
+            assets: [{ asset: mediaAsset(), local_file_path: '/tmp/media/asset_1.png' }],
+            warnings: [
+              {
+                code: 'requested_size_not_honored',
+                message: '请求尺寸 2560x1440，实际产出 1903x2560。生成任务已成功，尺寸以实际产物为准。',
+                requested_size: '2560x1440',
+                actual_sizes: ['1903x2560'],
+              },
+            ],
+            node_id: 'node_t1',
+            group_id: 'group_1',
+          },
+        ],
       }).success,
     ).toBe(true);
   });
@@ -698,6 +738,65 @@ describe('代理执行通道画布操作命令契约（spec §6.3，CLI-027/028/
         }).success,
       ).toBe(true);
     }
+  });
+});
+
+describe('代理执行通道组成员命令契约（spec §6.3 / CLI-049）', () => {
+  it('canvas.group.add / remove 的代理请求与结果 parse 通过，缺字段被拒绝', () => {
+    expect(
+      CliProxyCommandSchema.safeParse({
+        command: 'canvas.group.add',
+        request_id: 'req_a1',
+        group: 'group_1',
+        members: ['node_1', 'node_2'],
+      }).success,
+    ).toBe(true);
+    expect(
+      CliProxyCommandSchema.safeParse({
+        command: 'canvas.group.remove',
+        request_id: 'req_r1',
+        group: 'group_1',
+        members: ['node_1'],
+      }).success,
+    ).toBe(true);
+    expect(
+      CliProxyCommandSchema.safeParse({ command: 'canvas.group.add', request_id: 'r', group: 'g', members: [] })
+        .success,
+    ).toBe(false);
+
+    expect(
+      CliProxyCommandResultSchema.safeParse({
+        command: 'canvas.group.add',
+        request_id: 'req_a1',
+        group_node_id: 'group_1',
+        added_node_ids: ['node_1'],
+        moved_node_ids: ['node_2'],
+        unchanged_node_ids: ['node_3'],
+      }).success,
+    ).toBe(true);
+    expect(
+      CliProxyCommandResultSchema.safeParse({
+        command: 'canvas.group.add',
+        request_id: 'req_a1',
+        group_node_id: 'group_1',
+        added_node_ids: ['node_1'],
+      }).success,
+    ).toBe(false);
+    expect(
+      CliProxyCommandResultSchema.safeParse({
+        command: 'canvas.group.remove',
+        request_id: 'req_r1',
+        group_node_id: 'group_1',
+        removed_node_ids: ['node_1'],
+      }).success,
+    ).toBe(true);
+    expect(
+      CliProxyCommandErrorSchema.safeParse({
+        command: 'canvas.group.remove',
+        request_id: 'req_r1',
+        error: { code: 'command_rejected', message: '这些节点当前不属于这个组。' },
+      }).success,
+    ).toBe(true);
   });
 });
 

@@ -310,34 +310,33 @@ const buildRuntimePayloadFromRules = async (
   const mediaInputFieldsEntries = Object.entries(mediaInputFields);
   const mediaInputFieldsSummary = mediaInputFieldsEntries.map(([k, v]) => `${k}=${Array.isArray(v) ? v.length : 0}`).join(", ");
   loggingModule.logDebug("[request-assembler] buildRuntimePayloadFromRules: mediaInputBuckets", { summary: mediaInputFieldsSummary || "(empty)" });
-  // 条件 throw：模型声明必填媒体字段 + media_inputs 为空 + arguments 中存在该字段 key 但值为空
-  // 可选媒体字段（required=false）为空时放行，支持纯文生图等不传图的场景
+  // 逐必填素材位判空。
+  //
+  // 这条判据以前的写法是「全部桶里一条媒体都没有」才检查，于是多素材位模型上
+  // 「首帧空、尾帧有图」会整条放行——必填位缺失被别的位的存在掩盖，失败推到上游。
+  // 现在逐个必填字段键判：该位既没有分桶到的媒体、参数里也没有非空值，才判缺失。
+  // 可选媒体字段（required=false）为空时放行，支持纯文生图等不传图的场景。
   const mediaFieldInfos = collectMediaFieldKeysFromProjection(projection);
   const requiredMediaFieldKeys = mediaFieldInfos.filter((info) => info.required);
   if (requiredMediaFieldKeys.length > 0) {
-    const totalMediaFromBuckets = mediaInputFieldsEntries.reduce(
-      (sum, [, v]) => sum + (Array.isArray(v) ? v.length : 0), 0,
-    );
-    if (totalMediaFromBuckets === 0) {
-      const argumentsObj = readOpenField(inputRecord, "arguments");
-      const argumentsSource = isPlainObject(argumentsObj) ? argumentsObj : {};
-      const argumentsEntries = Object.entries(argumentsSource);
-      const argumentsMap = new Map<string, unknown>(argumentsEntries);
-      const emptyKeys: string[] = [];
-      for (const { fieldKey } of requiredMediaFieldKeys) {
-        if (!argumentsMap.has(fieldKey)) continue;
-        const argValue = argumentsMap.get(fieldKey);
-        if (argValue === undefined || argValue === null || argValue === "" ||
-            (Array.isArray(argValue) && argValue.length === 0)) {
-          emptyKeys.push(fieldKey);
-        }
-      }
-      if (emptyKeys.length > 0) {
-        loggingModule.logWarn("[request-assembler] buildRuntimePayloadFromRules: media_inputs_required_but_empty", { requiredFields: requiredMediaFieldKeys.map((i) => i.fieldKey), emptyKeys });
-        throw invalidArguments(
-          `media_inputs_required_but_empty: model declares required media input fields (${emptyKeys.join(", ")}) but media_inputs is empty and arguments keys (${emptyKeys.join(", ")}) have empty values. The media data may have been lost during submission.`,
-        );
-      }
+    const argumentsObj = readOpenField(inputRecord, "arguments");
+    const argumentsSource = isPlainObject(argumentsObj) ? argumentsObj : {};
+    const argumentsMap = new Map<string, unknown>(Object.entries(argumentsSource));
+    const missingKeys: string[] = [];
+    for (const { fieldKey } of requiredMediaFieldKeys) {
+      const bucketed = mediaInputFields[fieldKey];
+      if (Array.isArray(bucketed) && bucketed.length > 0) continue;
+      const argValue = argumentsMap.get(fieldKey);
+      const hasArgValue =
+        argValue !== undefined && argValue !== null && argValue !== "" &&
+        !(Array.isArray(argValue) && argValue.length === 0);
+      if (!hasArgValue) missingKeys.push(fieldKey);
+    }
+    if (missingKeys.length > 0) {
+      loggingModule.logWarn("[request-assembler] buildRuntimePayloadFromRules: media_inputs_required_but_empty", { requiredFields: requiredMediaFieldKeys.map((i) => i.fieldKey), missingKeys });
+      throw invalidArguments(
+        `media_inputs_required_but_empty: model declares required media input fields (${missingKeys.join(", ")}) but no media was bound to them. Attach media to each required slot (via media_inputs field_key) before submitting.`,
+      );
     }
   }
   const fields = mergeFieldMaps(

@@ -2,8 +2,10 @@ import {
   ChatModelDirectoryEntrySchema,
   ExecutableModelDirectoryEntrySchema,
   ExecutableModelFailureCodeSchema,
+  GenerationMediaSlotIdSchema,
   canAdapterExpressThinkingTier,
   type ChatModelDirectoryEntry,
+  type ExecutableCatalogMediaSlot,
   type ExecutableModelDirectoryEntry,
   type ExecutableModelFailureCode,
 } from '@iart/contracts';
@@ -207,6 +209,74 @@ const projectParameterFields = (projection: unknown): ExecutableModelDirectoryEn
 };
 
 /**
+ * 媒体素材位投影：给 Editor 渲染「参考区用途」选项用。
+ *
+ * 事实源两处合一，都来自既有权威，不新建表：
+ * - 位与字段键的对应：族模板注册表条目的 `mediaSlotFieldKeys`（各族的唯一跨族出口）；
+ * - 记录实际启用了哪些位：记录上的 `accepted_media_slots`。
+ *
+ * 必填口径与 `parameter_schema.required_fields` 同源（某字段键在其中即 required），不另算一套。
+ * 中文名取参数 schema 下发的本地化键末段，取不到留空由消费端回退——不在后端硬编码中文，
+ * 否则就是第二份界面词表。
+ */
+const projectMediaSlots = (options: {
+  familyAdapterId: string;
+  acceptedMediaSlots: readonly string[];
+  parameterSchema: ExecutableModelDirectoryEntry['parameter_schema'];
+}): ExecutableCatalogMediaSlot[] => {
+  const entry = getFamilyTemplate(options.familyAdapterId);
+  if (entry === null || entry.status !== 'ready') return [];
+  const accepted = new Set(options.acceptedMediaSlots);
+  const required = new Set(options.parameterSchema.required_fields);
+  const byFieldKey = new Map(options.parameterSchema.fields.map((field) => [field.fieldKey, field]));
+  const slots: ExecutableCatalogMediaSlot[] = [];
+  for (const [slotId, fieldKey] of Object.entries(entry.mediaSlotFieldKeys)) {
+    if (fieldKey === undefined || fieldKey.length === 0) continue;
+    // 只下发记录实际勾选的位：未勾选的位不出现在用途候选里。
+    if (!accepted.has(slotId)) continue;
+    const field = byFieldKey.get(fieldKey);
+    if (field === undefined) {
+      // 族登记了位但该记录合成后的参数 schema 里没有对应字段：口径不一致，留痕并跳过，
+      // 不下发一个点不出来的用途。
+      loggingModule.logDebug('[model-catalog] media slot has no matching parameter field', {
+        slotId,
+        fieldKey,
+      });
+      continue;
+    }
+    const parsedSlotId = GenerationMediaSlotIdSchema.safeParse(slotId);
+    if (!parsedSlotId.success) {
+      loggingModule.logDebug('[model-catalog] drop media slot with unknown slot id', { slotId });
+      continue;
+    }
+    const rawLabel = field.label;
+    const afterNs = rawLabel.includes(':') ? rawLabel.slice(rawLabel.indexOf(':') + 1) : rawLabel;
+    const labelTail = afterNs.split('.').filter((s) => s.length > 0 && s !== 'label').pop() ?? '';
+    const mediaKind = ((): 'image' | 'video' | 'audio' => {
+      const component = field.component.toLowerCase();
+      if (component === 'videoupload') return 'video';
+      if (component === 'audioupload') return 'audio';
+      return 'image';
+    })();
+    // 可放张数取该字段声明（多张参考位 > 1）；未声明按 1。
+    const declaredMax = field.componentProps?.maxFiles;
+    const maxFiles =
+      typeof declaredMax === 'number' && Number.isFinite(declaredMax) && declaredMax >= 1
+        ? Math.floor(declaredMax)
+        : 1;
+    slots.push({
+      slotId: parsedSlotId.data,
+      fieldKey,
+      required: required.has(fieldKey),
+      maxFiles,
+      mediaKind,
+      label: labelTail,
+    });
+  }
+  return slots;
+};
+
+/**
  * 该模型当前可被选择的思考档位（spec 06「服务行的「思考」只列该模型在主窗口被启用的档位」）。
  *
  * 档位启用关系随自建对话模型记录走（spec 37 v4.0.0：原 ModelDeployment 上的档位字段已退役）；
@@ -251,6 +321,13 @@ const resolveUsableDefaultThinkingTier = (modelId: string, usableTiers: string[]
 const buildCatalogEntry = (item: {
   modelId: string;
   projection: unknown;
+  /**
+   * 该模型的族适配器 id 与记录启用的素材位（可选）。
+   *
+   * 只有需要下发素材位清单时才传：对话目录也复用本函数，而对话模型没有素材位。
+   * 不传即视为「无素材位」，输出空数组。
+   */
+  mediaSlotSource?: { familyAdapterId: string; acceptedMediaSlots: readonly string[] };
 }): ExecutableModelDirectoryEntry | null => {
   const modelId = item.modelId;
   const projection = item.projection as {
@@ -276,6 +353,8 @@ const buildCatalogEntry = (item: {
     typeof projection.runtime?.default_task_type === 'string' ? projection.runtime.default_task_type : '';
   const rawOrder = projection.visibility?.order;
   const displayOrder = typeof rawOrder === 'number' && Number.isFinite(rawOrder) ? rawOrder : undefined;
+  // 参数 schema 只投影一次：素材位清单的必填判据与字段查找都消费同一份结果。
+  const parameterSchema = projectParameterFields(item.projection);
   const candidate = {
     model_id: modelId,
     model_version: CATALOG_MODEL_VERSION,
@@ -287,7 +366,15 @@ const buildCatalogEntry = (item: {
       supports_multi_image: capability.supports_multi_image === true ? true : undefined,
       supports_reference_media: capability.supports_reference_media === true ? true : undefined,
     },
-    parameter_schema: projectParameterFields(item.projection),
+    parameter_schema: parameterSchema,
+    media_slots:
+      item.mediaSlotSource === undefined
+        ? []
+        : projectMediaSlots({
+            familyAdapterId: item.mediaSlotSource.familyAdapterId,
+            acceptedMediaSlots: item.mediaSlotSource.acceptedMediaSlots,
+            parameterSchema,
+          }),
     deployment: {
       has_active_deployment: judgement.hasActiveDeployment,
       active_deployment_id: judgement.activeDeploymentId,
@@ -386,7 +473,14 @@ const listExecutableCatalogEntries = (): ExecutableModelDirectoryEntry[] => {
     }
     const built = buildDeclaredGenerationProjection(record);
     if (built === null) continue;
-    const entry = buildCatalogEntry({ modelId: record.model_id, projection: built.projection });
+    const entry = buildCatalogEntry({
+      modelId: record.model_id,
+      projection: built.projection,
+      mediaSlotSource: {
+        familyAdapterId: record.family_adapter_id,
+        acceptedMediaSlots: record.accepted_media_slots,
+      },
+    });
     if (entry !== null) entries.push(entry);
   }
   return entries;

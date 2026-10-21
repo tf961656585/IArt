@@ -11,6 +11,7 @@ import { useCanvasStore } from '@/features/canvas/store/canvasStore';
 import { usePromptDockStore } from './promptDockStore';
 import { listPromptPresetTokenMatches } from '@/features/canvas/nodes/textInput/enhancedTextNode';
 import { deploymentFailureExit, describeDeploymentFailure } from './deploymentFailureText';
+import { collectSlotProblems } from './referenceSlotModel';
 
 /**
  * PromptDock 提交前置校验（spec docs/editor/节点执行前置校验.md）。
@@ -181,6 +182,30 @@ export const runPromptDockPreflight = (
           code: 'incompatible-reference',
           message: `这个模型用不了${MEDIA_TYPE_USER_LABEL[ref.mediaType]}参考素材，请移除后再提交。`,
           field: ref.assetId,
+          exit: null,
+        });
+      }
+    }
+  }
+
+  // 7. 参考图用途（设计 docs/editor/PromptDock参考区用途标注-design.md §6）
+  //
+  // 这条判据取代了「参数值为空」那条对空数组天然失效的旧判据：必填素材位是否有图占用、
+  // 是否存在没指定用途的图，两者都只看草稿的参考条目与模型下发的素材位清单。
+  if (!isAgentForm && entry) {
+    for (const problem of collectSlotProblems(draft.references, entry)) {
+      if (problem.kind === 'required-slot-empty') {
+        issues.push({
+          code: 'slot-required-empty',
+          message: `还没有指定「${problem.label}」用哪张图。`,
+          field: problem.fieldKey,
+          exit: null,
+        });
+      } else {
+        issues.push({
+          code: 'slot-unspecified',
+          message: `还有图没指定用途，请为「${problem.label}」选一个用途。`,
+          field: problem.refId,
           exit: null,
         });
       }

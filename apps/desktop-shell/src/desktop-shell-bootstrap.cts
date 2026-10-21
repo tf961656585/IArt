@@ -20,6 +20,7 @@ import { closeAll, createProject, deleteProject, getDbForExistingProject } from 
 import { readRecentProjects } from "./storage/editor-storage-recent-projects.cjs";
 import {
   loadRuntimeEnvOnce,
+  resolveAppVersion,
   resolveBackendEntry,
   resolveDefaultStorageRootHint,
   resolveEditorStartUrl,
@@ -425,8 +426,12 @@ void app.whenReady().then(async () => {
   // 本地控制服务（spec docs/integrations/CLI与本地Agent集成.md §6.2/CLI-001）：app.whenReady 后启动。
   // 启动失败不阻断 GUI 启动——CLI 通道缺席时客户端按 not_running 呈现。
   try {
+    // 版本源与更新域/app 运行域一致（CLI 报告第 12 条）：dev / run-built 以
+    // `electron ./dist/main.cjs` 启动时 app.getVersion() 会回退成 Electron 版本，
+    // resolveAppVersion() 优先读 IART_APP_VERSION 与仓库 package.json；空值再回落。
+    const appVersion = resolveAppVersion();
     cliControlService = await startCliControlService({
-      version: app.getVersion(),
+      version: appVersion.length > 0 ? appVersion : app.getVersion(),
       executorDeps: cliExecutorDeps,
     });
   } catch (error) {

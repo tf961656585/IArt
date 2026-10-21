@@ -100,7 +100,14 @@ export const createCliBackendForwarder = buildForwarder;
 // 转发目标的响应形状解析（contracts 是可执行事实源，此处只组合不复制字段）
 // ---------------------------------------------------------------------------
 
-const parseOrDebug = <T,>(payload: unknown, schema: z.ZodType<T>, label: string): T | null => {
+/**
+ * 用给定 schema 校验后端响应。
+ *
+ * 泛型取 `z.output`（而不是让同一个 `T` 同时充当输入与输出）：契约里带 `.default(...)` 的
+ * 字段（如模型条目的 `media_slots`）在**输入**侧可选、在**输出**侧必有；写成
+ * `z.ZodType<T>` 会把输出侧也收成可选，与消费端实际读到的形状对不上。
+ */
+const parseOrDebug = <T,>(payload: unknown, schema: z.ZodType<T, z.ZodTypeDef, unknown>, label: string): T | null => {
   const parsed = schema.safeParse(payload);
   if (!parsed.success) {
     console.debug(`[cli-forward] ${label} 响应未通过契约校验`, { issue: parsed.error.message.slice(0, 200) });

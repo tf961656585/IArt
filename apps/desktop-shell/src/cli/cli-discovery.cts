@@ -71,7 +71,7 @@ export const readDiscoveryFile = (filePath: string): CliDiscoveryFile | null => 
 };
 
 /**
- * 0600 原子写（先例：apps/backend skill-runtime-config-store——tmp 写入 + chmod 0600 + rename）。
+ * 0600 原子写（tmp 写入 + chmod 0600 + rename）。
  * mode 选项受 umask 影响，显式 chmod 确保 0600。写入失败向上抛，由启动方决定是否阻断。
  */
 export const writeDiscoveryFile = (filePath: string, content: CliDiscoveryFile): void => {

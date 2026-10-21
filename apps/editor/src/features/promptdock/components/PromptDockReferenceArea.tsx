@@ -8,7 +8,10 @@ import { Button } from '@/components/ui/button';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
 import { usePromptDockStore } from '../promptDockStore';
 import { addNodesToReferences, resolveReferenceCandidate } from '../referenceOps';
+import { reassignSlot } from '../referenceSlotModel';
+import type { PromptDockCatalogEntry } from '@/client/api/promptDockApi';
 import { PromptDockReferenceAreaChip } from './PromptDockReferenceAreaChip';
+import { PromptDockReferenceSlotBadge } from './PromptDockReferenceSlotBadge';
 
 /**
  * 附件参考区（资产多选）。资产引用由草稿承载，不创建连线/节点。
@@ -31,7 +34,11 @@ const INLINE_NOTICE_COPY: Record<InlineNoticeKind, string> = {
   unsupported: '当前选中不能作参考',
 };
 
-export function PromptDockReferenceArea() {
+export function PromptDockReferenceArea({
+  entry = null,
+}: {
+  entry?: PromptDockCatalogEntry | null;
+}) {
   const references = usePromptDockStore((s) => s.draft.references);
   const setDraft = usePromptDockStore((s) => s.setDraft);
 
@@ -107,6 +114,13 @@ export function PromptDockReferenceArea() {
     }
   }, [selectedNodes, clearNotice, showNotice]);
 
+  const selectSlot = useCallback(
+    (refId: string, slotId: string | null) => {
+      setDraft({ references: reassignSlot(references, refId, slotId, entry) });
+    },
+    [references, setDraft, entry],
+  );
+
   const removeReference = useCallback(
     (refId: string) => {
       setDraft({ references: references.filter((r) => r.refId !== refId) });
@@ -124,11 +138,15 @@ export function PromptDockReferenceArea() {
         <Paperclip size={14} aria-hidden="true" />
       </span>
       {references.map((ref) => (
-        <PromptDockReferenceAreaChip
-          key={ref.refId}
-          reference={ref}
-          onRemove={removeReference}
-        />
+        <span key={ref.refId} className="inline-flex items-center gap-1">
+          <PromptDockReferenceAreaChip reference={ref} onRemove={removeReference} />
+          <PromptDockReferenceSlotBadge
+            reference={ref}
+            references={references}
+            entry={entry}
+            onSelect={selectSlot}
+          />
+        </span>
       ))}
       <Button
         variant="ghost"

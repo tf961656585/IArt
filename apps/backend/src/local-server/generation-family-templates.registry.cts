@@ -28,12 +28,14 @@ import {
   buildSeedance20V1ParameterDescriptor,
   SEEDANCE_2_0_V1_FAMILY_ADAPTER_ID,
   SEEDANCE_2_0_V1_SUPPORTED_MEDIA_SLOTS,
+  SEEDANCE_MEDIA_SLOT_FIELD_KEYS,
 } from './generation-family-templates.seedance.cts';
 import {
   buildVeoV1BaseTemplateSources,
   buildVeoV1ParameterDescriptor,
   VEO_V1_FAMILY_ADAPTER_ID,
   VEO_V1_SUPPORTED_MEDIA_SLOTS,
+  VEO_MEDIA_SLOT_FIELD_KEYS,
 } from './generation-family-templates.veo.cts';
 import {
   buildKlingText2VideoV1BaseTemplateSources,
@@ -53,6 +55,7 @@ import {
   KLING_OMNI_VIDEO_V1_FAMILY_ADAPTER_ID,
   KLING_OMNI_VIDEO_V1_SUPPORTED_MEDIA_SLOTS,
 } from './generation-family-templates.kling-omni-video.cts';
+import { klingMediaSlotFieldKey } from './generation-family-templates.kling-protocol.cts';
 import { applyParameterOverrides, EMPTY_PARAMETER_OVERRIDES } from './generation-parameter-overrides.cts';
 
 /**
@@ -99,6 +102,18 @@ type GenerationFamilyTemplateEntryCommon = {
    */
   requiredMediaSlots: readonly GenerationMediaSlotId[];
   /**
+   * 该族「素材位 → 参数字段键」的完整映射。
+   *
+   * 为什么放在注册表而不让消费端自己推导：各族内部的映射事实形态与命名不同
+   * （可灵三族是 `KLING_MEDIA_SLOT_FIELD_FACTS` 事实表、Seedance / Veo 是
+   * `MEDIA_SLOT_FIELD_KEYS` 记录）；消费端若自行推导就会变成第二处事实源。此处是唯一的
+   * 跨族出口，取值必须直接来自该族自己的事实表，不许手抄字面量。
+   *
+   * 键集必须与该族 `supportsMediaSlots` **完全一致**（测试钉住）：少一位说明能力事实漏登记，
+   * 多一位说明登记了表达不了的位。`pending` 族取空对象。
+   */
+  mediaSlotFieldKeys: Readonly<Partial<Record<GenerationMediaSlotId, string>>>;
+  /**
    * 该族模板用到的适配器 endpoint 键（`ADAPTER_REGISTRY[id].relative_endpoints` 的键名）。
    * 一致性门禁要求：每个键在适配器里存在，且模板内的 endpoint 字面量恰好落在这些键的值里。
    */
@@ -134,6 +149,7 @@ export const GENERATION_FAMILY_TEMPLATE_REGISTRY: Record<GenerationFamilyAdapter
     buildBaseSources: buildOpenAiImageV1BaseTemplateSources,
     supportsMediaSlots: OPENAI_IMAGE_V1_SUPPORTED_MEDIA_SLOTS,
     requiredMediaSlots: [],
+    mediaSlotFieldKeys: { reference_image: 'image' },
     declaredEndpointKeys: ['generations', 'edits'],
   },
   'gemini-image-interactions-v1': {
@@ -142,6 +158,7 @@ export const GENERATION_FAMILY_TEMPLATE_REGISTRY: Record<GenerationFamilyAdapter
     buildBaseSources: buildGeminiImageInteractionsV1BaseTemplateSources,
     supportsMediaSlots: GEMINI_IMAGE_INTERACTIONS_V1_SUPPORTED_MEDIA_SLOTS,
     requiredMediaSlots: [],
+    mediaSlotFieldKeys: { reference_image: 'image' },
     declaredEndpointKeys: ['interactions'],
   },
   'seedance-2-0-v1': {
@@ -150,6 +167,7 @@ export const GENERATION_FAMILY_TEMPLATE_REGISTRY: Record<GenerationFamilyAdapter
     buildBaseSources: buildSeedance20V1BaseTemplateSources,
     supportsMediaSlots: SEEDANCE_2_0_V1_SUPPORTED_MEDIA_SLOTS,
     requiredMediaSlots: [],
+    mediaSlotFieldKeys: SEEDANCE_MEDIA_SLOT_FIELD_KEYS,
     declaredEndpointKeys: ['tasks', 'taskById'],
   },
   'veo-v1': {
@@ -158,6 +176,11 @@ export const GENERATION_FAMILY_TEMPLATE_REGISTRY: Record<GenerationFamilyAdapter
     buildBaseSources: buildVeoV1BaseTemplateSources,
     supportsMediaSlots: VEO_V1_SUPPORTED_MEDIA_SLOTS,
     requiredMediaSlots: [],
+    // 族上限是首帧/尾帧；构建器可表达的 reference_image 不在上限内，故不登记（键集必须等于族上限）。
+    mediaSlotFieldKeys: {
+      first_frame: VEO_MEDIA_SLOT_FIELD_KEYS.first_frame,
+      last_frame: VEO_MEDIA_SLOT_FIELD_KEYS.last_frame,
+    },
     declaredEndpointKeys: ['predictLongRunning', 'operation'],
   },
   'kling-text2video-v1': {
@@ -166,6 +189,7 @@ export const GENERATION_FAMILY_TEMPLATE_REGISTRY: Record<GenerationFamilyAdapter
     buildBaseSources: buildKlingText2VideoV1BaseTemplateSources,
     supportsMediaSlots: KLING_TEXT2VIDEO_V1_SUPPORTED_MEDIA_SLOTS,
     requiredMediaSlots: [],
+    mediaSlotFieldKeys: {},
     declaredEndpointKeys: ['textToVideo', 'taskById'],
   },
   'kling-image2video-v1': {
@@ -174,6 +198,11 @@ export const GENERATION_FAMILY_TEMPLATE_REGISTRY: Record<GenerationFamilyAdapter
     buildBaseSources: buildKlingImage2VideoV1BaseTemplateSources,
     supportsMediaSlots: KLING_IMAGE2VIDEO_V1_SUPPORTED_MEDIA_SLOTS,
     requiredMediaSlots: ['first_frame'],
+    // 字段键从可灵族自己的事实表取，不手抄字面量。
+    mediaSlotFieldKeys: {
+      first_frame: klingMediaSlotFieldKey('first_frame') ?? '',
+      last_frame: klingMediaSlotFieldKey('last_frame') ?? '',
+    },
     declaredEndpointKeys: ['imageToVideo', 'taskById'],
   },
   'kling-omni-video-v1': {
@@ -182,6 +211,13 @@ export const GENERATION_FAMILY_TEMPLATE_REGISTRY: Record<GenerationFamilyAdapter
     buildBaseSources: buildKlingOmniVideoV1BaseTemplateSources,
     supportsMediaSlots: KLING_OMNI_VIDEO_V1_SUPPORTED_MEDIA_SLOTS,
     requiredMediaSlots: [],
+    mediaSlotFieldKeys: {
+      first_frame: klingMediaSlotFieldKey('first_frame') ?? '',
+      last_frame: klingMediaSlotFieldKey('last_frame') ?? '',
+      reference_image: klingMediaSlotFieldKey('reference_image') ?? '',
+      feature_video: klingMediaSlotFieldKey('feature_video') ?? '',
+      base_video: klingMediaSlotFieldKey('base_video') ?? '',
+    },
     declaredEndpointKeys: ['omniVideo', 'taskById'],
   },
 };

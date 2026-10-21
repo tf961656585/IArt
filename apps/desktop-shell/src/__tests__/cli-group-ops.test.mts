@@ -1,5 +1,5 @@
 // @vitest-environment node
-// @spec: CLI-043, CLI-044, CLI-045, CLI-046
+// @spec: CLI-043, CLI-044, CLI-045, CLI-046, CLI-049
 //
 // CLI 出生组与组织面补齐 · 主进程侧执行器测试（spec docs/integrations/CLI与本地Agent集成.md
 // §5.2 group list / §5.4 --group 与画布投影身份 / §5.3 空组建组）：
@@ -272,6 +272,21 @@ describe("arg parser（CLI-043/CLI-044/CLI-045）", () => {
     };
     expect(withoutGroup.request).toMatchObject({ command: "generate" });
     expect(withoutGroup.request).not.toHaveProperty("group");
+  });
+
+  it("canvas group add/remove 命令短语、--group 与 --members 解析（CLI-049）", () => {
+    for (const action of ["add", "remove"] as const) {
+      const parsed = parser.parseCliArgs([
+        "canvas", "group", action, "--group", "g1", "--members", "n1,n2", "--project", "demo",
+      ]) as { ok: boolean; request?: { command: string; group?: string; members?: string[] } };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.request).toMatchObject({
+        command: `canvas.group.${action}`,
+        project: "demo",
+        group: "g1",
+        members: ["n1", "n2"],
+      });
+    }
   });
 
   it("canvas group create 零成员（省略 --members）可通过解析（CLI-044）", () => {

@@ -431,7 +431,7 @@ export function PromptDock() {
             </>
           )}
           <TopBandDivider />
-          <PromptDockReferenceArea />
+          <PromptDockReferenceArea entry={selectedEntry} />
         </div>
 
         {/* 主行：prompt 编辑面占满整行（R1(a) 尺寸耦合，自适应高度，右下角字数计数）；

@@ -165,6 +165,30 @@ const projectTaskRecordPatch = (patch: unknown): TaskRecordPatch => {
   return projected;
 };
 
+const PROGRESS_PHASE_RESET_STATUSES = new Set<string>([
+  TASK_STATUS.FAILED,
+  TASK_STATUS.CANCELLED,
+]);
+
+/**
+ * 终态 progressPhase 归一（docs/architecture/contracts/task-state-machine.md
+ * legal_combinations：failed / cancelled 只允许 progressPhase=null）。
+ *
+ * 失败补丁可能不携带 progress（停在 requesting / downloading），必须在写侧统一归零；
+ * 其余 progress 字段保留，不做整对象替换。历史记录由共享投影
+ * （packages/contracts 的 runtimeTaskRowToView）在读侧归一。
+ */
+const normalizeTerminalProgressPhase = (
+  sourceRecord: PlainObject,
+  patchValue: TaskRecordPatch,
+) => {
+  const normalizedStatus = normalizeTaskStatus(patchValue.status, "");
+  if (!PROGRESS_PHASE_RESET_STATUSES.has(normalizedStatus)) return;
+  const baseProgress = projectTaskProgressPatch(sourceRecord.progress);
+  const patchProgress = projectTaskProgressPatch(patchValue.progress);
+  patchValue.progress = { ...baseProgress, ...patchProgress, phase: null };
+};
+
 const mergeTaskProgressPatch = (
   progress: unknown,
   patch: TaskProgressPatch,
@@ -357,6 +381,7 @@ const patchTaskRecord = async (record: unknown, patch: PlainObject) => {
   if (shouldDropLateWrite(sourceTaskId)) return record;
   const patchValue = projectTaskRecordPatch(patch);
   patchValue.updatedAt = Date.now();
+  normalizeTerminalProgressPhase(sourceRecord, patchValue);
   const next = updateTaskRecordPure(record, patchValue);
   const persisted = next;
   const persistedValue = toRecord(persisted);
@@ -407,6 +432,7 @@ const patchTaskRecordWithOutputs = async (
   if (shouldDropLateWrite(preTaskId)) return record;
   const patchValue = projectTaskRecordPatch(patch);
   patchValue.updatedAt = Date.now();
+  normalizeTerminalProgressPhase(preRecord, patchValue);
   const persisted = updateTaskRecordPure(record, patchValue);
   const persistedValue = toRecord(persisted);
   const metadata = toRecord(persistedValue.metadata);

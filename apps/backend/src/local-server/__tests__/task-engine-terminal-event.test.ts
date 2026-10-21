@@ -7,14 +7,19 @@ import test from "node:test";
 import type { RuntimeTransactionResult } from "@iart/contracts";
 
 import { setBackendIpcTestHandler } from "../backend-ipc-sender.cts";
-import { patchTaskRecordWithOutputs } from "../task-engine-state.cts";
+import { patchTaskRecord, patchTaskRecordWithOutputs } from "../task-engine-state.cts";
 
 // Backend→Main IPC 测试替身：拦截 sendRuntimeTransaction / sendTaskEvent（请求-响应类唯一发送路径），
 // 记录消息并返回成功回执。sendTaskStateNotification（fire-and-forget）在无 process.send 时为 no-op。
 type CapturedMessage = {
   type?: unknown;
   transactionId?: unknown;
-  tasks?: Array<{ taskId?: unknown; startedAt?: unknown; finishedAt?: unknown }>;
+  tasks?: Array<{
+    taskId?: unknown;
+    startedAt?: unknown;
+    finishedAt?: unknown;
+    progressPhase?: unknown;
+  }>;
   event?: { taskId?: unknown; eventType?: unknown; payload?: unknown };
 };
 
@@ -33,6 +38,18 @@ const buildRecord = (taskId: string, projectPath: string) => ({
   projectPath,
   metadata: { taskId, projectPath },
 });
+
+const buildRecordWithProgress = (taskId: string, projectPath: string) => ({
+  ...buildRecord(taskId, projectPath),
+  progress: { phase: "requesting", percent: 37 },
+});
+
+const findTransactionRow = (captured: CapturedMessage[], taskId: string) =>
+  captured.find(
+    (message) =>
+      message.type === "runtime:execute-transaction" &&
+      message.tasks?.some((row) => row.taskId === taskId),
+  )?.tasks?.find((row) => row.taskId === taskId);
 
 void test("带产物成功终态：补写 task.succeeded 事件并投影 startedAt/finishedAt", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-terminal-ev-"));
@@ -125,6 +142,58 @@ void test("带产物失败终态：补写 task.failed 事件，payload 与无产
     assert.equal(payload?.status, "failed");
     assert.equal(payload?.error?.code, "runtime_failed");
     assert.equal(payload?.error?.message, "远端失败");
+  } finally {
+    setBackendIpcTestHandler(null);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+void test("失败终态：progress.phase 归零，落库行 progressPhase 为 null", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-terminal-phase-"));
+  const captured: CapturedMessage[] = [];
+  setBackendIpcTestHandler(async (message) => {
+    captured.push(message as CapturedMessage);
+    return makeSuccessResult(message.transactionId);
+  });
+  try {
+    const taskId = "task-phase-failed";
+    const persisted = (await patchTaskRecord(buildRecordWithProgress(taskId, tempDir), {
+      status: "failed",
+      finishedAt: 9999,
+      error: { code: "task_execution_failed", message: "fetch failed" },
+    } as Parameters<typeof patchTaskRecord>[1])) as { progress?: { phase?: unknown; percent?: unknown } };
+
+    assert.equal(persisted.progress?.phase, null, "失败任务内存记录不得残留 progress.phase");
+    assert.equal(persisted.progress?.percent, 37, "归一只清 phase，其余 progress 字段保留");
+
+    const row = findTransactionRow(captured, taskId);
+    assert.ok(row, "失败终态应写出任务行");
+    assert.equal(row.progressPhase, null, "失败任务落库行 progressPhase 必须为 null");
+  } finally {
+    setBackendIpcTestHandler(null);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+void test("取消终态：progress.phase 归零，落库行 progressPhase 为 null", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-terminal-phase-"));
+  const captured: CapturedMessage[] = [];
+  setBackendIpcTestHandler(async (message) => {
+    captured.push(message as CapturedMessage);
+    return makeSuccessResult(message.transactionId);
+  });
+  try {
+    const taskId = "task-phase-cancelled";
+    const persisted = (await patchTaskRecord(buildRecordWithProgress(taskId, tempDir), {
+      status: "cancelled",
+      finishedAt: 9999,
+    } as Parameters<typeof patchTaskRecord>[1])) as { progress?: { phase?: unknown } };
+
+    assert.equal(persisted.progress?.phase, null, "取消任务内存记录不得残留 progress.phase");
+
+    const row = findTransactionRow(captured, taskId);
+    assert.ok(row, "取消终态应写出任务行");
+    assert.equal(row.progressPhase, null, "取消任务落库行 progressPhase 必须为 null");
   } finally {
     setBackendIpcTestHandler(null);
     fs.rmSync(tempDir, { recursive: true, force: true });

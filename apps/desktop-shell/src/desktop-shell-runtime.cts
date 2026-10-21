@@ -125,56 +125,6 @@ export const cleanupLegacyModelAssetSyncedDirectory = (userDataDir: string): voi
   }
 };
 
-/**
- * 将 skill 运行时配置文件目录注入 backend 子进程 env。
- *
- * spec docs/hub/skill-store.md：backend 在启动与 Key/策略变更时把
- * { proxyBaseUrl, gatewayBaseUrl, apiKey, modelId, updatedAt } 写入该目录下的
- * <id>.runtime.json（权限 0600），供已安装的 skill bash 读取。
- *
- * 目录归属决策（dev/prod 隔离）留在 desktop-shell：
- *   - dev（!app.isPackaged）：~/.iart-studio-dev/skills-runtime
- *   - prod：~/.iart-studio/skills-runtime
- * 与 editor-storage-recent-projects.cts 的 dev/prod 隔离先例一致。
- *
- * 优先级：开发者手动设置 IART_SKILL_RUNTIME_DIR → 不覆盖；否则按 dev/prod 计算并注入。
- * 若目录无法创建（fs 失败），注入空字符串让 backend 跳过写入而非崩溃。
- */
-export const injectSkillRuntimeDir = (
-  env: DesktopEnv,
-  isPackaged: boolean,
-): void => {
-  // 优先级 0a：开发者手动设置的 env 不被覆盖
-  if (env.IART_SKILL_RUNTIME_DIR !== undefined) {
-    appendUpdaterLog("debug", "skill-runtime: dev env override wins, skip injecting skill runtime dir", {
-      envValue: env.IART_SKILL_RUNTIME_DIR,
-    });
-    return;
-  }
-
-  const homeDir = env.HOME || env.USERPROFILE || "";
-  const appDataDir = path.join(
-    homeDir,
-    isPackaged ? ".iart-studio" : ".iart-studio-dev",
-  );
-  const runtimeDir = path.join(appDataDir, "skills-runtime");
-
-  try {
-    fs.mkdirSync(runtimeDir, { recursive: true });
-  } catch (err) {
-    appendUpdaterLog("warn", "skill-runtime: failed to create skills-runtime dir, backend will skip writing", {
-      runtimeDir,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return;
-  }
-
-  env.IART_SKILL_RUNTIME_DIR = runtimeDir;
-  appendUpdaterLog("info", "skill-runtime: injecting skill runtime dir to backend env", {
-    runtimeDir,
-  });
-};
-
 export const createRuntimeController = (
   options: RuntimeControllerOptions,
 ) => {
@@ -344,7 +294,6 @@ export const createRuntimeController = (
       env[HUB_LOCAL_WRITE_TOKEN_ENV] = hubWriteToken;
       cleanupLegacyModelAssetSyncedDirectory(app.getPath("userData"));
       injectModelAssetPackagesDir(env, app.isPackaged);
-      injectSkillRuntimeDir(env, app.isPackaged);
       const bootstrap = resolveDesktopBackendRuntimeBootstrap({
         env,
         backendPortHint,
