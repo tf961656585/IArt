@@ -4,10 +4,10 @@
     {
       "id": "iart-cli",
       "name": "IARTStudio CLI",
-      "version": "1.14.0",
-      "description": "通过 iart 命令行驱动正在运行的 IARTStudio 桌面应用：感知打开项目与画布选中、打开/创建项目、导入本地媒体文件（asset import，整批一个撤销步骤）、提交生成（受理幂等键防重复出图、--ref 参考用途指定、--group 指定出生组、终态尺寸提示）并把产物落进画布、读生成档案拿提示词全文与提交意图（batch get / asset get / task get 内联 generation）、建组/空组建组/组清单/加入成员/移出成员/解散/移动/删除节点与按序整理布局、容器作用域组间整理（--scope containers 消除组框重叠，不动容器内部）、命令级帮助与按命令参数校验、先规划分组再提交生成的画布组织方法论、过滤查询与等待生成任务（失败原因可读、画布投影身份可查）。",
-      "bundleKey": "skills/bundles/iart-cli-1.14.0.json",
-      "sha512": "919b695a9eef07dc9bb730f38513630370836dcbe46fe8c8817e8a7936ad82eb8c554c45f4960f5c239c3b4b93f9ecb58e661dcf4a7e2892c487894a86ed8800"
+      "version": "1.17.0",
+      "description": "通过 iart 命令行驱动正在运行的 IARTStudio 桌面应用：感知打开项目与画布选中、打开/创建项目、导入本地媒体文件（asset import，整批一个撤销步骤）、提交生成（受理幂等键防重复出图、--ref 参考用途指定、--group 指定出生组、终态尺寸提示）并把产物落进画布、读生成档案拿提示词全文与提交意图（batch get / asset get / task get 内联 generation）、一条 canvas inspect 拿全画布场景图（默认精简、--full 资产摘要、--group 聚焦、注释/重叠/最小间距）、建组/空组建组/组清单/重命名/加入成员/移出成员/解散/删除节点、整组平移与批量移动（相对位移或 --positions 绝对坐标）、按序整理布局（默认视觉阅读序、--order-mode 与精确 --gap）、容器组间整理与整版排布（--scope containers / --pack）、计划文件一次完成多组网格+容器看板+显式坐标（canvas layout --plan，一条撤销记录）、写命令 dry-run 预演与执行报告（含 cascaded）、按操作精确撤销、把已有资产放回画布并保留溯源（canvas node create）、资产在画布对账（asset list --on-canvas）、两级名词帮助与按命令参数校验、先规划分组再提交生成的画布组织方法论、过滤查询与等待生成任务（失败原因可读、画布投影身份可查）。",
+      "bundleKey": "skills/bundles/iart-cli-1.17.0.json",
+      "sha512": "e183e998b04140637116d3f2b7c9aa974d345eaf9c52a6b3f198c0163fd99ebd53deaf1f15c35f76b0640833c82d583aa0673c835fa5749ab1ed1bb5cf847f2a"
     },
     {
       "id": "ppt-builder",
