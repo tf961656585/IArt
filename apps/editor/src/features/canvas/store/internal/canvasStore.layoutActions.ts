@@ -1,7 +1,13 @@
 import { computeAutoLayout } from '../../layout/autoLayout';
-import type { AutoLayoutResult } from '../../layout/autoLayoutTypes';
+import type { LayoutApplyResult } from '../../layout/autoLayoutTypes';
+import { normalizeLayoutOrderMode } from '../../layout/autoLayoutTypes';
 import { applyLayoutInputOrder } from '../../layout/layoutPrimitives';
-import { bboxTopLeft } from '../../layout/containerArrangement';
+import {
+  bboxTopLeft,
+  orderNodesForLayoutMode,
+  snapAnchorToGrid,
+} from '../../layout/containerArrangement';
+import { computeOrderChanges, orderByReadingPosition } from '../../layout/readingOrder';
 import { resolveContainerOverlaps } from '../../layout/containerOverlap';
 import type { EffectiveSizeSources } from '../../utils/effectiveSize';
 import { DEFAULT_NODE_SIZE, resolveEffectiveSizeByNodeId } from '../../utils/effectiveSize';
@@ -139,21 +145,42 @@ const waitForMeasuredConvergence = async (
   );
 };
 
+/**
+ * 全局整理 options 的扩展字段（本批新增，store core 的类型收敛由主 agent 统一）。
+ *
+ * `gap`：本次格子间距（非负整数，缺省 NODE_GAP=120），调用入参、不持久化。
+ * `orderMode` / `order_mode`：本次排序口径；缺省 `position`（视觉阅读序），`created` 在
+ * 画布侧落 debug 日志后按 `insertion` 处理（主进程会先解析成显式 order）。
+ */
+type GlobalLayoutExtendedOptions = CanvasAutoLayoutStoreOptions & {
+  gap?: number | undefined;
+  orderMode?: unknown;
+  order_mode?: unknown;
+};
+
 export const createCanvasLayoutActions = (
   set: CanvasStoreSet,
   get: CanvasStoreGet,
-): Pick<NodeGraphActions, 'autoLayout' | 'autoLayoutWithPreMeasure' | 'layoutContainers'> => {
+): Pick<
+  NodeGraphActions,
+  'autoLayout' | 'planAutoLayout' | 'autoLayoutWithPreMeasure' | 'layoutContainers' | 'planLayoutContainers'
+> => {
   /**
    * 执行全局整理核心逻辑（不含预挂载测量编排）。
    * 异步：ELK 布局引擎是异步的。
    */
   const runAutoLayoutAsync = async (
-    options: CanvasAutoLayoutStoreOptions | undefined,
-  ): Promise<(AutoLayoutResult & { changedCount: number }) | null> => {
+    options: GlobalLayoutExtendedOptions | undefined,
+    dryRun = false,
+  ): Promise<LayoutApplyResult | null> => {
     const { nodeGraph } = get();
     if (nodeGraph === null) return null;
 
     const normalizedSettings = normalizeNodeGraphSettings(nodeGraph.settings);
+    // 排序口径（spec：画布自动布局算法.md「排序口径」）：缺省 position = 视觉阅读序；
+    // created 由主进程解析为显式 order 后传入，画布侧收到时落 debug 并按 insertion 处理。
+    const orderMode = normalizeLayoutOrderMode(options?.orderMode)
+      ?? normalizeLayoutOrderMode(options?.order_mode);
 
     // 全局整理作用域：仅自由的合法节点（AG-CN-009）。
     // 容器节点（组 | Agent 容器）与容器内成员（groupId!==undefined）不进入全局布局输入。
@@ -161,15 +188,15 @@ export const createCanvasLayoutActions = (
     // 参与布局会被重排到与真实渲染位置无关的虚构位置，
     // 其派生高度会污染自由节点 y 位置，删除 position 后留下 y 空洞（spec：画布自动布局算法.md
     // 「组节点在布局中的地位」+ 画布节点组.md「整理作用域」）。
-    // order 显式顺序（CLI --order 承载，spec CLI-030）：重排输入数组序；缺省不传时数组序
-    // 即现状口径，默认排序行为不变。
-    const layoutEligibleNodes = applyLayoutInputOrder(
-      nodeGraph.nodes.filter(
-        (n) =>
-          !isContainerNode(n) && !(typeof n.groupId === 'string' && n.groupId.length > 0),
-      ),
-      options?.order,
+    // 顺序：先按排序口径产出基准序，再让显式 order 覆盖在基准序之上（CLI --order，spec CLI-030）。
+    // 当前实现只有一个自由节点分区（未分资产/素材/任务/注释分区），槽位即该分区内 0 基下标。
+    const freeNodes = nodeGraph.nodes.filter(
+      (n) => !isContainerNode(n) && !(typeof n.groupId === 'string' && n.groupId.length > 0),
     );
+    const visualOrder = orderByReadingPosition(freeNodes);
+    const baseOrder = orderNodesForLayoutMode(freeNodes, orderMode);
+    const layoutEligibleNodes = applyLayoutInputOrder(baseOrder, options?.order);
+    const orderSummary = computeOrderChanges(visualOrder, layoutEligibleNodes);
 
     const desiredByNodeId = get().ui.desiredSizeByNodeId;
     const layoutModelByNodeId = get().ui.layoutModelByNodeId;
@@ -188,11 +215,12 @@ export const createCanvasLayoutActions = (
     };
     const layoutOptions = {
       defaultNodeSize: undefined,
-      snapGrid: normalizedSettings.snapGrid,
       sizeSources,
       // --columns 透传（spec §5.3「均映射列数语义」/ CLI-032）：缺省 undefined 时布局引擎
       // 单列垂直摆放（既有口径不变），给出时按网格分行摆放。
       columns: options?.columns,
+      // --gap 透传：格子间距精确等于该值（缺省 NODE_GAP），算法层不做逐点网格吸附。
+      nodeGap: options?.gap,
     };
 
     const layoutResult = await computeAutoLayout(
@@ -202,12 +230,21 @@ export const createCanvasLayoutActions = (
 
     const rawPositions = layoutResult.positions;
     if (!Object.keys(rawPositions).length) {
-      return { ...layoutResult, changedCount: 0 };
+      return {
+        ...layoutResult,
+        changedCount: 0,
+        contentReordered: orderSummary.contentReordered,
+        orderChanges: [...orderSummary.orderChanges],
+      };
     }
 
-    // 锚点保持（与容器内整理同一包围盒口径，spec：画布节点组.md「自动布局协作」）：
-    // 整理前参与自由节点整块包围盒左上角作为锚点。
-    const beforeAnchor = bboxTopLeft(layoutEligibleNodes);
+    // 锚点吸附（与容器内整理同一包围盒口径，spec：画布节点组.md「自动布局协作」，
+    // 画布自动布局算法.md AL-GC-002/AL-GC-006）：整理前参与自由节点整块包围盒左上角
+    // 吸附到最近网格点（无网格时精确保持）；块内相对位置与间距不变。
+    const beforeAnchor = snapAnchorToGrid(
+      bboxTopLeft(layoutEligibleNodes),
+      normalizedSettings.snapGrid,
+    );
 
     // 容器几何约束（spec：画布自动布局算法.md「容器几何约束」）：整块经防重叠搜索求位，
     // 摆放输出不得与任何容器的实际占位相交——展开态容器按成员派生包围盒、折叠态按折叠
@@ -235,9 +272,9 @@ export const createCanvasLayoutActions = (
       cells.push({ dx: raw.x, dy: raw.y, width: size.width, height: size.height });
     }
 
-    // 整块求位：以整理前锚点为首选位环形搜索（步距 = snapGrid，候选位保持网格节奏）。
-    // 无容器冲突时 ring 0 即命中 → 块原点 = 整理前锚点（锚点保持精确成立，消除 CLI 路径
-    // 整块甩到画布原点的问题）；冲突时落到最近可行位（按环序确定性搜索）。
+    // 整块求位：以吸附后的锚点为首选位环形搜索（步距 = snapGrid，候选位保持网格节奏）。
+    // 无容器冲突时 ring 0 即命中 → 块原点 = 吸附后的锚点（AL-GC-002/006 成立，消除 CLI 路径
+    // 整块甩到画布原点的问题）；冲突时落到最近可行位（按环序确定性搜索），属避容器让位。
     const snapGrid = normalizeSnapGrid(normalizedSettings.snapGrid);
     const blockOrigin = searchFreeBlockPosition({
       occupancy: containerOccupancy,
@@ -268,6 +305,32 @@ export const createCanvasLayoutActions = (
       };
     }
 
+    // 计划模式（CLI canvas.layout --dry-run）：零写入、零撤销记录。
+    // changedCount 语义切换为「计划发生位移的节点数」（真实执行路径保持「回写节点数」不变）。
+    if (dryRun) {
+      let planned = 0;
+      for (const node of nodeGraph.nodes) {
+        if (isContainerNode(node)) continue;
+        const nextPos = positions[node.id];
+        if (!nextPos) continue;
+        if (node.position.x === nextPos.x && node.position.y === nextPos.y) continue;
+        planned += 1;
+      }
+      console.debug('[autoLayout] dry-run plan computed; canvas untouched', {
+        planned,
+        plannedNodes: Object.keys(positions).length,
+        gap: options?.gap,
+        orderMode,
+      });
+      return {
+        ...layoutResult,
+        positions,
+        changedCount: planned,
+        contentReordered: orderSummary.contentReordered,
+        orderChanges: [...orderSummary.orderChanges],
+      };
+    }
+
     let touched = 0;
     const touchedNodeIds: string[] = [];
     set((state) => {
@@ -295,11 +358,110 @@ export const createCanvasLayoutActions = (
     }
 
     // 返回值携带补偿后的最终坐标（消费方只读 changedCount，positions 语义保持真实最终位）。
-    return { ...layoutResult, positions, changedCount: touched };
+    return {
+      ...layoutResult,
+      positions,
+      changedCount: touched,
+      contentReordered: orderSummary.contentReordered,
+      orderChanges: [...orderSummary.orderChanges],
+    };
+  };
+
+  /**
+   * 容器让位（真实执行 / 计划共用同一算法本体）。
+   *
+   * dryRun=true 时零写入、零历史，positions 为计划值；返回的 inspectedContainerIds 与
+   * skipped 供 CLI 执行报告区分「检查过 N 个容器、无相交」与「被跳过」（本批 summary）。
+   */
+  const runContainerLayout = async (
+    dryRun: boolean,
+  ): Promise<{
+    positions: Record<string, NodePosition>;
+    changedCount: number;
+    inspectedContainerIds: string[];
+    skipped: Array<{ node_id: string; reason: string }>;
+  } | null> => {
+    const { nodeGraph } = get();
+    if (nodeGraph === null) return null;
+
+    const sizeSources = buildCanvasSizeSources(get());
+    const snapGrid = normalizeNodeGraphSettings(nodeGraph.settings).snapGrid;
+    // 只把最外层容器当整体：组；无宿主组的独立 Agent 容器。组内 Agent 容器随宿主组移动。
+    const topLevelContainerIds = nodeGraph.nodes
+      .filter(
+        (node) =>
+          isContainerNode(node) &&
+          !(typeof node.groupId === 'string' && node.groupId.length > 0),
+      )
+      .map((node) => node.id);
+
+    const skipped: Array<{ node_id: string; reason: string }> = [];
+    const relocations = resolveContainerOverlaps({
+      nodes: nodeGraph.nodes,
+      sizeSources,
+      snapGrid,
+      containerIds: topLevelContainerIds,
+      onSkip: (nodeId, reason) => {
+        console.debug('[layoutContainers] container skipped during overlap resolution', {
+          nodeId,
+          reason,
+        });
+        skipped.push({ node_id: nodeId, reason });
+      },
+    });
+    if (relocations.length === 0) {
+      return { positions: {}, changedCount: 0, inspectedContainerIds: topLevelContainerIds, skipped };
+    }
+
+    const nodeById = new Map(nodeGraph.nodes.map((node) => [node.id, node] as const));
+    const moves: Array<{ id: string; position: NodePosition }> = [];
+    const positions: Record<string, NodePosition> = {};
+    for (const relocation of relocations) {
+      for (const memberId of relocation.memberIds) {
+        const member = nodeById.get(memberId);
+        if (member === undefined) continue;
+        const next = {
+          x: member.position.x + relocation.delta.x,
+          y: member.position.y + relocation.delta.y,
+        };
+        moves.push({ id: memberId, position: next });
+        positions[memberId] = next;
+      }
+      moves.push({
+        id: relocation.containerId,
+        position: relocation.containerTargetPosition,
+      });
+      positions[relocation.containerId] = relocation.containerTargetPosition;
+    }
+
+    if (dryRun) {
+      console.debug('[layoutContainers] dry-run plan computed; canvas untouched', {
+        containers: relocations.length,
+        moves: moves.length,
+      });
+      return { positions, changedCount: moves.length, inspectedContainerIds: topLevelContainerIds, skipped };
+    }
+
+    // 单次批量位置写入 = 单条原子历史；展开态容器 position 由成员派生重算。
+    get().updateNodePositionsBatch(moves);
+
+    const graphAfter = get().nodeGraph;
+    if (graphAfter !== null) {
+      for (const nodeId of Object.keys(positions)) {
+        const node = graphAfter.nodes.find((candidate) => candidate.id === nodeId);
+        if (node !== undefined) {
+          positions[nodeId] = { x: node.position.x, y: node.position.y };
+        }
+      }
+    }
+    return { positions, changedCount: moves.length, inspectedContainerIds: topLevelContainerIds, skipped };
   };
 
   return {
     autoLayout: (options) => runAutoLayoutAsync(options),
+
+    /** 全局整理的计划模式（CLI canvas.layout --dry-run）：同一算法，零写入、零历史。 */
+    planAutoLayout: (options) => runAutoLayoutAsync(options, true),
 
     /**
      * 带预挂载测量的全局整理（spec：画布自动布局算法.md「全局整理的预挂载测量」）。
@@ -343,65 +505,12 @@ export const createCanvasLayoutActions = (
       }
     },
 
-    layoutContainers: async () => {
-      const { nodeGraph } = get();
-      if (nodeGraph === null) return null;
+    layoutContainers: () => runContainerLayout(false),
 
-      const sizeSources = buildCanvasSizeSources(get());
-      const snapGrid = normalizeNodeGraphSettings(nodeGraph.settings).snapGrid;
-      // 只把最外层容器当整体：组；无宿主组的独立 Agent 容器。组内 Agent 容器随宿主组移动。
-      const topLevelContainerIds = nodeGraph.nodes
-        .filter(
-          (node) =>
-            isContainerNode(node) &&
-            !(typeof node.groupId === 'string' && node.groupId.length > 0),
-        )
-        .map((node) => node.id);
-
-      const relocations = resolveContainerOverlaps({
-        nodes: nodeGraph.nodes,
-        sizeSources,
-        snapGrid,
-        containerIds: topLevelContainerIds,
-      });
-      if (relocations.length === 0) {
-        return { positions: {}, changedCount: 0 };
-      }
-
-      const nodeById = new Map(nodeGraph.nodes.map((node) => [node.id, node] as const));
-      const moves: Array<{ id: string; position: NodePosition }> = [];
-      const positions: Record<string, NodePosition> = {};
-      for (const relocation of relocations) {
-        for (const memberId of relocation.memberIds) {
-          const member = nodeById.get(memberId);
-          if (member === undefined) continue;
-          const next = {
-            x: member.position.x + relocation.delta.x,
-            y: member.position.y + relocation.delta.y,
-          };
-          moves.push({ id: memberId, position: next });
-          positions[memberId] = next;
-        }
-        moves.push({
-          id: relocation.containerId,
-          position: relocation.containerTargetPosition,
-        });
-        positions[relocation.containerId] = relocation.containerTargetPosition;
-      }
-
-      // 单次批量位置写入 = 单条原子历史；展开态容器 position 由成员派生重算。
-      get().updateNodePositionsBatch(moves);
-
-      const graphAfter = get().nodeGraph;
-      if (graphAfter !== null) {
-        for (const nodeId of Object.keys(positions)) {
-          const node = graphAfter.nodes.find((candidate) => candidate.id === nodeId);
-          if (node !== undefined) {
-            positions[nodeId] = { x: node.position.x, y: node.position.y };
-          }
-        }
-      }
-      return { positions, changedCount: moves.length };
-    },
+    /**
+     * 容器让位的计划模式（CLI `canvas.layout --scope containers --dry-run`）：
+     * 与 layoutContainers 同一算法，零写入、零撤销记录，positions 为计划值。
+     */
+    planLayoutContainers: () => runContainerLayout(true),
   };
 };

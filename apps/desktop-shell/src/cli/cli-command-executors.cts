@@ -10,15 +10,16 @@ import {
   type RuntimeTaskView,
 } from "@iart/contracts";
 import * as path from "node:path";
-import type { CliCanvasNodeEntry } from "@iart/contracts";
 import type { ProjectRegistryEntry } from "../storage/editor-storage-recent-projects.cjs";
 import { getEntryLastOpenedAt } from "../storage/editor-storage-recent-projects.cjs";
 import {
+  buildAssetNodeIndex,
   buildTaskCanvasIdentityIndex,
-  projectCanvasNodePayload,
-  projectCanvasGroupSummaries,
   resolveLocalMediaFilePath,
 } from "./cli-canvas-projection.cjs";
+import { registerCanvasReadExecutors } from "./cli-canvas-read-executors.cjs";
+import { registerCanvasInspectExecutor } from "./cli-canvas-inspect-executor.cjs";
+import { registerCanvasWriteExecutors } from "./cli-canvas-write-executors.cjs";
 import type { CliAssetGenerationSource } from "./cli-storage-queries.cjs";
 import mediaFileKeyModule = require("@iart/utils/media-file-key");
 const { extractContentHashFromFileKey } = mediaFileKeyModule;
@@ -103,6 +104,12 @@ export interface CliCommandExecutorStorage {
   /** 按批次 id 读取批次快照（batch get 与档案内联的数据源，spec §5.2/CLI-038）。 */
   readBatchById: (projectPath: string, batchId: string) => BatchIntentSnapshot | null;
   readCanvasNodePayloads: (projectPath: string) => readonly unknown[];
+  /**
+   * 画布注释原始载荷清单（canvas.inspect 的 annotations 数据源，与节点同源于持久化画布图）。
+   * 可选：既有注入面（测试台架/旧调用方）未接线时，执行器回落到 storage 查询入口直读，
+   * 语义与提供该函数完全一致（同一 readNodeGraphFromDb 读取链）。
+   */
+  readCanvasAnnotations?: (projectPath: string) => readonly unknown[];
 }
 
 export interface CliCommandExecutorDeps {
@@ -240,14 +247,29 @@ const proxyOutcomeToResult = (
     case "asset.import":
       // 导入结果直通（产物条目列表：文件名/资产标识/节点标识/媒体类型）；文件存在性与类型
       // 校验在画布窗口侧前置完成，错误经 error 分支原样透传（spec §5.3 / CLI-047）。
-      return okResult(command, { imported: response.imported });
+      return okResult(command, {
+        imported: response.imported,
+        ...(response.operation_id !== undefined ? { operation_id: response.operation_id } : {}),
+      });
     case "canvas.group.create":
-      return okResult(command, { group_node_id: response.group_node_id });
+      return okResult(command, {
+        group_node_id: response.group_node_id,
+        member_ids: response.member_ids,
+        operation_id: response.operation_id,
+      });
+    case "canvas.group.rename":
+      // 重命名结果直通（spec §5.3 / CLI-057）：非位置类，operation_id 恒为 null。
+      return okResult(command, {
+        group_node_id: response.group_node_id,
+        name: response.name,
+        operation_id: response.operation_id,
+      });
     case "canvas.group.dissolve":
       return okResult(command, {
         dissolved: response.dissolved,
         group_node_id: response.group_node_id,
         member_ids: response.member_ids,
+        operation_id: response.operation_id,
       });
     case "canvas.group.add":
     case "canvas.group.remove": {
@@ -260,11 +282,64 @@ const proxyOutcomeToResult = (
         node_id: response.node_id,
         position: response.position,
         moved_node_ids: response.moved_node_ids,
+        summary: response.summary,
+        operation_id: response.operation_id,
+        dry_run: response.dry_run,
+      });
+    case "canvas.nodes.move":
+      return okResult(command, {
+        positions: response.positions,
+        moved_node_ids: response.moved_node_ids,
+        summary: response.summary,
+        operation_id: response.operation_id,
+        dry_run: response.dry_run,
+      });
+    case "canvas.group.move":
+      return okResult(command, {
+        group_node_id: response.group_node_id,
+        positions: response.positions,
+        moved_node_ids: response.moved_node_ids,
+        summary: response.summary,
+        operation_id: response.operation_id,
+        dry_run: response.dry_run,
       });
     case "canvas.node.delete":
-      return okResult(command, { deleted: response.deleted, deleted_node_ids: response.deleted_node_ids });
+      return okResult(command, {
+        deleted: response.deleted,
+        deleted_node_ids: response.deleted_node_ids,
+        operation_id: response.operation_id,
+      });
+    case "canvas.node.create":
+      // 资产物化结果直通（spec §5.3 / CLI-056）：dry-run 时 node_id/operation_id 为 null。
+      return okResult(command, {
+        node_id: response.node_id,
+        asset_id: response.asset_id,
+        position: response.position,
+        group_id: response.group_id,
+        operation_id: response.operation_id,
+        dry_run: response.dry_run,
+      });
     case "canvas.layout":
-      return okResult(command, { positions: response.positions });
+      return okResult(command, {
+        positions: response.positions,
+        columns: response.columns,
+        gap: response.gap,
+        // 计划文件判别字段直通（批次 1b）：人读据此区分「按计划整理」与
+        // 「containers 非 pack 的容器占位整理」，两者 columns/gap 都是 null。
+        ...(response.plan_applied !== undefined ? { plan_applied: response.plan_applied } : {}),
+        // 顺序变化报告直通（批次 1a）：人读据此提示「本次会改变 N 个内容的阅读位次」。
+        content_reordered: response.content_reordered,
+        order_changes: response.order_changes,
+        summary: response.summary,
+        operation_id: response.operation_id,
+        dry_run: response.dry_run,
+      });
+    case "canvas.undo":
+      return okResult(command, {
+        undone: response.undone,
+        operation_id: response.operation_id,
+        positions: response.positions,
+      });
     case "task.cancel":
       return okResult(command, {
         accepted: response.accepted,
@@ -282,7 +357,9 @@ const proxyOutcomeToResult = (
         task_results: [],
       });
     case "canvas.selection.get":
-      // 防御分支：画布状态只读查询不经本映射（app.status 执行器直读 selection），不应到达此处。
+    case "canvas.geometry.get":
+      // 防御分支：画布状态只读查询不经本映射（app.status 执行器直读 selection；
+      // canvas.inspect 在独立执行器内直读几何），不应到达此处。
       return errorResult(command, "internal_error", "命令执行出现内部错误，请稍后重试。");
   }
 };
@@ -325,13 +402,20 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
 
   // ── 项目生命周期（§5.1：主进程存储服务与窗口控制） ─────────────────────────────
 
-  registry.set("project.list", () => {
+  registry.set("project.list", (request) => {
+    if (request.command !== "project.list") {
+      return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
+    }
+    // 分页与 asset list 同形（spec §5.1 / CLI-057）：在注册表既有顺序之后切片，
+    // 响应形状不变（{projects}，不新增 total）。
     const projects = deps.readProjects().map((entry: ProjectRegistryEntry) => ({
       name: entry.name,
       path: entry.path,
       last_opened_at: getEntryLastOpenedAt(entry),
     }));
-    return okResult("project.list", { projects });
+    const offset = request.offset;
+    const paged = request.limit === null ? projects.slice(offset) : projects.slice(offset, offset + request.limit);
+    return okResult("project.list", { projects: paged });
   });
 
   registry.set("project.status", async (request) => {
@@ -465,20 +549,26 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
     const { project } = resolution;
     const assets = deps.storage.readMediaAssets(project.path);
     const sourceIndex = deps.storage.readAssetTaskIndex(project.path);
-    // 生成来源索引只在需要时构建（--query 提示词命中 / --model 过滤）；纯结构化筛选或全量输出零额外读。
-    const needsGenerationIndex = request.query !== null || request.model !== null;
-    const generationIndex = needsGenerationIndex ? deps.storage.readAssetGenerationIndex(project.path) : null;
+    // 画布引用索引（CLI-056）：node_ids 与 --on-canvas 过滤共用同一份资产→节点 join。
+    const assetNodeIndex = buildAssetNodeIndex(deps.storage.readCanvasNodePayloads(project.path));
+    // 生成来源索引：--query/--model 过滤与条目 batch_id 都消费它，故每次读取都构建
+    //（project/model 检索属既有能力；batch_id 是本批新增的条目字段，缺索引就无法回填）。
+    const generationIndex = deps.storage.readAssetGenerationIndex(project.path);
     const queryLower = request.query !== null ? request.query.toLowerCase() : null;
     const filtered = assets.filter((asset) => {
       if (request.media_type !== null && asset.mediaType !== request.media_type) return false;
       if (request.model !== null) {
-        const modelId = generationIndex?.get(asset.assetId)?.modelId ?? null;
+        const modelId = generationIndex.get(asset.assetId)?.modelId ?? null;
         if (modelId !== request.model) return false;
       }
       if (queryLower !== null) {
         const fileName = asset.original.sourceFileName ?? "";
-        const prompt = generationIndex?.get(asset.assetId)?.prompt ?? "";
+        const prompt = generationIndex.get(asset.assetId)?.prompt ?? "";
         if (!fileName.toLowerCase().includes(queryLower) && !prompt.toLowerCase().includes(queryLower)) return false;
+      }
+      if (request.on_canvas !== null) {
+        const nodeIds = assetNodeIndex.get(asset.assetId) ?? [];
+        if (request.on_canvas !== (nodeIds.length > 0)) return false;
       }
       return true;
     });
@@ -493,6 +583,10 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
         // 生成来源摘要：任务标识（短文本承载，不含提示词全文，spec §6.1 精神）；无产出来源为空串。
         source_summary: sourceTaskId !== undefined ? `任务 ${sourceTaskId}` : "",
         ...(typeof sourceFileName === "string" && sourceFileName.length > 0 ? { source_file_name: sourceFileName } : {}),
+        // 画布引用节点（CLI-056）：未上画布为空数组；同一资产可被多个节点引用。
+        node_ids: assetNodeIndex.get(asset.assetId) ?? [],
+        // 生成来源批次；导入素材与无产出来源的资产为 null。
+        batch_id: generationIndex.get(asset.assetId)?.batchId ?? null,
       };
     });
     return okResult(request.command, { assets: summaries });
@@ -531,29 +625,34 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
     });
   });
 
-  registry.set("canvas.nodes.list", (request) => {
-    if (request.command !== "canvas.nodes.list") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
-    const resolution = resolveProjectOrFail(request, deps);
-    if (!resolution.ok) return resolution.result;
-    // 项目未打开也可读（spec §5.2 只读可、写入拒）：统一走存储只读投影，不经画布窗口。
-    const payloads = deps.storage.readCanvasNodePayloads(resolution.project.path);
-    const nodes: CliCanvasNodeEntry[] = [];
-    for (const payload of payloads) {
-      const entry = projectCanvasNodePayload(payload);
-      if (entry === null) continue;
-      nodes.push(entry);
-    }
-    return okResult(request.command, { nodes });
+  // 画布只读清单（canvas.nodes.list / canvas.group.list）拆到 cli-canvas-read-executors
+  // （行数预算拆分；符号级等价搬运，行为不变）。
+  registerCanvasReadExecutors({
+    registry,
+    resolveProjectOrFail: (request) => resolveProjectOrFail(request, deps),
+    okResult,
+    errorResult,
+    readCanvasNodePayloads: deps.storage.readCanvasNodePayloads,
   });
 
-  registry.set("canvas.group.list", (request) => {
-    if (request.command !== "canvas.group.list") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
-    const resolution = resolveProjectOrFail(request, deps);
-    if (!resolution.ok) return resolution.result;
-    // 组/容器清单走存储只读投影（spec §5.2 / CLI-045）：与 canvas nodes list 同通道定位，
-    // 项目未打开也可读。聚合（成员计数）在投影函数内完成，执行器只做编排。
-    const payloads = deps.storage.readCanvasNodePayloads(resolution.project.path);
-    return okResult(request.command, { groups: projectCanvasGroupSummaries(payloads) });
+  // 整张画布场景图（canvas.inspect）：存储投影 + 可选窗口精确几何合并，拆到独立执行器模块。
+  registerCanvasInspectExecutor({
+    registry,
+    deps,
+    resolveProjectOrFail: (request) => resolveProjectOrFail(request, deps),
+    okResult,
+    errorResult,
+  });
+
+  // 批二画布写原语（canvas.nodes.move / canvas.group.move / canvas.undo）：与既有画布写命令
+  // 同一分派规则（项目已打开守卫 + 代理通道），拆到独立执行器模块（行数预算）。
+  registerCanvasWriteExecutors({
+    registry,
+    deps,
+    resolveProjectOrFail: (request) => resolveProjectOrFail(request, deps),
+    guardProjectOpenOrFail: (command, projectPath) => guardProjectOpenOrFail(command, projectPath, deps),
+    proxyOutcomeToResult,
+    errorResult,
   });
 
   registry.set("task.list", async (request) => {
@@ -741,108 +840,6 @@ export const createCliCommandExecutors = (deps: CliCommandExecutorDeps): Map<Cli
   });
 
   // ── 画布命令 / 生成提交（§4.2/§5.3/§5.4：代理执行通道 → 画布窗口，要求项目已打开） ──
-
-  registry.set("asset.import", async (request) => {
-    if (request.command !== "asset.import") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
-    const resolution = resolveProjectOrFail(request, deps);
-    if (!resolution.ok) return resolution.result;
-    const guard = guardProjectOpenOrFail(request.command, resolution.project.path, deps);
-    if (guard !== null) return guard;
-    // --file 路径清单原样进代理候选；文件存在性/媒体类型校验不在主进程做（spec §5.3 / CLI-047），
-    // 由画布窗口侧前置校验产生 file_not_found / unsupported_file_type，经 error 分支透传。
-    const outcome = await deps.proxy.dispatch(resolution.project.path, {
-      command: "asset.import",
-      file: request.file,
-    });
-    return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
-  });
-
-  registry.set("canvas.group.create", async (request) => {
-    if (request.command !== "canvas.group.create") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
-    const resolution = resolveProjectOrFail(request, deps);
-    if (!resolution.ok) return resolution.result;
-    const guard = guardProjectOpenOrFail(request.command, resolution.project.path, deps);
-    if (guard !== null) return guard;
-    const outcome = await deps.proxy.dispatch(resolution.project.path, {
-      command: "canvas.group.create",
-      name: request.name,
-      members: request.members,
-    });
-    return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
-  });
-
-  registry.set("canvas.group.dissolve", async (request) => {
-    if (request.command !== "canvas.group.dissolve") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
-    const resolution = resolveProjectOrFail(request, deps);
-    if (!resolution.ok) return resolution.result;
-    const guard = guardProjectOpenOrFail(request.command, resolution.project.path, deps);
-    if (guard !== null) return guard;
-    const outcome = await deps.proxy.dispatch(resolution.project.path, {
-      command: "canvas.group.dissolve",
-      group: request.group,
-    });
-    return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
-  });
-
-  for (const membershipCommand of ["canvas.group.add", "canvas.group.remove"] as const) {
-    registry.set(membershipCommand, async (request) => {
-      if (request.command !== "canvas.group.add" && request.command !== "canvas.group.remove") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
-      const resolution = resolveProjectOrFail(request, deps);
-      if (!resolution.ok) return resolution.result;
-      const guard = guardProjectOpenOrFail(membershipCommand, resolution.project.path, deps);
-      if (guard !== null) return guard;
-      const fields = { group: request.group, members: request.members };
-      const candidate = membershipCommand === "canvas.group.add"
-        ? { command: "canvas.group.add" as const, ...fields }
-        : { command: "canvas.group.remove" as const, ...fields };
-      const outcome = await deps.proxy.dispatch(resolution.project.path, candidate);
-      return proxyOutcomeToResult(membershipCommand, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
-    });
-  }
-
-  registry.set("canvas.node.move", async (request) => {
-    if (request.command !== "canvas.node.move") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
-    const resolution = resolveProjectOrFail(request, deps);
-    if (!resolution.ok) return resolution.result;
-    const guard = guardProjectOpenOrFail(request.command, resolution.project.path, deps);
-    if (guard !== null) return guard;
-    const outcome = await deps.proxy.dispatch(resolution.project.path, {
-      command: "canvas.node.move",
-      node: request.node,
-      x: request.x,
-      y: request.y,
-    });
-    return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
-  });
-
-  registry.set("canvas.node.delete", async (request) => {
-    if (request.command !== "canvas.node.delete") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
-    const resolution = resolveProjectOrFail(request, deps);
-    if (!resolution.ok) return resolution.result;
-    const guard = guardProjectOpenOrFail(request.command, resolution.project.path, deps);
-    if (guard !== null) return guard;
-    const outcome = await deps.proxy.dispatch(resolution.project.path, {
-      command: "canvas.node.delete",
-      nodes: request.nodes,
-      ...(request.yes !== undefined ? { yes: request.yes } : {}),
-    });
-    return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
-  });
-
-  registry.set("canvas.layout", async (request) => {
-    if (request.command !== "canvas.layout") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");
-    const resolution = resolveProjectOrFail(request, deps);
-    if (!resolution.ok) return resolution.result;
-    const guard = guardProjectOpenOrFail(request.command, resolution.project.path, deps);
-    if (guard !== null) return guard;
-    const outcome = await deps.proxy.dispatch(resolution.project.path, {
-      command: "canvas.layout",
-      scope: request.scope,
-      ...(request.columns !== undefined ? { columns: request.columns } : {}),
-      ...(request.order !== undefined ? { order: request.order } : {}),
-    });
-    return proxyOutcomeToResult(request.command, outcome, "画布窗口刚刚被关闭，请先在应用中打开项目后再试。");
-  });
 
   registry.set("generate", async (request) => {
     if (request.command !== "generate") return errorResult(request.command, "internal_error", "命令执行出现内部错误，请稍后重试。");

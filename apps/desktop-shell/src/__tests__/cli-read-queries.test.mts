@@ -83,6 +83,8 @@ describe("cli-command-executors 只读查询（假 forwarder + 假存储）", ()
         readMediaAssets: () => [makeAsset("asset-1", "file-a.png"), makeAsset("asset-2", "file-b.png")],
         readMediaAssetById: (projectPath: string, assetId: string) => (assetId === "asset-1" ? makeAsset("asset-1", "file-a.png") : null),
         readAssetTaskIndex: () => new Map([["asset-1", "task-9"]]),
+        // asset.list 的 batch_id 数据源（缺省空索引：无产出来源 → batch_id 为 null）
+        readAssetGenerationIndex: () => new Map(),
         readTaskOutputAssets: (_projectPath: string, taskId: string) => (taskId === "task-done" ? [makeAsset("asset-1", "file-a.png")] : []),
         readBatchByClientRequestId: () => null,
         readTaskViewsByBatchId: () => [],
@@ -90,9 +92,9 @@ describe("cli-command-executors 只读查询（假 forwarder + 假存储）", ()
         readTaskById: () => null,
         readBatchById: () => null,
         readCanvasNodePayloads: () => [
-          { id: "n1", type: "asset", position: { x: 10, y: 20 }, groupId: "g1", data: { assetId: "asset-1" } },
+          { id: "n1", type: "asset", position: { x: 10, y: 20 }, groupId: "g1", data: { assetId: "asset-1", label: "首图" } },
           { id: "n2", type: "task", position: { x: 0, y: 0 }, data: { taskId: "task-9" } },
-          { id: "n3", type: "textInput", position: { x: 1, y: 2 } },
+          { id: "n3", type: "textInput", position: { x: 1, y: 2 }, data: { label: "说明" } },
           { id: "n6", type: "imageInput", position: { x: 3, y: 4 }, data: { assetId: "asset-img-1" } },
           { id: "n7", type: "videoInput", position: { x: 5, y: 6 }, data: { assetId: "asset-video-1" } },
           { id: "n8", type: "imageInput", position: { x: 7, y: 8 }, data: {} },
@@ -143,8 +145,8 @@ describe("cli-command-executors 只读查询（假 forwarder + 假存储）", ()
     const parsed = parseResponse(result);
     if (!parsed.ok || parsed.command !== "asset.list") throw new Error("unexpected");
     expect(parsed.assets).toEqual([
-      { asset_id: "asset-1", media_type: "image", source_summary: "任务 task-9" },
-      { asset_id: "asset-2", media_type: "image", source_summary: "" },
+      { asset_id: "asset-1", media_type: "image", source_summary: "任务 task-9", node_ids: ["n1"], batch_id: null },
+      { asset_id: "asset-2", media_type: "image", source_summary: "", node_ids: [], batch_id: null },
     ]);
   });
 
@@ -200,9 +202,17 @@ describe("cli-command-executors 只读查询（假 forwarder + 假存储）", ()
     makeRichAsset("gen-2", "hashccc.jpg", { mediaType: "video" }),
   ];
   const GENERATION_INDEX = new Map([
-    ["gen-1", { taskId: "t-1", modelId: "model-a", prompt: "一只橘猫在草地上奔跑" }],
-    ["gen-2", { taskId: "t-2", modelId: "model-b", prompt: "海边日落延时" }],
+    ["gen-1", { taskId: "t-1", batchId: "batch-a", modelId: "model-a", prompt: "一只橘猫在草地上奔跑" }],
+    ["gen-2", { taskId: "t-2", batchId: "batch-b", modelId: "model-b", prompt: "海边日落延时" }],
   ]);
+
+  /** 画布引用索引底座：imp-1 被两个节点引用、gen-1 被一个节点引用、gen-2 未上画布。 */
+  const CANVAS_PAYLOADS = [
+    { id: "n-asset-1", type: "asset", position: { x: 0, y: 0 }, data: { assetId: "imp-1" } },
+    { id: "n-img-1", type: "imageInput", position: { x: 1, y: 1 }, data: { assetId: "imp-1" } },
+    { id: "n-asset-2", type: "asset", position: { x: 2, y: 2 }, data: { assetId: "gen-1" } },
+    { id: "n-task", type: "task", position: { x: 3, y: 3 }, data: { taskId: "t-1" } },
+  ];
 
   const listAssets = async (extraParams: Record<string, unknown>, storageOverrides: Record<string, unknown> = {}) => {
     const registry = buildRegistry({
@@ -210,6 +220,7 @@ describe("cli-command-executors 只读查询（假 forwarder + 假存储）", ()
         readMediaAssets: () => RICH_ASSETS,
         readAssetTaskIndex: () => new Map([["gen-1", "t-1"]]),
         readAssetGenerationIndex: () => GENERATION_INDEX,
+        readCanvasNodePayloads: () => CANVAS_PAYLOADS,
         ...storageOverrides,
       },
     });
@@ -225,6 +236,28 @@ describe("cli-command-executors 只读查询（假 forwarder + 假存储）", ()
     expect(assets.map((a) => a.asset_id)).toEqual(["imp-1", "gen-1", "gen-2"]);
     expect(assets[0]).toMatchObject({ source_file_name: "夕阳海岸.png" });
     expect(assets[1]).not.toHaveProperty("source_file_name");
+  });
+
+  // @spec: CLI-056
+  it("asset.list 条目带 node_ids join 与 batch_id：未上画布为空数组、导入素材 batch_id 为 null", async () => {
+    const assets = await listAssets({});
+    expect(assets[0]).toMatchObject({ asset_id: "imp-1", node_ids: ["n-asset-1", "n-img-1"], batch_id: null });
+    expect(assets[1]).toMatchObject({ asset_id: "gen-1", node_ids: ["n-asset-2"], batch_id: "batch-a" });
+    expect(assets[2]).toMatchObject({ asset_id: "gen-2", node_ids: [], batch_id: "batch-b" });
+  });
+
+  // @spec: CLI-056
+  it("asset.list --on-canvas 双值过滤：true 只看已上画布、false 只看未上画布，且与既有过滤组合生效", async () => {
+    const onCanvas = await listAssets({ on_canvas: true });
+    expect(onCanvas.map((a) => a.asset_id)).toEqual(["imp-1", "gen-1"]);
+    const offCanvas = await listAssets({ on_canvas: false });
+    expect(offCanvas.map((a) => a.asset_id)).toEqual(["gen-2"]);
+    // 与 --media-type 组合：video 且未上画布
+    const videoOffCanvas = await listAssets({ on_canvas: false, media_type: "video" });
+    expect(videoOffCanvas.map((a) => a.asset_id)).toEqual(["gen-2"]);
+    // 过滤在分页之前：已上画布 2 条，取第 2 页（offset=1, limit=1）得到 gen-1
+    const paged = await listAssets({ on_canvas: true, limit: 1, offset: 1 });
+    expect(paged.map((a) => a.asset_id)).toEqual(["gen-1"]);
   });
 
   // @spec: CLI-018
@@ -300,18 +333,36 @@ describe("cli-command-executors 只读查询（假 forwarder + 假存储）", ()
     expect(parsed.nodes[0]).toEqual({
       node_id: "n1",
       node_type: "asset",
+      name: "首图",
       position: { x: 10, y: 20 },
       group_id: "g1",
       asset_id: "asset-1",
       task_id: null,
     });
-    expect(parsed.nodes[1]).toMatchObject({ node_id: "n2", node_type: "task", task_id: "task-9", asset_id: null, group_id: null });
-    expect(parsed.nodes[2]).toMatchObject({ node_id: "n3", node_type: "textInput", asset_id: null, task_id: null });
+    expect(parsed.nodes[1]).toMatchObject({ node_id: "n2", node_type: "task", name: "", task_id: "task-9", asset_id: null, group_id: null });
+    expect(parsed.nodes[2]).toMatchObject({ node_id: "n3", node_type: "textInput", name: "说明", asset_id: null, task_id: null });
     // @spec: CLI-017
     // 素材节点与资产节点同样输出 asset_id；未落资产的素材节点为 null
     expect(parsed.nodes[3]).toMatchObject({ node_id: "n6", node_type: "imageInput", asset_id: "asset-img-1", task_id: null });
     expect(parsed.nodes[4]).toMatchObject({ node_id: "n7", node_type: "videoInput", asset_id: "asset-video-1", task_id: null });
     expect(parsed.nodes[5]).toMatchObject({ node_id: "n8", node_type: "imageInput", asset_id: null, task_id: null });
+  });
+
+  // @spec: CLI-057
+  it("canvas.nodes.list：组取 data.name、其他类型取 data.label，缺失为空串", async () => {
+    const registry = buildRegistry({
+      storage: {
+        readCanvasNodePayloads: () => [
+          { id: "g1", type: "group", position: { x: 0, y: 0 }, data: { name: "角色组" } },
+          { id: "agent1", type: "agent", position: { x: 5, y: 5 }, data: { label: "助理" } },
+          { id: "n1", type: "textInput", position: { x: 1, y: 2 }, data: {} },
+        ],
+      },
+    });
+    const result = await runExecutor(registry, "canvas.nodes.list", { command: "canvas.nodes.list", project: "demo" });
+    const parsed = parseResponse(result);
+    if (!parsed.ok || parsed.command !== "canvas.nodes.list") throw new Error("unexpected");
+    expect(parsed.nodes.map((node) => node.name)).toEqual(["角色组", "助理", ""]);
   });
 
   it("task.list：代理转发任务列表并按项目过滤", async () => {

@@ -16,8 +16,6 @@ import type { GraphNode, NodePosition, NodeSize } from '../../types';
  * 本文件锁定「布局必须消费 Layout Model」这条主链契约。
  */
 
-const SNAP_GRID: [number, number] = [15, 15];
-
 const makeNode = (id: string, size: NodeSize): GraphNode => ({
   id,
   type: 'asset',
@@ -53,7 +51,6 @@ describe('computeAutoLayout 尺寸来源链', () => {
 
     const result = await computeAutoLayout(nodes, {
       defaultNodeSize: undefined,
-      snapGrid: SNAP_GRID,
       sizeSources: {
         measuredByNodeId: undefined,
         desiredByNodeId: undefined,
@@ -65,9 +62,8 @@ describe('computeAutoLayout 尺寸来源链', () => {
 
     const pitch = verticalPitch(result.positions, 'a', 'b');
     // default 高度 120 时间距是 240；回退到 asset 注册表 default 180 时是 300。
-    // 消费 layoutModel(320) 时应为 320 + NODE_GAP(120) = 440（经 15px 网格对齐后约 435）。
-    expect(pitch).toBeGreaterThan(LAYOUT_MODEL_HEIGHT + NODE_GAP - 10);
-    expect(pitch).toBeLessThan(LAYOUT_MODEL_HEIGHT + NODE_GAP + 10);
+    // 消费 layoutModel(320) 且取消逐点吸附后，间距精确等于 320 + NODE_GAP(120) = 440。
+    expect(pitch).toBe(LAYOUT_MODEL_HEIGHT + NODE_GAP);
   });
 
   it('layoutModel 与 measured 同值时产出相同位置（Layout Model 是 measured 缺失时的同源替代）', async () => {
@@ -76,7 +72,6 @@ describe('computeAutoLayout 尺寸来源链', () => {
 
     const viaLayoutModel = await computeAutoLayout(nodes, {
       defaultNodeSize: undefined,
-      snapGrid: SNAP_GRID,
       sizeSources: {
         measuredByNodeId: undefined,
         desiredByNodeId: undefined,
@@ -87,7 +82,6 @@ describe('computeAutoLayout 尺寸来源链', () => {
     });
     const viaMeasured = await computeAutoLayout(nodes, {
       defaultNodeSize: undefined,
-      snapGrid: SNAP_GRID,
       sizeSources: {
         measuredByNodeId: { a: size, b: size },
         desiredByNodeId: undefined,
@@ -106,12 +100,10 @@ describe('computeAutoLayout 尺寸来源链', () => {
 
     const result = await computeAutoLayout(nodes, {
       defaultNodeSize: fallback,
-      snapGrid: SNAP_GRID,
       sizeSources: undefined,
     });
 
     const pitch = verticalPitch(result.positions, 'a', 'b');
-    expect(pitch).toBeGreaterThan(fallback.height + NODE_GAP - 10);
-    expect(pitch).toBeLessThan(fallback.height + NODE_GAP + 10);
+    expect(pitch).toBe(fallback.height + NODE_GAP);
   });
 });

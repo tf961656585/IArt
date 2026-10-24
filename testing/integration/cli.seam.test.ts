@@ -1,5 +1,5 @@
 // @vitest-environment node
-// @spec: CLI-005, CLI-007, CLI-008, CLI-010, CLI-012, CLI-014, CLI-020, CLI-021, CLI-027, CLI-030, CLI-047
+// @spec: CLI-005, CLI-007, CLI-008, CLI-010, CLI-012, CLI-014, CLI-020, CLI-021, CLI-027, CLI-030, CLI-047, CLI-051
 //
 // CLI 与本地 Agent 集成 · 主链接缝测试（spec docs/integrations/CLI与本地Agent集成.md
 // §4 架构 / §6 通道契约 / §10 边界条件）。
@@ -168,6 +168,45 @@ describe('链路 A：CLI 客户端 → 真实控制服务 → 项目生命周期
     expect(openEntry).toMatchObject({ path: openProjectDir, last_opened_at: 1700000000000 });
     // 客户端侧契约校验是真实实现的内嵌行为：响应非法时 runCliClient 以退出码 2 拒绝，
     // 走不到这里——上面的 parseCliResponse 断言 stdout 本身就是契约形状。
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 链路 A2：canvas inspect 离线场景图（存储只读投影，项目未打开）
+// ---------------------------------------------------------------------------
+
+describe('链路 A2：canvas inspect 离线场景图', () => {
+  // 分层说明：本用例只覆盖「CLI → 控制服务 → canvas.inspect 执行器 → 存储投影」离线路径
+  // （项目画布窗口未打开，fidelity=derived）。exact 路径（窗口内 canvas.geometry.get →
+  // 执行器合并为 fidelity=exact）由 Editor 接收端单测
+  // apps/editor/src/features/canvas/services/__tests__/cliProxyReceiver.test.ts 与
+  // apps/desktop-shell/src/__tests__/cli-canvas-inspect.test.mts 覆盖。
+  it('项目未打开：命令成功并输出 derived 空场景图（节点/容器/未落画布资产与视口选中态字段齐全）', async () => {
+    seamState.openWindowProjectPath = null;
+    const result = await runCli(['canvas', 'inspect', '--project', CLOSED_PROJECT_NAME, '--json']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    const response = parseCliResponse(result);
+    if (!response.ok || response.command !== 'canvas.inspect') {
+      throw new Error(`expected canvas.inspect success response, got ${result.stdout}`);
+    }
+    expect(response.fidelity).toBe('derived');
+    expect(response.nodes).toEqual([]);
+    expect(response.containers).toEqual([]);
+    expect(response.assets_not_on_canvas).toEqual([]);
+    expect(response.viewport).toBeNull();
+    expect(response.selection).toBeNull();
+  });
+
+  it('人读输出空画布空态文本', async () => {
+    seamState.openWindowProjectPath = null;
+    const result = await runCli(['canvas', 'inspect', '--project', CLOSED_PROJECT_NAME]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('离线派生几何');
+    expect(result.stdout).toContain('节点 0 个');
+    expect(result.stdout).toContain('画布上还没有任何节点');
   });
 });
 

@@ -270,10 +270,14 @@ describe('CLI 出生组接缝（CLI-043/CLI-044/CLI-046）', () => {
     });
     const response = parseResponse(await executeCliProxyCommand(command));
 
-    if (!('group_node_id' in response)) throw new Error('expected group create success response');
-    expect(groupNodes().length).toBe(groupsBefore + 1);
+    if (!('group_node_id' in response) || response.command !== 'canvas.group.create') {
+      throw new Error('expected group create success response');
+    }
+    expect(groupsBefore + 1).toBe(groupNodes().length);
     const created = groupByName('空组');
     expect(created?.id).toBe(response.group_node_id);
+    // 空组建组：创建后组内没有成员，如实回传空数组（CLI-057）
+    expect(response.member_ids).toEqual([]);
   });
 
   it('组成员加入/移出接缝：未归属加入与跨组迁移同批一条撤销，移出保留原位（CLI-049）', async () => {

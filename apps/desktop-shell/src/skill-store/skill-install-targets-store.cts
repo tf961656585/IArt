@@ -30,7 +30,6 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import * as z from "zod";
@@ -91,8 +90,8 @@ export const isBuiltinTargetId = (id: string): id is SkillInstallTarget =>
 const getRegistryFilePath = (): string => {
   const appDataDir =
     process.env["NODE_ENV"] === "development"
-      ? path.join(os.homedir(), ".iart-studio-dev")
-      : path.join(os.homedir(), ".iart-studio");
+      ? path.join(resolveHomeDir(), ".iart-studio-dev")
+      : path.join(resolveHomeDir(), ".iart-studio");
   return path.join(appDataDir, "skill-install-targets.json");
 };
 

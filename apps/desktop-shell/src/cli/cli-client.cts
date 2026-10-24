@@ -123,6 +123,39 @@ const renderTaskCanvasIdentitySuffix = (identity: { node_id: string | null; grou
 const renderGenerationWarningsSuffix = (warnings: readonly CliGenerationWarning[]): string =>
   warnings.map((warning) => `\n  提示：${warning.message}`).join("");
 
+/**
+ * 位置写命令的执行报告后缀（批次二 summary）：检查/移动/未变三计数 + 跳过项数量。
+ * 跳过明细（稳定原因短句）属于机器对照面，人读输出只给数量，明细用 --json 查看。
+ */
+const renderWriteReportSuffix = (summary: {
+  inspected: number;
+  moved: number;
+  unchanged: number;
+  skipped: readonly unknown[];
+  /** moved 中不属于本次检查候选的伴随/级联节点数（旧响应缺省按 0 兜底）。 */
+  cascaded?: number;
+}): string => {
+  const skippedNote = summary.skipped.length > 0 ? `，跳过 ${summary.skipped.length} 个` : "";
+  const cascadedNote =
+    summary.cascaded !== undefined && summary.cascaded > 0 ? `，其中 ${summary.cascaded} 个为伴随/级联` : "";
+  return `（检查 ${summary.inspected} 个，移动 ${summary.moved} 个${cascadedNote}，无需移动 ${summary.unchanged} 个${skippedNote}）`;
+};
+
+/** 人读列表的单段条数上限：超过时只列前 N 条并指向 --json，避免一次性倾倒整张场景图。 */
+const HUMAN_LIST_LIMIT = 20;
+
+const renderLimitedLines = (lines: readonly string[], unit: string): string[] => {
+  if (lines.length <= HUMAN_LIST_LIMIT) return [...lines];
+  return [
+    ...lines.slice(0, HUMAN_LIST_LIMIT),
+    `…（另有 ${lines.length - HUMAN_LIST_LIMIT} 个${unit}未列出，需要完整数据请用 --json）`,
+  ];
+};
+
+/** 操作标识的人读后缀（批次二按操作撤销）：dry-run 无标识，不展示。 */
+const renderOperationSuffix = (operationId: string | null): string =>
+  operationId === null ? "" : `；可用 --operation ${operationId} 撤销本次操作`;
+
 const safeJsonParse = (text: string): unknown => {
   try {
     return JSON.parse(text) as unknown;
@@ -275,7 +308,10 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
     case "asset.list": {
       const lines = response.assets.map((asset) => {
         const fileName = asset.source_file_name !== undefined && asset.source_file_name !== null ? `，文件 ${asset.source_file_name}` : "";
-        return `- ${asset.asset_id}（${asset.media_type}${fileName}）`;
+        const canvasNote =
+          asset.node_ids.length > 0 ? `[在画布 ${asset.node_ids.length} 个节点]` : "[未上画布]";
+        const batchNote = asset.batch_id !== null ? `，批次 ${asset.batch_id}` : "";
+        return `- ${asset.asset_id}（${asset.media_type}${fileName}）${canvasNote}${batchNote}`;
       });
       return [`项目资产共 ${response.assets.length} 个：`, ...lines].join("\n");
     }
@@ -292,8 +328,28 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
       return [`已导入 ${response.imported.length} 个文件：`, ...lines].join("\n");
     }
     case "canvas.nodes.list": {
-      const lines = response.nodes.map((node) => `- ${node.node_id}（${node.node_type}）`);
-      return [`画布节点共 ${response.nodes.length} 个：`, ...lines].join("\n");
+      if (response.nodes.length === 0) {
+        // 空画布明确空态（spec §5.2 / CLI-057）：不给一个没有条目的标题行。
+        return "画布上还没有任何节点。";
+      }
+      // 容器（组 | Agent 容器）从节点总数里单独点出：它们是组织容器，不是内容节点。
+      const containerCount = response.nodes.filter(
+        (node) => node.node_type === "group" || node.node_type === "agent",
+      ).length;
+      const headline =
+        containerCount > 0
+          ? `画布节点共 ${response.nodes.length} 个（其中容器 ${containerCount} 个）：`
+          : `画布节点共 ${response.nodes.length} 个：`;
+      const lines = renderLimitedLines(
+        response.nodes.map((node) => {
+          const name = node.name.length > 0 ? node.name : "（未命名）";
+          const groupNote = node.group_id !== null ? ` [组 ${node.group_id}]` : "";
+          const assetNote = node.asset_id !== null ? ` [资产 ${node.asset_id}]` : "";
+          return `- ${node.node_id} ${node.node_type} ${name} @ ${node.position.x},${node.position.y}${groupNote}${assetNote}`;
+        }),
+        "节点",
+      );
+      return [headline, ...lines].join("\n");
     }
     case "canvas.group.list": {
       const lines = response.groups.map((group) => {
@@ -302,8 +358,78 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
       });
       return [`画布组/容器共 ${response.groups.length} 个：`, ...lines].join("\n");
     }
+    case "canvas.inspect": {
+      const fidelityLabel = response.fidelity === "exact" ? "精确几何" : "离线派生几何";
+      const header = `画布场景图（${fidelityLabel}）：节点 ${response.nodes.length} 个，容器 ${response.containers.length} 个，未落画布资产 ${response.assets_not_on_canvas.length} 个，注释 ${response.annotations.length} 个`;
+      const viewportLine =
+        response.viewport === null
+          ? "视口：画布窗口未打开，只提供离线派生几何"
+          : (() => {
+              const sizeNote =
+                response.viewport.width !== null && response.viewport.height !== null
+                  ? `，画布 ${response.viewport.width}x${response.viewport.height}`
+                  : "，画布尺寸未上报";
+              return `视口：平移 (${response.viewport.x}, ${response.viewport.y})，缩放 ${response.viewport.zoom}${sizeNote}`;
+            })();
+      const minGapLine =
+        response.min_gap === null
+          ? "顶层容器间距：不足两个容器或未计算"
+          : `顶层容器最小间距 ${response.min_gap.gap}（${response.min_gap.a_id} ↔ ${response.min_gap.b_id}）`;
+      const overlapLines =
+        response.overlaps.length === 0
+          ? ["重叠：没有相交的顶层容器"]
+          : [
+              `重叠：${response.overlaps.length} 对顶层容器相交`,
+              ...renderLimitedLines(
+                response.overlaps.map(
+                  (overlap) =>
+                    `- ${overlap.a_id} ↔ ${overlap.b_id}：交叠 ${overlap.overlap_width}x${overlap.overlap_height}`,
+                ),
+                "重叠对",
+              ),
+            ];
+      const containerLines = renderLimitedLines(
+        response.containers.map((container) => {
+          const name = container.name.length > 0 ? container.name : "（未命名）";
+          const neighborNote =
+            container.nearest_neighbor === null
+              ? ""
+              : `，最近邻 ${container.nearest_neighbor.node_id}（间距 ${container.nearest_neighbor.gap}）`;
+          const collapsedNote = container.collapsed ? " [折叠]" : "";
+          return `- ${container.group_node_id} ${name}（成员 ${container.member_ids.length} 个${collapsedNote}）@ ${container.position.x},${container.position.y} ${container.size.width}x${container.size.height}${neighborNote}`;
+        }),
+        "容器",
+      );
+      const nodeLines = renderLimitedLines(
+        response.nodes.map((node) => {
+          const name = node.name.length > 0 ? node.name : "（未命名）";
+          const groupNote = node.group_id !== null ? ` [组 ${node.group_id}]` : "";
+          // compact 档节点不携带 asset 摘要（asset=null），因此这里不会打印本地路径；
+          // --full 才带 asset，路径只在该档出现。
+          const assetNote =
+            node.asset !== null && node.asset.local_file_path !== null
+              ? ` [文件 ${node.asset.local_file_path}]`
+              : "";
+          return `- ${node.node_id} ${node.node_type} ${name} ${node.size.width}x${node.size.height} @ ${node.position.x},${node.position.y}${groupNote}${assetNote}`;
+        }),
+        "节点",
+      );
+      if (response.nodes.length === 0 && response.containers.length === 0) {
+        return `${header}\n${viewportLine}\n${minGapLine}\n画布上还没有任何节点。`;
+      }
+      return [
+        header,
+        viewportLine,
+        minGapLine,
+        ...overlapLines,
+        ...(containerLines.length > 0 ? ["容器：", ...containerLines] : []),
+        ...(nodeLines.length > 0 ? ["节点：", ...nodeLines] : []),
+      ].join("\n");
+    }
     case "canvas.group.create":
-      return `组已创建：${response.group_node_id}`;
+      return `已创建组 ${response.group_node_id}，纳入成员 ${response.member_ids.length} 个`;
+    case "canvas.group.rename":
+      return `已重命名组 ${response.group_node_id} → ${response.name}`;
     case "canvas.group.dissolve":
       return `组已解散：${response.group_node_id}，${response.member_ids.length} 个成员保留在画布上`;
     case "canvas.group.add": {
@@ -316,11 +442,64 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
     case "canvas.group.remove":
       return `组 ${response.group_node_id}：已移出 ${response.removed_node_ids.length} 个成员（节点保留在画布原位）`;
     case "canvas.node.move":
-      return `节点 ${response.node_id} 已移动到 (${response.position.x}, ${response.position.y})`;
+      return `${response.dry_run ? "计划，未写入：" : ""}节点 ${response.node_id} 移动到 (${response.position.x}, ${response.position.y})${renderWriteReportSuffix(response.summary)}${renderOperationSuffix(response.operation_id)}`;
+    case "canvas.nodes.move": {
+      const entries = Object.entries(response.positions);
+      const landingLines = renderLimitedLines(
+        entries.map(([nodeId, position]) => `- ${nodeId} @ ${position.x},${position.y}`),
+        "节点落点",
+      );
+      const headline = `${response.dry_run ? "计划，未写入：" : ""}已移动 ${response.moved_node_ids.length} 个节点${renderWriteReportSuffix(response.summary)}${renderOperationSuffix(response.operation_id)}`;
+      return [headline, ...(landingLines.length > 0 ? ["落点：", ...landingLines] : [])].join("\n");
+    }
+    case "canvas.group.move":
+      return `${response.dry_run ? "计划，未写入：" : ""}容器 ${response.group_node_id} 已移动 ${response.moved_node_ids.length} 个节点（含成员）${renderWriteReportSuffix(response.summary)}${renderOperationSuffix(response.operation_id)}`;
     case "canvas.node.delete":
-      return `已删除 ${response.deleted_node_ids.length} 个节点`;
-    case "canvas.layout":
-      return `已整理 ${Object.keys(response.positions).length} 个节点位置`;
+      return `已删除 ${response.deleted_node_ids.length} 个节点${renderOperationSuffix(response.operation_id)}`;
+    case "canvas.node.create": {
+      const groupNote = response.group_id !== null ? `，属于组 ${response.group_id}` : "";
+      const placement = `@ (${response.position.x}, ${response.position.y})`;
+      if (response.dry_run) {
+        return `计划，未写入：资产 ${response.asset_id} 将放到画布 ${placement}${groupNote}`;
+      }
+      // 创建类操作不支持按操作撤销（canvas.undo 对该标识返回 command_rejected），
+      // 人读只提示界面撤销，不宣称 --operation 可撤销。
+      return `资产 ${response.asset_id} 已放回画布：节点 ${response.node_id ?? "未知"} ${placement}${groupNote}；可用界面撤销（Cmd+Z）撤回本次创建`;
+    }
+    case "canvas.layout": {
+      // 顺序变化（批次 1a）：content_reordered=true 时明确提示会改变多少内容的阅读位次，
+      // 并列出少量 from→to（完整明细用 --json 查看）。
+      const reorderNote =
+        response.content_reordered && response.order_changes.length > 0
+          ? `；本次会改变 ${response.order_changes.length} 个内容的阅读位次${(() => {
+              const shown = response.order_changes.slice(0, 5).map(
+                (change) => `${change.node_id} ${change.from_slot}→${change.to_slot}`,
+              );
+              const rest = response.order_changes.length - shown.length;
+              return `（${shown.join("、")}${rest > 0 ? ` 等 ${response.order_changes.length} 个` : ""}）`;
+            })()}`
+          : "";
+      const action = response.dry_run ? "计划，未写入：" : "";
+      const movedCount = Object.keys(response.positions).length;
+      const trailer = `${renderWriteReportSuffix(response.summary)}${reorderNote}${renderOperationSuffix(response.operation_id)}`;
+      // 计划文件模式有显式判别字段；columns/gap 双 null 的另一种情形是
+      // scope=containers 非 pack（只整理容器间占位，不做网格排布）。
+      if (response.plan_applied === true) {
+        if (movedCount === 0) return `计划未产生任何位置变化${trailer}`;
+        const planAction = response.dry_run ? "计划，未写入：按计划整理" : "已按计划整理";
+        return `${planAction} ${movedCount} 个节点${trailer}`;
+      }
+      if (response.columns === null) {
+        const containerAction = response.dry_run
+          ? "计划，未写入：容器间占位整理"
+          : "容器间占位整理完成";
+        return `${containerAction}${trailer}`;
+      }
+      const gridNote = `按 ${response.columns} 列（间距 ${response.gap ?? 0}）`;
+      return `${action}${gridNote}整理 ${response.summary.inspected} 个对象${trailer}`;
+    }
+    case "canvas.undo":
+      return `已按操作撤销：${response.operation_id}（${Object.keys(response.positions).length} 个节点回到操作前位置）`;
     case "generate": {
       if (response.task_results.length === 0) {
         const taskIds = response.tasks.map((task) => task.task_id).join("、");

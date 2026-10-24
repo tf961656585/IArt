@@ -8,8 +8,16 @@
  */
 
 import { applyLayoutInputOrder } from '../../layout/layoutPrimitives';
-import { computeContainerArrangedPositions } from '../../layout/containerArrangement';
+import {
+  computeContainerArrangedPositions,
+  orderNodesForLayoutMode,
+} from '../../layout/containerArrangement';
 import { resolveContainerOverlaps } from '../../layout/containerOverlap';
+import {
+  normalizeLayoutOrderMode,
+  type LayoutApplyResult,
+} from '../../layout/autoLayoutTypes';
+import { computeOrderChanges, orderByReadingPosition } from '../../layout/readingOrder';
 import { normalizeNodeGraphSettings } from '../../types/nodeGraph';
 import type { GraphNode, GroupNodeData, NodePosition } from '../../types/node';
 import {
@@ -21,12 +29,31 @@ import {
   expandPositionUpdatesWithGroup,
   type GroupPositionUpdate,
 } from '../../services/groupMembership';
+import { computeGroupExpandedPosition } from '../../services/groupGeometry';
 import { pickGroupColorById } from '../../services/groupPalette';
 import { markNodeDirty, markNodeRemoved, markNodesDirty, markGraphDirty } from './canvasStore.persistence';
 import { projectDesiredSizeMapForLayout } from './canvasStore.layoutActions';
 import type { EffectiveSizeSources } from '../../utils/effectiveSize';
-import type { CanvasStoreGet, CanvasStoreSet, NodeGraphActions } from './canvasStore.core';
+import type {
+  CanvasGroupAutoLayoutStoreOptions,
+  CanvasStoreGet,
+  CanvasStoreSet,
+  NodeGraphActions,
+} from './canvasStore.core';
 import type { AgentNodeData } from '../../types/agentNode';
+
+/**
+ * 容器内整理 options 的扩展字段（本批新增，store core 的类型收敛由主 agent 统一）。
+ *
+ * `gap`：本次格子间距（非负整数，缺省 NODE_GAP=120），调用入参、不持久化。
+ * `orderMode` / `order_mode`：本次排序口径（camelCase 与 CLI 原样 snake_case 均接受）；
+ * 缺省 `position`（视觉阅读序），`created` 在画布侧落 debug 日志后按 `insertion` 处理。
+ */
+type ContainerLayoutExtendedOptions = CanvasGroupAutoLayoutStoreOptions & {
+  gap?: number | undefined;
+  orderMode?: unknown;
+  order_mode?: unknown;
+};
 
 /** 计算节点集合的包围盒左上角位置（用于组节点初始定位） */
 const computeMembersBBoxTopLeft = (
@@ -75,6 +102,7 @@ export const createCanvasGroupActions = (
   | 'removeNodesFromGroup'
   | 'moveNodesBetweenGroups'
   | 'autoLayoutContainer'
+  | 'planAutoLayoutContainer'
 > => ({
   createGroup: (nodeIds, position, options) => {
     const { nodeGraph } = get();
@@ -96,7 +124,25 @@ export const createCanvasGroupActions = (
     }
     if (candidateNodes.length === 0 && !allowEmpty) return null;
 
-    const groupPosition = position ?? computeMembersBBoxTopLeft(candidateNodes, { x: 0, y: 0 });
+    // 组存储 position 与派生渲染框左上角口径统一（batch 1a）：
+    // - 非空成员：直接存派生渲染框左上角（computeGroupExpandedPosition = 成员包围盒左上角
+    //   − (GROUP_PADDING.left, GROUP_PADDING.top + GROUP_HEADER_HEIGHT)），与投影层派生口径一致，
+    //   读写两侧不差 (12,40)，消除「新建组存储值与渲染框错位」；
+    // - 空组：无成员可派生，保持调用方给的位置（缺省零坐标）。
+    // 派生函数返回 null（成员坐标非法）时回落到调用方 position / 成员包围盒左上角。
+    const derivedPosition =
+      candidateNodes.length > 0
+        ? computeGroupExpandedPosition(
+            candidateNodes.map((node) => ({
+              position: node.position,
+              size: node.size ?? null,
+            })),
+          )
+        : null;
+    const groupPosition =
+      derivedPosition ??
+      position ??
+      computeMembersBBoxTopLeft(candidateNodes, { x: 0, y: 0 });
     const groupId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     const groupNode: GraphNode<GroupNodeData> = {
       id: groupId,
@@ -363,7 +409,11 @@ export const createCanvasGroupActions = (
 
   // 容器内整理：组与 Agent 容器同一动作同一语义
   //（spec：画布节点组.md「自动布局协作」）。
-  autoLayoutContainer: async (containerId, options) => {
+  autoLayoutContainer: async (
+    containerId: string,
+    options: ContainerLayoutExtendedOptions | undefined,
+    dryRun?: boolean,
+  ) => {
     const { nodeGraph } = get();
     if (!nodeGraph) return null;
     // 容器判据统一：门走 isContainerNode，不为 Agent 容器留特例
@@ -372,14 +422,22 @@ export const createCanvasGroupActions = (
     // 折叠态容器内整理不可执行；需先展开（spec：画布节点组.md「自动布局协作」）
     if (isContainerCollapsed(containerNode)) return null;
 
-    // 成员集合先经 order 显式顺序重排（CLI --order 承载，spec CLI-030）：布局引擎按传入
-    // 数组序占格；缺省不传时保持 getGroupMembers 的现状数组序，默认排序行为不变。
-    // 重排不影响锚点计算（包围盒与序无关），仅改变占格顺序。
-    const members = applyLayoutInputOrder(
-      getGroupMembers(nodeGraph, containerId),
-      options ? options.order : undefined,
-    );
+    // 排序口径（spec：画布自动布局算法.md「排序口径」）：缺省 position = 视觉阅读序；
+    // created 由主进程解析为显式 order 后传入，画布侧收到时落 debug 并按 insertion 处理。
+    const orderMode = normalizeLayoutOrderMode(options?.orderMode)
+      ?? normalizeLayoutOrderMode(options?.order_mode);
+
+    // 成员集合：先按排序口径产出基准序（视觉阅读序 / 插入序），再让显式 order 覆盖在基准序
+    // 之上（CLI --order 承载，spec CLI-030）：order 中节点按给定序排最前，其余按基准序跟排。
+    const allMembers = getGroupMembers(nodeGraph, containerId);
+    const baseOrder = orderNodesForLayoutMode(allMembers, orderMode);
+    const members = applyLayoutInputOrder(baseOrder, options?.order);
     if (members.length === 0) return null;
+
+    // 重排差异：原视觉阅读序 vs 本次实际占格序（CLI content_reordered / order_changes 的
+    // 机器可读信号，spec：画布自动布局算法.md AL-GC-005）。
+    const visualOrder = orderByReadingPosition(allMembers);
+    const orderSummary = computeOrderChanges(visualOrder, members);
 
     const normalizedSettings = normalizeNodeGraphSettings(nodeGraph.settings);
     // 容器内整理：参与节点多在视口内，options 入参的实时 measured 优先；缺失时用 store 会话态缓存兜底。
@@ -400,25 +458,25 @@ export const createCanvasGroupActions = (
     // desired 收窄为 runtime 期漂移校准，不再作为 measured 不可信时的强兜底（spec：
     // 画布启动性能与Layout-Model架构.md「与画布自动布局算法.md 的关系」节明确
     // 「Layout Model 始终可得，不存在 desired 缺失场景」）。applyDesiredFallback 已下线。
-    const layoutOptions = {
-      defaultNodeSize: undefined,
-      snapGrid: normalizedSettings.snapGrid,
-      sizeSources,
-      // 网格列数由本次操作给出（右键菜单「整理为网格」的 m×n 快速选择）；
-      // 缺省时为单列垂直摆放，与全局整理口径一致（spec：画布自动布局算法.md「网格摆放」）。
-      columns: options ? options.columns : undefined,
-    };
+    const resolvedColumns = options ? options.columns : undefined;
 
-    // 整理前成员包围盒左上角作为锚点（无容器间冲突时保持；冲突时按 spec AL-GC-003 整组让位）；
-    // 布局计算与锚点补偿走共享实现（与批次收口重排同源，layout/containerArrangement.ts）。
+    // 整理前成员包围盒左上角作为锚点（吸附到最近网格点；无网格时精确保持；冲突时按 spec
+    // AL-GC-003 整组让位）；布局计算与锚点补偿走共享实现（与批次收口重排同源，
+    // layout/containerArrangement.ts）。
     const arrangedPositions = await computeContainerArrangedPositions({
       members,
       sizeSources,
-      columns: layoutOptions.columns,
-      snapGrid: layoutOptions.snapGrid,
+      columns: resolvedColumns,
+      snapGrid: normalizedSettings.snapGrid,
+      gap: options?.gap,
     });
     if (arrangedPositions === null) {
-      return { positions: {}, changedCount: 0 };
+      return {
+        positions: {},
+        changedCount: 0,
+        contentReordered: orderSummary.contentReordered,
+        orderChanges: [...orderSummary.orderChanges],
+      } satisfies LayoutApplyResult;
     }
 
     // 容器级防重叠（长大容器整体让位）：整理让容器派生矩形可能长大并与相邻容器相交。
@@ -457,6 +515,29 @@ export const createCanvasGroupActions = (
           y: base.y + relocation.delta.y,
         };
       }
+    }
+
+    // 计划模式（CLI canvas.layout --scope group --dry-run）：零写入、零撤销记录。
+    if (dryRun === true) {
+      let planned = 0;
+      for (const node of nodeGraph.nodes) {
+        const nextPos = finalPositions[node.id];
+        if (!nextPos) continue;
+        if (node.position.x === nextPos.x && node.position.y === nextPos.y) continue;
+        planned += 1;
+      }
+      console.debug('[autoLayoutContainer] dry-run plan computed; canvas untouched', {
+        containerId,
+        planned,
+        gap: options?.gap,
+        orderMode,
+      });
+      return {
+        positions: finalPositions,
+        changedCount: planned,
+        contentReordered: orderSummary.contentReordered,
+        orderChanges: [...orderSummary.orderChanges],
+      } satisfies LayoutApplyResult;
     }
 
     let touched = 0;
@@ -498,6 +579,15 @@ export const createCanvasGroupActions = (
       get().saveToHistory();
     }
 
-    return { positions: finalPositions, changedCount: touched };
+    return {
+      positions: finalPositions,
+      changedCount: touched,
+      contentReordered: orderSummary.contentReordered,
+      orderChanges: [...orderSummary.orderChanges],
+    } satisfies LayoutApplyResult;
   },
+
+  /** 容器内整理计划模式：与 autoLayoutContainer 同一实现，只是不落写入与历史。 */
+  planAutoLayoutContainer: (containerId, options) =>
+    get().autoLayoutContainer(containerId, options, true),
 });

@@ -11,11 +11,10 @@
  */
 
 import type { GraphNode, NodeGraph, NodeSize, GraphNodeType } from '../types';
-import { normalizeSnapGrid } from '../types/nodeGraph';
 import type { EffectiveSizeSources } from '../utils/effectiveSize';
 import { resolveEffectiveSizeByNodeId } from '../utils/effectiveSize';
 import { computeLayoutWithElk } from './elkLayoutEngine';
-import { DEFAULT_NODE_SIZE } from './layoutPrimitives';
+import { DEFAULT_NODE_SIZE, normalizeNodeGap } from './layoutPrimitives';
 import type { AutoLayoutOptions, AutoLayoutResult } from './autoLayoutTypes';
 import { nodeRegistry } from '../nodes/registry';
 import { logCanvasDebugEvent } from '../debug/canvasDebug';
@@ -55,9 +54,9 @@ const mergeDefaultByNodeId = (
 
 const DEFAULT_AUTO_LAYOUT_OPTIONS: AutoLayoutOptions = {
   defaultNodeSize: undefined,
-  snapGrid: undefined,
   sizeSources: undefined,
   columns: undefined,
+  nodeGap: undefined,
 };
 
 /**
@@ -72,7 +71,8 @@ const DEFAULT_AUTO_LAYOUT_OPTIONS: AutoLayoutOptions = {
  * 过滤掉组节点（spec：画布自动布局算法.md「组节点在布局中的地位」）。
  *
  * columns 为本次排布列数：缺省时单列垂直摆放，调用层给出时按网格分行摆放
- *（spec：画布自动布局算法.md「网格摆放」）。
+ *（spec：画布自动布局算法.md「网格摆放」）。nodeGap 为本次格子间距（缺省 NODE_GAP），
+ * 格子间距精确等于该值——本层不做任何网格吸附，锚点吸附由调用层承担。
  *
  * @returns Promise（ELK 是异步引擎）
  */
@@ -80,8 +80,6 @@ export const computeAutoLayout = async (
   nodes: GraphNode[],
   options: AutoLayoutOptions = DEFAULT_AUTO_LAYOUT_OPTIONS,
 ): Promise<AutoLayoutResult> => {
-  const snapGrid = normalizeSnapGrid(options.snapGrid);
-
   // 组装尺寸来源集合。defaultNodeSize 作为兜底，映射到 sizeSources.defaultByNodeId。
   const defaultNodeSize = options.defaultNodeSize;
   let sizeSources: EffectiveSizeSources;
@@ -125,8 +123,8 @@ export const computeAutoLayout = async (
   logDefaultFallbackNodes(nodes, sizeSources);
 
   const positions = await computeLayoutWithElk(nodes, sizeMap, {
-    snapGrid,
     columns: options.columns,
+    nodeGap: normalizeNodeGap(options.nodeGap),
   });
 
   return {
@@ -141,9 +139,9 @@ export const computeAutoLayoutForGraph = async (
 ): Promise<AutoLayoutResult> =>
   computeAutoLayout(graph.nodes, {
     defaultNodeSize: options !== undefined ? options.defaultNodeSize : undefined,
-    snapGrid: graph.settings !== undefined ? graph.settings.snapGrid : options !== undefined ? options.snapGrid : undefined,
     sizeSources: options !== undefined ? options.sizeSources : undefined,
     columns: options !== undefined ? options.columns : undefined,
+    nodeGap: options !== undefined ? options.nodeGap : undefined,
   });
 
 /**

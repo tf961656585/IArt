@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // 被测对象是编译产物（dist/*.cjs），与 skill-store-installer.test.mts 同一装载方式。
 const workspaceRoot = process.cwd();
@@ -129,16 +129,25 @@ describe("skill-install-targets-store + installer（自定义安装目标）", (
   }) => installer.installSkill(request, (url) => fetch(url));
 
   beforeEach(() => {
-    store = loadStore();
-    installer = loadInstaller();
     fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "skill-targets-home-"));
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
     process.env.HOME = fakeHome;
     process.env.USERPROFILE = fakeHome;
+    // os.homedir() 在测试进程内可能被首次调用缓存；显式钉到本次临时 HOME，
+    // 否则整组用例会写同一份注册表并跨用例污染。
+    vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    // HOME 必须在加载 dist 产物之前指向临时目录，并清掉 require 缓存重载：
+    // store 在解析安装目录时读取 HOME；先加载再改 HOME 会让整组用例共用真实 HOME
+    // 的注册表，造成跨用例污染（失败时可见多个 skill-targets-home-* 残留条目）。
+    delete requireDesktop.cache[storeEntry];
+    delete requireDesktop.cache[installerEntry];
+    store = loadStore();
+    installer = loadInstaller();
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (previousHome === undefined) {
       delete process.env.HOME;
     } else {

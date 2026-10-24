@@ -22,7 +22,7 @@ import type {
 import { CURRENT_NODE_GRAPH_SCHEMA_VERSION } from '../../types/nodeGraph';
 import type { AnnotationBinding } from '../../types/annotation';
 import { nodeRegistry } from '../../nodes/registry';
-import type { AutoLayoutResult } from '../../layout/autoLayout';
+import type { LayoutApplyResult, LayoutOrderMode } from '../../layout/autoLayoutTypes';
 import type { AlignmentMode } from '../../layout/alignment';
 import { areArraysShallowEqual, type CanvasDirtyFlags, type DeferredHistoryBaseline, type HistoryEntry, type LoadRepairDiagnostics } from './canvasStore.shared';
 import { createDirtyState } from './canvasStore.persistence';
@@ -59,6 +59,18 @@ export type CanvasAutoLayoutStoreOptions = {
    * 全局整理自 2026-10-14 起按 spec 对齐透传（此前执行侧忽略、固定单列）。
    */
   columns?: number | undefined;
+  /**
+   * 本次格子间距（非负整数，缺省 `NODE_GAP=120`；CLI `canvas.layout --gap` 承载）。
+   * 这是本次调用的入参，不是持久化布局偏好；列/行推进量精确等于该值
+   *（spec：docs/runtime/画布自动布局算法.md「网格摆放」）。
+   */
+  gap?: number | undefined;
+  /**
+   * 本次排序口径（CLI `canvas.layout --order-mode` 承载，spec CLI-058）。
+   * 缺省 `position` = 视觉阅读序；`insertion` = 传入数组序；`created` 由主进程解析为
+   * 显式 `order` 后传入，画布侧收到时按 `insertion` 处理并留 debug 日志。
+   */
+  orderMode?: LayoutOrderMode | undefined;
 };
 
 /**
@@ -416,7 +428,23 @@ export interface NodeGraphActions {
    * 容器内整理（组与 Agent 容器同一动作，门按 isContainerNode 判定）。
    * 折叠态容器与无成员容器拒绝执行（返回 null）。
    */
-  autoLayoutContainer: (containerId: string, options: CanvasGroupAutoLayoutStoreOptions | undefined) => Promise<(AutoLayoutResult & { changedCount: number }) | null>;
+  autoLayoutContainer: (
+    containerId: string,
+    options: CanvasGroupAutoLayoutStoreOptions | undefined,
+    /**
+     * 计划模式（仅 CLI `canvas.layout --dry-run` 消费）：true = 零写入、零撤销记录，
+     * 返回的 positions 为计划值、changedCount 为计划发生位移的节点数。界面入口不传。
+     */
+    dryRun?: boolean,
+  ) => Promise<LayoutApplyResult | null>;
+  /**
+   * 容器内整理的计划模式（CLI canvas.layout --scope group:<id> --dry-run）：
+   * 与 autoLayoutContainer 同一算法，零写入、零撤销记录。
+   */
+  planAutoLayoutContainer: (
+    containerId: string,
+    options: CanvasGroupAutoLayoutStoreOptions | undefined,
+  ) => Promise<LayoutApplyResult | null>;
 
   // 注释操作
   createAnnotation: (position: NodePosition) => CanvasAnnotation | null;
@@ -499,13 +527,18 @@ export interface NodeGraphActions {
   clearPendingMediaMigrationNotice: () => void;
 
   // 自动布局
-  autoLayout: (options: CanvasAutoLayoutStoreOptions | undefined) => Promise<(AutoLayoutResult & { changedCount: number }) | null>;
+  autoLayout: (options: CanvasAutoLayoutStoreOptions | undefined) => Promise<LayoutApplyResult | null>;
+  /**
+   * 全局整理的计划模式（CLI `canvas.layout --dry-run`）：与 autoLayout 同一算法，
+   * 零写入、零撤销记录；positions 为计划值、changedCount 为计划发生位移的节点数。
+   */
+  planAutoLayout: (options: CanvasAutoLayoutStoreOptions | undefined) => Promise<LayoutApplyResult | null>;
   /**
    * 带预挂载测量的全局整理（spec：画布自动布局算法.md「全局整理的预挂载测量」）。
    * 编排：设 preLayoutMeasuring=true → 等 measured 覆盖全部参与节点 → 调 autoLayout 核心 → 清标志。
    * 用于标题栏"整理"按钮入口，覆盖冷启动后视口外节点从未挂载、measured 缺失导致落到偏小 default 的场景。
    */
-  autoLayoutWithPreMeasure: (options: CanvasAutoLayoutStoreOptions | undefined) => Promise<(AutoLayoutResult & { changedCount: number }) | null>;
+  autoLayoutWithPreMeasure: (options: CanvasAutoLayoutStoreOptions | undefined) => Promise<LayoutApplyResult | null>;
 
   /**
    * 整理组间布局（CLI `canvas layout --scope containers`）：
@@ -516,6 +549,24 @@ export interface NodeGraphActions {
   layoutContainers: () => Promise<{
     positions: Record<string, NodePosition>;
     changedCount: number;
+    /**
+     * 本次检查的最外层容器 id（CLI 执行报告 inspected 口径）。附加字段，既有消费者
+     * （只读 positions/changedCount）行为不变。
+     */
+    inspectedContainerIds: string[];
+    /** 被跳过的容器与稳定原因短句（no_derived_box / position_search_failed / not_a_container）。 */
+    skipped: Array<{ node_id: string; reason: string }>;
+  } | null>;
+
+  /**
+   * 容器让位的计划模式（CLI `canvas.layout --scope containers --dry-run`）：
+   * 与 layoutContainers 同一算法，零写入、零撤销记录。
+   */
+  planLayoutContainers: () => Promise<{
+    positions: Record<string, NodePosition>;
+    changedCount: number;
+    inspectedContainerIds: string[];
+    skipped: Array<{ node_id: string; reason: string }>;
   } | null>;
 
   // 对齐/分布选中节点（spec：画布节点组.md「对齐作用域」）

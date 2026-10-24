@@ -6,119 +6,17 @@
 //   不触达代理通道、不做降级）；有窗口 → 代理通道响应直通（成功原样、错误码原样透传）；
 // - task.cancel 两形态（CLI-012）：有窗走代理通道（用户取消链）；无窗走运行域取消端点
 //   （响应经 TaskCancelAcceptedResponseSchema 校验后适配）；守卫后窗口竞态关闭回落端点。
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CliCommandRequestSchema, CliCommandResponseSchema } from "@iart/contracts";
-
-const workspaceRoot = process.cwd();
-const requireDesktop = createRequire(import.meta.url);
-const executorsEntry = `${workspaceRoot}/apps/desktop-shell/dist/cli/cli-command-executors.cjs`;
-
-type ExecutorResult = { response: unknown; errorCode: string | null };
-type Executor = (request: unknown) => ExecutorResult | Promise<ExecutorResult>;
-type Registry = Map<string, Executor>;
-type DispatcherOutcome =
-  | { ok: true; response: unknown }
-  | { ok: false; reason: string; detail: string };
-
-type ProxyCall = { projectPath: string; candidate: Record<string, unknown> };
-
-type ExecutorModule = {
-  createCliCommandExecutors: (deps: Record<string, unknown>) => Registry;
-  buildGenerationWarnings: (
-    task: { request?: Record<string, unknown> | null },
-    assets: readonly GenerationWarningAsset[],
-  ) => GenerationWarning[];
-};
-
-type GenerationWarning = {
-  code: string;
-  message: string;
-  requested_size: string;
-  actual_sizes: string[];
-};
-
-type GenerationWarningAsset = {
-  asset: {
-    mediaType: string;
-    original: { width?: number | null; height?: number | null };
-  };
-};
-
-const loadExecutorModule = (): ExecutorModule => requireDesktop(executorsEntry) as ExecutorModule;
-
-const parseResponse = (result: ExecutorResult) => CliCommandResponseSchema.parse(result.response);
-
-const runExecutor = async (registry: Registry, command: string, request: unknown): Promise<ExecutorResult> => {
-  const executor = registry.get(command);
-  if (executor === undefined) throw new Error(`executor missing: ${command}`);
-  return await executor(CliCommandRequestSchema.parse(request));
-};
-
-const PROJECT_PATH = join(tmpdir(), `cli-proxy-exec-proj-${process.pid}`);
-
-const buildRegistry = (overrides: {
-  windowOpen?: boolean;
-  dispatchOutcome?: DispatcherOutcome;
-  postJsonPayload?: { ok: boolean; payload?: unknown; reason?: string; status?: number; detail?: string };
-  openProjects?: Array<{ projectPath: string; focused: boolean; canvasLoading: boolean }>;
-} = {}): { registry: Registry; proxyCalls: ProxyCall[]; postCalls: Array<{ pathname: string; body: unknown }> } => {
-  const proxyCalls: ProxyCall[] = [];
-  const postCalls: Array<{ pathname: string; body: unknown }> = [];
-  const dispatchOutcome: DispatcherOutcome =
-    overrides.dispatchOutcome !== undefined
-      ? overrides.dispatchOutcome
-      : { ok: true, response: { command: "canvas.group.create", request_id: "ignored", group_node_id: "g-new" } };
-  const mod = loadExecutorModule();
-  const registry = mod.createCliCommandExecutors({
-    readProjects: () => [
-      { nodeGraphId: "ng-1", name: "demo", path: PROJECT_PATH, createdAt: 1, savedAt: 2, lastOpenedAt: 3 },
-    ],
-    windows: {
-      openOrFocus: async () => ({ ok: true }),
-      hasOpenWindow: () => overrides.windowOpen ?? true,
-      closeByProjectPath: () => true,
-      listOpenEditorProjects: () => overrides.openProjects ?? [],
-    },
-    forwarder: {
-      getJson: async () => ({ ok: true, payload: {} }),
-      postJson: async (pathname: string, body: unknown) => {
-        postCalls.push({ pathname, body });
-        const injected = overrides.postJsonPayload;
-        if (injected !== undefined) {
-          return injected.ok
-            ? { ok: true, payload: injected.payload }
-            : {
-                ok: false,
-                reason: injected.reason ?? "http_error",
-                ...(injected.status !== undefined ? { status: injected.status } : {}),
-                detail: injected.detail ?? "x",
-              };
-        }
-        return { ok: true, payload: {} };
-      },
-    },
-    storage: {
-      createProject: () => ({ projectPath: PROJECT_PATH }),
-      deleteProject: () => undefined,
-      touchProjectOpenedAt: () => undefined,
-      readMediaAssets: () => [],
-      readMediaAssetById: () => null,
-      readAssetTaskIndex: () => new Map(),
-      readTaskOutputAssets: () => [],
-      readCanvasNodePayloads: () => [],
-    },
-    proxy: {
-      dispatch: async (projectPath: string, candidate: Record<string, unknown>) => {
-        proxyCalls.push({ projectPath, candidate });
-        return dispatchOutcome;
-      },
-    },
-  });
-  return { registry, proxyCalls, postCalls };
-};
+import {
+  PROJECT_PATH,
+  buildRegistry,
+  loadExecutorModule,
+  parseResponse,
+  runExecutor,
+  type GenerationWarningAsset,
+} from "./cli-command-executors-proxy.helpers.mts";
 
 describe("cli-command-executors 画布命令 / 生成提交（代理执行通道）", () => {
   it("canvas.group.create：项目未打开 → project_not_open（CLI-007），不触达代理通道", async () => {
@@ -134,10 +32,10 @@ describe("cli-command-executors 画布命令 / 生成提交（代理执行通道
     expect(result.errorCode).toBe("project_not_open");
   });
 
-  it("canvas.group.create：有窗口 → 代理通道直通成功结果（group_node_id）", async () => {
+  it("canvas.group.create：有窗口 → 代理通道直通成功结果（group_node_id / member_ids）", async () => {
     const { registry, proxyCalls } = buildRegistry({
       windowOpen: true,
-      dispatchOutcome: { ok: true, response: { command: "canvas.group.create", request_id: "r1", group_node_id: "g-9" } },
+      dispatchOutcome: { ok: true, response: { command: "canvas.group.create", request_id: "r1", group_node_id: "g-9", member_ids: ["node-1", "node-2"], operation_id: "op-create" } },
     });
     const result = await runExecutor(registry, "canvas.group.create", {
       command: "canvas.group.create",
@@ -148,6 +46,7 @@ describe("cli-command-executors 画布命令 / 生成提交（代理执行通道
     const parsed = parseResponse(result);
     if (!parsed.ok || parsed.command !== "canvas.group.create") throw new Error("unexpected");
     expect(parsed.group_node_id).toBe("g-9");
+    expect(parsed.member_ids).toEqual(["node-1", "node-2"]);
     expect(result.errorCode).toBeNull();
     expect(proxyCalls).toHaveLength(1);
     expect(proxyCalls[0]).toMatchObject({
@@ -181,10 +80,64 @@ describe("cli-command-executors 画布命令 / 生成提交（代理执行通道
     expect(result.errorCode).toBe("command_rejected");
   });
 
+  // @spec: CLI-057
+  it("canvas.group.rename：有窗口 → 代理通道直通（group_node_id / name / operation_id=null）", async () => {
+    const { registry, proxyCalls } = buildRegistry({
+      windowOpen: true,
+      dispatchOutcome: {
+        ok: true,
+        response: {
+          command: "canvas.group.rename",
+          request_id: "r-rename",
+          group_node_id: "g-9",
+          name: "新组名",
+          operation_id: null,
+        },
+      },
+    });
+    const result = await runExecutor(registry, "canvas.group.rename", {
+      command: "canvas.group.rename",
+      project: "demo",
+      group: "g-9",
+      name: "新组名",
+    });
+    const parsed = parseResponse(result);
+    if (!parsed.ok || parsed.command !== "canvas.group.rename") throw new Error("unexpected");
+    expect(parsed.group_node_id).toBe("g-9");
+    expect(parsed.name).toBe("新组名");
+    expect(parsed.operation_id).toBeNull();
+    expect(proxyCalls[0]).toMatchObject({
+      projectPath: PROJECT_PATH,
+      candidate: { command: "canvas.group.rename", group: "g-9", name: "新组名" },
+    });
+
+    const closed = buildRegistry({ windowOpen: false });
+    const rejected = await runExecutor(closed.registry, "canvas.group.rename", {
+      command: "canvas.group.rename",
+      project: "demo",
+      group: "g-9",
+      name: "新组名",
+    });
+    expect(parseResponse(rejected)).toMatchObject({ ok: false, error: { code: "project_not_open" } });
+    expect(closed.proxyCalls).toHaveLength(0);
+  });
+
   it("canvas.layout：有窗口 → positions 直通；scope/columns 原样进候选", async () => {
     const { registry, proxyCalls } = buildRegistry({
       windowOpen: true,
-      dispatchOutcome: { ok: true, response: { command: "canvas.layout", request_id: "r3", positions: { n1: { x: 5, y: 6 } } } },
+      dispatchOutcome: {
+        ok: true,
+        response: {
+          command: "canvas.layout",
+          request_id: "r3",
+          positions: { n1: { x: 5, y: 6 } },
+          summary: { inspected: 1, moved: 1, unchanged: 0, skipped: [] },
+          operation_id: "op-layout",
+          dry_run: false,
+          columns: null,
+          gap: null,
+        },
+      },
     });
     const result = await runExecutor(registry, "canvas.layout", {
       command: "canvas.layout",
@@ -201,7 +154,19 @@ describe("cli-command-executors 画布命令 / 生成提交（代理执行通道
   it("canvas.layout：--order 显式顺序原样进代理候选（CLI-030）", async () => {
     const { registry, proxyCalls } = buildRegistry({
       windowOpen: true,
-      dispatchOutcome: { ok: true, response: { command: "canvas.layout", request_id: "r3b", positions: {} } },
+      dispatchOutcome: {
+        ok: true,
+        response: {
+          command: "canvas.layout",
+          request_id: "r3b",
+          positions: {},
+          summary: { inspected: 0, moved: 0, unchanged: 0, skipped: [] },
+          operation_id: "op-layout",
+          dry_run: false,
+          columns: null,
+          gap: null,
+        },
+      },
     });
     const result = await runExecutor(registry, "canvas.layout", {
       command: "canvas.layout",
@@ -230,7 +195,14 @@ describe("cli-command-executors 画布命令 / 生成提交（代理执行通道
       windowOpen: true,
       dispatchOutcome: {
         ok: true,
-        response: { command: "canvas.group.dissolve", request_id: "r-d1", dissolved: true, group_node_id: "g-1", member_ids: ["m1", "m2"] },
+        response: {
+          command: "canvas.group.dissolve",
+          request_id: "r-d1",
+          dissolved: true,
+          group_node_id: "g-1",
+          member_ids: ["m1", "m2"],
+          operation_id: "op-dissolve",
+        },
       },
     });
     const result = await runExecutor(registry, "canvas.group.dissolve", {
@@ -263,7 +235,16 @@ describe("cli-command-executors 画布命令 / 生成提交（代理执行通道
       windowOpen: true,
       dispatchOutcome: {
         ok: true,
-        response: { command: "canvas.node.move", request_id: "r-m1", node_id: "n-1", position: { x: -5, y: 6 }, moved_node_ids: ["n-1"] },
+        response: {
+          command: "canvas.node.move",
+          request_id: "r-m1",
+          node_id: "n-1",
+          position: { x: -5, y: 6 },
+          moved_node_ids: ["n-1"],
+          summary: { inspected: 1, moved: 1, unchanged: 0, skipped: [] },
+          operation_id: "op-move",
+          dry_run: false,
+        },
       },
     });
     const openResult = await runExecutor(open.registry, "canvas.node.move", {
@@ -295,7 +276,13 @@ describe("cli-command-executors 画布命令 / 生成提交（代理执行通道
       windowOpen: true,
       dispatchOutcome: {
         ok: true,
-        response: { command: "canvas.node.delete", request_id: "r-x1", deleted: true, deleted_node_ids: ["n-1"] },
+        response: {
+          command: "canvas.node.delete",
+          request_id: "r-x1",
+          deleted: true,
+          deleted_node_ids: ["n-1"],
+          operation_id: "op-delete",
+        },
       },
     });
     const openResult = await runExecutor(open.registry, "canvas.node.delete", {
@@ -388,6 +375,7 @@ describe("cli-command-executors canvas.group.add / canvas.group.remove（成员�
           added_node_ids: ["n-1"],
           moved_node_ids: ["n-2"],
           unchanged_node_ids: ["n-3"],
+          operation_id: "op-add",
         },
       },
     });
@@ -420,6 +408,7 @@ describe("cli-command-executors canvas.group.add / canvas.group.remove（成员�
           request_id: "r-gr1",
           group_node_id: "g-1",
           removed_node_ids: ["n-1"],
+          operation_id: "op-remove",
         },
       },
     });

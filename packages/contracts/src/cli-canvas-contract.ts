@@ -27,6 +27,8 @@ export const CliCanvasNodeEntrySchema = z
     node_id: z.string().min(1),
     /** 节点类型（资产/任务/注释/组等画布节点种类），由画布投影侧填定。 */
     node_type: z.string().min(1),
+    /** 显示名：组取组名（data.name），其余节点取 data.label；缺失为空串（CLI-057）。 */
+    name: z.string(),
     position: CliCanvasPositionSchema,
     /** 组归属；未归属任何组为 null。 */
     group_id: z.string().min(1).nullable(),
@@ -82,6 +84,8 @@ export const CliCanvasGroupAddOutcomeSchema = z
     added_node_ids: z.array(z.string().min(1)),
     moved_node_ids: z.array(z.string().min(1)),
     unchanged_node_ids: z.array(z.string().min(1)),
+    /** 操作标识（批次二）：成员增删不支持按操作撤销（canvas.undo 返回 command_rejected）。 */
+    operation_id: z.string().min(1),
   })
   .strict();
 export type CliCanvasGroupAddOutcome = z.infer<typeof CliCanvasGroupAddOutcomeSchema>;
@@ -94,6 +98,8 @@ export const CliCanvasGroupRemoveOutcomeSchema = z
   .object({
     group_node_id: z.string().min(1),
     removed_node_ids: z.array(z.string().min(1)),
+    /** 操作标识（批次二）：成员增删不支持按操作撤销（canvas.undo 返回 command_rejected）。 */
+    operation_id: z.string().min(1),
   })
   .strict();
 export type CliCanvasGroupRemoveOutcome = z.infer<typeof CliCanvasGroupRemoveOutcomeSchema>;
@@ -128,6 +134,49 @@ export const CliCanvasGroupCreateParamsSchema = z
   })
   .strict();
 export type CliCanvasGroupCreateParams = z.infer<typeof CliCanvasGroupCreateParamsSchema>;
+
+/**
+ * `canvas group create` 结果（B 命令面响应与 C 代理执行通道结果共享同一形状）。
+ *
+ * `member_ids` 是创建后**实际**在组内的成员标识（空组为空数组）；`operation_id` 属于
+ * 「不支持按操作撤销」的创建类标识（`canvas.undo` 返回 `command_rejected`）。
+ */
+export const CliCanvasGroupCreateResultSchema = z
+  .object({
+    group_node_id: z.string().min(1),
+    member_ids: z.array(z.string().min(1)),
+    /** 操作标识（批次二）：建组不支持按操作撤销，canvas.undo 对该标识返回 command_rejected。 */
+    operation_id: z.string().min(1),
+  })
+  .strict();
+export type CliCanvasGroupCreateResult = z.infer<typeof CliCanvasGroupCreateResultSchema>;
+
+/**
+ * `canvas group rename` 参数（spec §5.3 / CLI-057）：目标节点组标识 + 新组名。
+ * 组名去除首尾空白后必须非空（执行侧兜底 `command_rejected`）。
+ */
+export const CliCanvasGroupRenameParamsSchema = z
+  .object({
+    group: z.string().min(1),
+    name: z.string().min(1),
+  })
+  .strict();
+export type CliCanvasGroupRenameParams = z.infer<typeof CliCanvasGroupRenameParamsSchema>;
+
+/**
+ * `canvas group rename` 结果（B 命令面响应与 C 代理执行通道结果共享同一形状）。
+ *
+ * 命名不是位置类操作，按既有按操作撤销范围**不登记**：`operation_id` 恒为 null
+ * （与创建类返回「撤销不了的操作标识」不同，本命令没有可登记的操作）。
+ */
+export const CliCanvasGroupRenameResultSchema = z
+  .object({
+    group_node_id: z.string().min(1),
+    name: z.string().min(1),
+    operation_id: z.null(),
+  })
+  .strict();
+export type CliCanvasGroupRenameResult = z.infer<typeof CliCanvasGroupRenameResultSchema>;
 
 /**
  * `canvas group dissolve` 参数：目标容器节点标识（组或 Agent 容器，spec §5.3 / CLI-027）。
@@ -165,6 +214,8 @@ export const CliCanvasNodeMoveParamsSchema = z
     node: z.string().min(1),
     x: z.number(),
     y: z.number(),
+    /** 计划模式（批次二）：只返回计划坐标，零写入、零撤销记录；缺省 false。 */
+    dry_run: z.boolean().optional(),
   })
   .strict();
 export type CliCanvasNodeMoveParams = z.infer<typeof CliCanvasNodeMoveParamsSchema>;
@@ -182,6 +233,49 @@ export const CliCanvasNodeDeleteParamsSchema = z
   .strict();
 export type CliCanvasNodeDeleteParams = z.infer<typeof CliCanvasNodeDeleteParamsSchema>;
 
+/**
+ * `canvas node create` 参数（spec §5.3 / CLI-056）：把已存在的项目资产物化为一个资产节点。
+ *
+ * - `asset` 必填：项目媒体资产标识（不存在 → `asset_not_found`）。
+ * - `group` 可选：目标节点组标识（必须存在且 `type=group`；Agent 容器不接受）。
+ * - `x`/`y` 可选：绝对落点；两轴必须同时给出或同时不给（只给一个轴由执行侧
+ *   `command_rejected` 拒绝，解析器侧先按用法错误拒绝一次）。
+ * - `dry_run` 可选：只做校验与落位计算，零写入、零撤销记录。
+ *
+ * schema 不承载 x/y 成对 refine：与 group move 同口径，业务拒绝走执行侧
+ * `command_rejected`，不把业务语义降级成边界解析失败。
+ */
+export const CliCanvasNodeCreateParamsSchema = z
+  .object({
+    asset: z.string().min(1),
+    group: z.string().min(1).optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    dry_run: z.boolean().optional(),
+  })
+  .strict();
+export type CliCanvasNodeCreateParams = z.infer<typeof CliCanvasNodeCreateParamsSchema>;
+
+/**
+ * `canvas node create` 结果（命令面响应与代理执行通道结果共享同一形状）。
+ *
+ * `node_id` 在 dry-run 时为 null（零写入 ⇒ 没有节点标识，不得伪造）；
+ * `operation_id` 同样在 dry-run 时为 null；真实创建时返回画布窗口生成的标识，
+ * 该标识登记为「不支持按操作撤销」（`canvas.undo` 返回 `command_rejected`，与建组/导入同口径）。
+ * `group_id` 为节点的组归属（未指定 `--group` 为 null）。
+ */
+export const CliCanvasNodeCreateResultSchema = z
+  .object({
+    node_id: z.string().min(1).nullable(),
+    asset_id: z.string().min(1),
+    position: CliCanvasPositionSchema,
+    group_id: z.string().min(1).nullable(),
+    operation_id: z.string().min(1).nullable(),
+    dry_run: z.boolean(),
+  })
+  .strict();
+export type CliCanvasNodeCreateResult = z.infer<typeof CliCanvasNodeCreateResultSchema>;
+
 /** `canvas layout` 的 `--scope all|containers|group:<id>`：字符串 all/containers 或 `{ group }` 对象形态。 */
 export const CliLayoutScopeSchema = z.union([
   z.literal('all'),
@@ -194,17 +288,57 @@ export const CliLayoutScopeSchema = z.union([
 ]);
 export type CliLayoutScope = z.infer<typeof CliLayoutScopeSchema>;
 
-/** `canvas layout` 参数：scope + 可选列数（正整数，映射既有自动布局列数语义）+ 可选显式顺序。 */
+/**
+ * 整理排序模式（`--order-mode`）：position = 视觉阅读序（缺省，从上到下、从左到右），
+ * created = 创建时间序，insertion = 现状数组序（插入序）。
+ */
+export const CliCanvasLayoutOrderModeSchema = z.enum(['position', 'created', 'insertion']);
+export type CliCanvasLayoutOrderMode = z.infer<typeof CliCanvasLayoutOrderModeSchema>;
+
+/**
+ * `canvas layout` 参数：scope + 可选列数 + 可选显式顺序/排序模式 + 容器看板排布（pack）
+ * + 格子间距（gap），或一次计划（plan_path）。
+ *
+ * `scope` 与 `plan_path` 二选一（至少给一个，由解析器按用法错误裁定；schema 只承载形状）：
+ * `plan_path` 存在时由主进程按该绝对路径读取计划文件，解析器负责 `path.resolve`。
+ *
+ * `pack` 仅对 `scope=containers` 合法：把顶层容器按渲染框排成行列看板（spec CLI-055）。
+ * `columns` / `order` / `order_mode` / `gap` 在 `scope=containers` 且不带 `pack` 时不接受
+ * （执行侧产出 `command_rejected`，不降级为边界解析失败）。
+ * `gap` 对 `scope=all|group` 与 `--pack` 都生效（非负整数，缺省 120，与既有 NODE_GAP 同值），
+ * 是格子内间距的精确值（不再逐点吸附网格；整块锚点吸附到最近网格点由执行侧完成）。
+ * 显式 `order` 优先于 `order_mode`；两者都没给时按视觉阅读序（position）。
+ */
 export const CliCanvasLayoutParamsSchema = z
   .object({
-    scope: CliLayoutScopeSchema,
+    /** 整理范围；与 plan_path 二选一，两者都缺由解析器按用法错误拒绝（schema 只承载形状）。 */
+    scope: CliLayoutScopeSchema.optional(),
+    /**
+     * 计划文件绝对路径（批次 1b）：由 CLI 解析器 `path.resolve` 后写入，主进程按该路径读取；
+     * 与 scope/columns/order/order_mode/gap/pack 互斥（解析器按用法错误拒绝）。
+     */
+    plan_path: z.string().min(1).optional(),
     columns: z.number().int().min(1).optional(),
     /**
      * `--order` 显式摆放顺序（可选，spec CLI-030）：数组序即最高优先摆放序，未指定的参与节点
-     * 按现状数组序跟排在指定节点之后；缺省时整理的默认排序行为完全不变（数组序）。
+     * 按当前排序模式（或现状数组序）跟排在指定节点之后；缺省时按 `order_mode` 排序。
      * order 中的节点标识必须存在且属于本次整理作用域，执行侧前置校验。
      */
     order: z.array(z.string().min(1)).min(1).optional(),
+    /** `--order-mode` 排序模式：缺省 position（视觉阅读序）；显式 order 优先于本字段。 */
+    order_mode: CliCanvasLayoutOrderModeSchema.optional(),
+    /**
+     * 容器看板排布（spec CLI-055）：把顶层容器按渲染框排成行列看板。
+     * 仅 `scope=containers` 合法；缺省 false（旧 containers 路径只消除相交，行为不变）。
+     */
+    pack: z.boolean().optional(),
+    /**
+     * 格子内间距（非负整数，0 合法）：scope=all/group 的格子间距缺省 120（与既有 NODE_GAP
+     * 同值）；`--pack` 时是看板容器间距。
+     */
+    gap: z.number().int().nonnegative().optional(),
+    /** 计划模式（批次二）：只返回计划位置，零写入、零撤销记录；缺省 false。 */
+    dry_run: z.boolean().optional(),
   })
   .strict();
 export type CliCanvasLayoutParams = z.infer<typeof CliCanvasLayoutParamsSchema>;

@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useCallback, useState, useRef, useEffect, type CSSProperties } from 'react';
-import { type NodeProps, useStore as useReactFlowStore } from '@xyflow/react';
+import { type NodeProps } from '@xyflow/react';
 import { useOverlayLayer } from '@iart/ui';
 import { cn } from '@/lib/utils';
 import { useCanvasStore } from '../../store/canvasStore';
@@ -14,15 +14,15 @@ import './containerNodes.css';
 import type { GraphNode, GroupNodeData } from '../../types/node';
 import {
   GROUP_HEADER_HEIGHT,
-  GROUP_LOD_TRIGGER_SCREEN_SIZE,
   GROUP_LOD_ANCHOR_SCREEN_SIZE,
   GROUP_COLLAPSED_MIN_WIDTH,
   GROUP_COLLAPSED_HEIGHT,
-  GROUP_EXPANDED_BUBBLE_TRIGGER_SCREEN_SIZE,
-  GROUP_EXPANDED_BUBBLE_SCREEN_HEIGHT,
-  GROUP_EXPANDED_BUBBLE_FONT_SCREEN_SIZE,
+  isContainerLodDegraded,
+  shouldShowContainerGrip,
   computeLodAnchorLocateZoom,
 } from '../../services/groupGeometry';
+import { useCanvasZoom, useContainerGripPlacement } from '../../hooks/useCanvasViewport';
+import { ContainerGrip, GripDots } from './ContainerGrip';
 import { GROUP_DEFAULT_COLOR, getGroupTextColors } from '../../services/groupPalette';
 
 /**
@@ -36,9 +36,15 @@ import { GROUP_DEFAULT_COLOR, getGroupTextColors } from '../../services/groupPal
  *   全部经 color-mix 与主题令牌派生，明暗双主题自适应（样式经 Tailwind 任意值消费
  *   内联注入的 --group-* 变量，状态档位与选中语法对齐 visual-design.md D28）。
  *   左上标题 chip 只是视觉实体，header 交互条保持全宽（GROUP_HEADER_HEIGHT）。
+ *   容器过小/头过矮时（AG-CN-019）在容器框上方显示屏幕恒定容器握把（视觉 24px / 命中 44px），
+ *   顶到视口顶边时翻转为容器框内首行；握把无 nodrag，拖动走 React Flow 既有节点拖动链路，
+ *   单击定位走既有 locateToNode。标题 chip 与折叠卡常显 2×3 握把点。
  * - 折叠态：独立信息卡片（spec：画布节点组.md「折叠态尺寸」），
  *   组名 + 成员数徽章 + 展开钮，常驻最低海拔（--shadow-sm），挂载时淡入。
  *   整块可交互。
+ *
+ * LOD（AG-CN-021）：折叠卡屏幕宽 < 120px 或屏幕高 < 48px 时降级为 44px 屏幕恒定锚点
+ * （居中于容器框、整块可拖、Enter/Space 定位）；100% 缩放下 240×72 折叠卡正常显示。
  *
  * 交互契约：点击标题栏命中组；点击成员命中成员；点击成员间隙穿透到画布。
  *
@@ -95,7 +101,7 @@ const buildSurfaceClass = (selected: boolean, isDropTarget: boolean, isDragging:
 /** 标题 chip：视觉实体，位于全宽 header 交互条内；重命名中切换为 card 实底 + ring 边框 */
 const buildChipClass = (editingName: boolean) =>
   cn(
-    'inline-flex h-6 items-center gap-0.5 rounded-md border pr-1.5',
+    'inline-flex h-6 items-center gap-0.5 rounded-md border pr-1.5 pl-0.5',
     'transition-[background,border-color] duration-150 motion-reduce:transition-none',
     'focus-within:border-[var(--ring)] focus-within:bg-[var(--card)]',
     editingName
@@ -119,9 +125,18 @@ const GROUP_BADGE_CLASS = cn(
   GROUP_TEXT_TIER_CLASS,
 );
 
-export const GroupNode = memo(function GroupNode({ id, selected, width, height }: NodeProps) {
-  // 订阅 viewport zoom：用于折叠态 LOD 降级判定（屏幕空间尺寸 = 画布尺寸 × zoom）
-  const zoom = useReactFlowStore((state) => state.transform[2]);
+export const GroupNode = memo(function GroupNode({
+  id,
+  selected,
+  width,
+  height,
+  positionAbsoluteY,
+}: NodeProps) {
+  // 视口读取拆成两个 primitive selector：zoom 只随缩放变；握把放置只在 above ↔ inside
+  // 翻转时变。平移（transform.y 持续变化）不再让所有容器节点逐帧重渲染。
+  const zoom = useCanvasZoom();
+  const absoluteY = typeof positionAbsoluteY === 'number' ? positionAbsoluteY : 0;
+  const gripPlacement = useContainerGripPlacement(absoluteY);
   const locateToNode = useLocateToNode();
   const { data: nodeData } = useNodeFromStore<GroupNodeData, GroupNodeSelection>({
     nodeId: id,
@@ -220,14 +235,12 @@ export const GroupNode = memo(function GroupNode({ id, selected, width, height }
     [handleCommitRename],
   );
 
-  // LOD 降级判定：折叠卡片的屏幕空间尺寸（画布尺寸 × zoom）低于阈值时降级为锚点块。
-  // spec「折叠态 LOD 降级」：触发维度是屏幕空间尺寸，不是 zoom。
+  // LOD 降级判定：折叠卡片的屏幕空间尺寸（画布尺寸 × zoom）低于双阈值时降级为锚点块。
+  // spec「折叠态 LOD 降级」（AG-CN-021）：触发维度是屏幕空间尺寸，不是 zoom。
   // width/height 由 ReactFlow 注入（派生尺寸经投影层）；初渲染时可能为 undefined，此时不降级。
   const screenW = typeof width === 'number' ? width * zoom : Number.POSITIVE_INFINITY;
   const screenH = typeof height === 'number' ? height * zoom : Number.POSITIVE_INFINITY;
-  const isLodDegraded =
-    collapsed &&
-    (screenW < GROUP_LOD_TRIGGER_SCREEN_SIZE || screenH < GROUP_LOD_TRIGGER_SCREEN_SIZE);
+  const isLodDegraded = collapsed && isContainerLodDegraded(screenW, screenH);
 
   // LOD 锚点点击：居中定位到组，zoom 反算以保证聚焦后脱离 LOD 降级态，组保持折叠态不展开。
   // 复用 useLocateToNode 主抽象（spec 要求），不引入独立 fitView 分支。
@@ -249,14 +262,18 @@ export const GroupNode = memo(function GroupNode({ id, selected, width, height }
   // 恒定 hairline：边框宽度取 1/zoom 画布 px，任意缩放下屏幕宽度恒为 1px（tldraw 惯例）。
   // 远缩放不再糊成噪点，近距缩放不增粗抢层级。
   const hairlineBorderWidth = zoom > 0 ? 1 / zoom : 1;
-  // 展开态远缩放气泡：屏幕空间宽或高低于阈值时显示（视图投影，不改正式事实）
-  const isFarZoomBubble =
-    Number.isFinite(screenW) &&
-    Number.isFinite(screenH) &&
-    Math.min(screenW, screenH) < GROUP_EXPANDED_BUBBLE_TRIGGER_SCREEN_SIZE;
-  const bubbleInverseScale = zoom > 0 ? 1 / zoom : 1;
-  const handleBubbleClick = useCallback(() => {
-    locateToNode(id, 'group-bubble-click', { zoom: 1, duration: 300, select: true });
+  // 屏幕恒定容器握把（AG-CN-019）：容器头屏幕高 < 28 或容器最短边 < 120 时显示。
+  const showGrip =
+    !collapsed &&
+    shouldShowContainerGrip({
+      headerScreenHeight: EXPANDED_HEADER_HEIGHT * zoom,
+      screenWidth: screenW,
+      screenHeight: screenH,
+    });
+  // 握把放置（above / 顶边翻转 inside）由 useContainerGripPlacement 的 primitive selector 承载。
+  // 握把单击：居中定位到组（复用 useLocateToNode 主抽象，zoom 1 与定位主口径一致）
+  const handleGripClick = useCallback(() => {
+    locateToNode(id, 'container-grip-click', { zoom: 1, duration: 300, select: true });
   }, [id, locateToNode]);
 
   if (collapsed) {
@@ -270,12 +287,19 @@ export const GroupNode = memo(function GroupNode({ id, selected, width, height }
       // zoom 越小（缩得越远），反向系数越大（锚点块画布尺寸越大），屏幕投影恒定。
       const inverseScale = zoom > 0 ? 1 / zoom : 1;
       const canvasSize = anchorSize * inverseScale;
+      // 居中于容器框：容器画布尺寸（width/height）与锚点画布尺寸均已知；
+      // 尺寸未收敛（undefined）时按 0 处理，不留 NaN。
+      const anchorLeft = typeof width === 'number' ? (width - canvasSize) / 2 : 0;
+      const anchorTop = typeof height === 'number' ? (height - canvasSize) / 2 : 0;
+      const anchorLabel = `${name || '未命名组'} · ${memberCount} 成员（拖动移动；单击定位）`;
       return (
         <div
           data-group-node={id}
           data-lod-anchor={id}
+          data-testid="container-lod-anchor"
           role="button"
           tabIndex={0}
+          aria-label={anchorLabel}
           className={cn(
             'pointer-events-auto flex cursor-pointer items-center justify-center rounded-md border shadow-sm transition-shadow',
             GROUP_BORDER_CLASS,
@@ -283,14 +307,17 @@ export const GroupNode = memo(function GroupNode({ id, selected, width, height }
               'border-[var(--select-ring)] shadow-[0_0_0_2px_var(--select-ring),0_0_0_6px_var(--select-glow)]',
           )}
           style={{
+            position: 'absolute',
+            left: anchorLeft,
+            top: anchorTop,
             width: canvasSize,
             height: canvasSize,
             backgroundColor: groupColor,
             fontSize: Math.floor(anchorSize * 0.5 * inverseScale),
             fontWeight: 700,
+            borderWidth: hairlineBorderWidth,
+            borderRadius: 10 * inverseScale,
             ...groupVarStyle,
-            // 居中于组节点逻辑 position（外层 RF 已 translate 到节点 position）
-            // 锚点块自身不额外位移，靠 RF 的 width/height 居中布局由父级派生尺寸承载
           }}
           onClick={handleLodAnchorClick}
           onKeyDown={(e) => {
@@ -299,7 +326,7 @@ export const GroupNode = memo(function GroupNode({ id, selected, width, height }
               handleLodAnchorClick();
             }
           }}
-          title={`${name || '未命名组'} · ${memberCount} 成员（点击定位）`}
+          title={anchorLabel}
         >
           <span className="text-[var(--group-anchor-text)]">{initial}</span>
         </div>
@@ -339,6 +366,8 @@ export const GroupNode = memo(function GroupNode({ id, selected, width, height }
         <span className={cn(GROUP_BADGE_CLASS, 'text-[11px]')} title={`${memberCount} 个成员`}>
           {memberCount}
         </span>
+        {/* 折叠卡常显 2×3 握把点：提示整卡可拖（AG-CN-019） */}
+        <GripDots size={2} />
       </div>
     );
   }
@@ -366,6 +395,8 @@ export const GroupNode = memo(function GroupNode({ id, selected, width, height }
         style={{ height: EXPANDED_HEADER_HEIGHT, paddingTop: 4 }}
       >
         <div className={buildChipClass(editingName)}>
+          {/* 容器头常显 2×3 握把点（编辑态也保留）：提示标题条可拖（AG-CN-019） */}
+          <GripDots size={2} />
           {editingName ? (
             <input
               ref={inputRef}
@@ -407,31 +438,21 @@ export const GroupNode = memo(function GroupNode({ id, selected, width, height }
           </span>
         </div>
       </div>
-      {/* 远缩放标题气泡：展开组屏幕尺寸过小时显示（UE comment bubble 模式）。
-          固定屏幕尺寸经 1/zoom 反向缩放承载；点击定位到组（复用 useLocateToNode 主抽象）。
-          渲染在 header 之后保证浮在其上。 */}
-      {isFarZoomBubble && (
-        <button
-          type="button"
-          onClick={handleBubbleClick}
-          className={cn(
-            buildChipClass(false),
-            'nodrag pointer-events-auto absolute cursor-pointer font-medium text-foreground',
-          )}
-          style={{
-            left: 4 * bubbleInverseScale,
-            top: 4 * bubbleInverseScale,
-            height: GROUP_EXPANDED_BUBBLE_SCREEN_HEIGHT * bubbleInverseScale,
-            padding: `0 ${6 * bubbleInverseScale}px`,
-            borderRadius: 5 * bubbleInverseScale,
-            fontSize: GROUP_EXPANDED_BUBBLE_FONT_SCREEN_SIZE * bubbleInverseScale,
-            lineHeight: 1,
-          }}
-          title="点击定位到组"
-        >
-          {name || '未命名组'} · {memberCount}
-        </button>
-      )}
+      {/* 屏幕恒定容器握把（AG-CN-019）：放在容器框上方（成员区域之外），顶边时翻转进框内。
+          按钮无 nodrag：拖动走 React Flow 既有节点拖动链路；单击（位移 ≤4px）定位到组。 */}
+      {showGrip ? (
+        <ContainerGrip
+          containerId={id}
+          label={name || '未命名组'}
+          memberCount={memberCount}
+          accent={groupColor}
+          zoom={zoom}
+          screenWidth={screenW}
+          placement={gripPlacement}
+          isDragging={isDraggingSelf}
+          onLocate={handleGripClick}
+        />
+      ) : null}
     </div>
   );
 });

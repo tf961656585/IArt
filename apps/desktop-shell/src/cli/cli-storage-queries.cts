@@ -53,19 +53,27 @@ export const readCliAssetTaskIndex = (projectPath: string): ReadonlyMap<string, 
   return readTaskOutputAssetIndex(db);
 };
 
-/** 资产的生成来源详情（asset list 的 --query/--model 检索底座：模型与提交提示词经任务溯源反查）。 */
+/**
+ * 资产的生成来源详情（asset list 的 --query/--model 检索底座：模型与提交提示词经任务溯源
+ * 反查；batchId 供 asset list 条目与 canvas.inspect 离线资产条目回填来源批次）。
+ */
 export interface CliAssetGenerationSource {
   taskId: string;
+  /** 产出任务所属批次；任务 metadata 无批次归属为 null。 */
+  batchId: string | null;
   modelId: string | null;
   prompt: string | null;
+  /** 产出任务创建时间（epoch ms，复用任务行本身，不新建第二事实源）；不可得为 null。 */
+  taskCreatedAt: number | null;
 }
 
 /**
- * 资产 → 生成来源索引（assetId → 产出任务、所用模型、提交提示词）。
+ * 资产 → 生成来源索引（assetId → 产出任务、所属批次、所用模型、提交提示词）。
  *
  * 反查链：task_outputs（assetId→taskId）→ tasks.metadataJson（batchId/model_id 白名单键）
  * → batches.payloadJson 的 BatchIntentSnapshot.prompt（受理时冻结的不可变快照）。
- * 只覆盖生成产物；导入素材与媒体工具加工产物无产出来源，不进索引（检索时按无提示词处理）。
+ * 只覆盖生成产物；导入素材与媒体工具加工产物无产出来源，不进索引（检索时按无提示词处理，
+ * asset list 条目的 batch_id 输出 null）。
  */
 export const readCliAssetGenerationIndex = (projectPath: string): ReadonlyMap<string, CliAssetGenerationSource> => {
   const db = getDbForExistingProject(projectPath);
@@ -109,7 +117,13 @@ export const readCliAssetGenerationIndex = (projectPath: string): ReadonlyMap<st
       }
       prompt = promptByBatchId.get(batchId) ?? null;
     }
-    index.set(assetId, { taskId, modelId, prompt });
+    index.set(assetId, {
+      taskId,
+      batchId,
+      modelId,
+      prompt,
+      taskCreatedAt: typeof task.createdAt === "number" && Number.isFinite(task.createdAt) ? task.createdAt : null,
+    });
   }
   return index;
 };
@@ -204,6 +218,36 @@ export const readCliCanvasNodePayloads = (projectPath: string): readonly unknown
     return [];
   }
   return Array.isArray(graph.nodes) ? graph.nodes : [];
+};
+
+/**
+ * 画布注释清单（`canvas.inspect` 的 annotations 数据源）。
+ *
+ * 注释与节点同存于持久化画布图（`graph.payloadJson` 的 `annotations` 键），
+ * 由 readNodeGraphFromDb 一并读出，这里只做形状兜底，不重新解析 payload。
+ * 无注释键（旧图或空画布）按空集合处理并 debug 留痕（条件跳过必须留痕）。
+ */
+export const readCliCanvasAnnotations = (projectPath: string): readonly unknown[] => {
+  const db = getDbForExistingProject(projectPath);
+  if (db === null) {
+    console.debug("[cli-storage] 项目库不可用，按空画布注释清单处理", { projectPath });
+    return [];
+  }
+  const manifest = readManifestFromDb(db);
+  if (manifest === null) {
+    console.debug("[cli-storage] 项目 manifest 缺失，按空画布注释清单处理", { projectPath });
+    return [];
+  }
+  const graph = readNodeGraphFromDb(db, manifest.nodeGraphId);
+  if (graph === null) {
+    console.debug("[cli-storage] 项目画布图缺失，按空画布注释清单处理", { projectPath });
+    return [];
+  }
+  if (!Array.isArray(graph.annotations)) {
+    console.debug("[cli-storage] 画布图无 annotations 键，按空注释清单处理", { projectPath });
+    return [];
+  }
+  return graph.annotations;
 };
 
 /** 项目打开链的最近打开时间更新（project list 的 last_opened_at 事实源写入点）。 */

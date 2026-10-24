@@ -20,6 +20,9 @@
  *   跟随与容器 position 重派生走其既有展开逻辑，spec CLI-028）。目标不存在 → `node_not_found`；
  *   目标是容器节点 → `command_rejected`（组位置是成员包围盒的派生量、不独立可写，移动一律
  *   成员级）。响应回传目标最终坐标（store 现值）与实际发生位移的节点集合（容器派生位移不计入）。
+ * - `canvas.node.create` → 资产回填画布（CLI-056）：把已存在资产物化为资产节点
+ *   （`addNode('asset', …)`，与任务投影/加工产出同一创建通道），可选入组与绝对落点；
+ *   素材节点仍只能经 `asset.import` 导入链创建。实现在 `cliCanvasNodeCommands.ts`。
  * - `canvas.node.delete` → 删除咽喉 `removeNodes(ids, { deleteGroupMembers: false })`——与界面
  *   删除（deleteSelectedElements → removeNodes）同一动作同一连带语义：伴随节点级联、绑定注释
  *   级联、组节点删除即解散、Agent 删除前置钩子（先在途终止再删除）；CLI 不提供连删（连删是
@@ -54,20 +57,10 @@ import {
   CliProxyCommandResponseSchema,
   CliProxyCommandSchema,
 } from '@iart/contracts';
-import type {
-  CliProxyCommand,
-  CliProxyCommandError,
-  CliProxyCommandResponse,
-  CliProxyCommandResult,
-} from '@iart/contracts';
+import type { CliProxyCommand, CliProxyCommandResponse } from '@iart/contracts';
 import { isApiError } from '@/client/api/clientTypes';
 import { cancelTask } from '@/client/api/promptDockApi';
-import {
-  getGroupMembers,
-  isContainerCollapsed,
-  isContainerNode,
-  isGroupMember,
-} from '@/features/canvas/services/groupMembership';
+import { isContainerNode } from '@/features/canvas/services/groupMembership';
 import {
   buildErrorResponse,
   projectNotOpenResponse,
@@ -82,7 +75,19 @@ import {
 } from '@/features/promptdock/programmaticSubmission';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
 import type { NodeGraph } from '@/features/canvas/types';
+import { buildCanvasSizeSources } from '@/features/canvas/utils/nodeOccupancy';
+import { buildGroupDerivedSize } from '@/features/canvas/components/canvas/groupDerivedSize';
+import { resolveEffectiveSize } from '@/features/canvas/utils/effectiveSize';
 import { executeAssetImport } from './cliAssetImport';
+import { executeCanvasNodeCreate } from './cliCanvasNodeCommands';
+import {
+  executeCanvasUndo,
+  executeGroupMove,
+  executeNodeMove,
+  executeNodesMove,
+  issueUnsupportedOperationId,
+} from './cliCanvasWriteCommands';
+import { executeCanvasLayoutCommand } from './cliCanvasPlanCommand';
 
 // ---------------------------------------------------------------------------
 // 串行执行队列
@@ -106,103 +111,8 @@ const enqueueCommand = (task: () => Promise<void>): Promise<void> => {
 // 三条命令的执行映射
 // ---------------------------------------------------------------------------
 
-/** 从 store 现值读取受影响节点的最终位置映射（缺失节点静默跳过）。 */
-const readFinalPositions = (
-  requestId: string,
-  affectedNodeIds: readonly string[],
-): Extract<CliProxyCommandResult, { command: 'canvas.layout' }> => {
-  const nodeGraph = useCanvasStore.getState().nodeGraph;
-  const positions: Record<string, { x: number; y: number }> = {};
-  if (nodeGraph !== null) {
-    for (const nodeId of affectedNodeIds) {
-      const node = nodeGraph.nodes.find((candidate) => candidate.id === nodeId);
-      if (node) {
-        positions[nodeId] = { x: node.position.x, y: node.position.y };
-      }
-    }
-  }
-  return { command: 'canvas.layout', request_id: requestId, positions };
-};
-
-// 组/容器命令映射（create / dissolve / add / remove）拆到 cliProxyGroupCommands.ts
-// （行数预算拆分，先例同 cliProxyErrorResponses / cliAssetImport）；接收器只保留分派。
-
-/**
- * canvas.node.move → updateNodePositionsBatch（spec CLI-028）。
- *
- * 与界面拖拽同一位置写入 action：伴随节点跟随（companion）与容器 position 重派生由该 action
- * 的既有展开逻辑承载，映射层不另建第二套位置写入。容器节点拒绝：组/Agent 容器位置是成员
- * 包围盒的派生量、不独立可写（移动一律成员级）。
- * 响应回传目标节点最终坐标（store 现值）与实际发生位移的节点集合（按位移前后差值判定，
- * 容器派生位移不计入 moved_node_ids）。
- */
-const executeNodeMove = (
-  command: Extract<CliProxyCommand, { command: 'canvas.node.move' }>,
-): CliProxyCommandResponse => {
-  const requestId = command.request_id;
-  const store = useCanvasStore.getState();
-  const nodeGraph = store.nodeGraph;
-  if (nodeGraph === null) {
-    return projectNotOpenResponse('canvas.node.move', requestId);
-  }
-
-  const target = nodeGraph.nodes.find((node) => node.id === command.node);
-  if (!target) {
-    console.debug('[cliProxyReceiver] node move rejected: node not found', {
-      request_id: requestId,
-      node: command.node,
-    });
-    return buildErrorResponse(
-      'canvas.node.move',
-      requestId,
-      'node_not_found',
-      `画布上找不到这个节点：${command.node}。请确认节点标识后重试。`,
-    );
-  }
-  if (isContainerNode(target)) {
-    console.debug('[cliProxyReceiver] node move rejected: target is a container node', {
-      request_id: requestId,
-      node: command.node,
-      nodeType: target.type,
-    });
-    return buildErrorResponse(
-      'canvas.node.move',
-      requestId,
-      'command_rejected',
-      `这个节点是容器节点，位置由其成员派生、不能直接移动：${command.node}。请移动组内的成员节点。`,
-    );
-  }
-
-  // 位移前快照（全图 position）：动作后按差值判定实际位移集合（不依赖 action 返回值）。
-  const beforePositions = new Map(
-    nodeGraph.nodes.map((node) => [node.id, node.position] as const),
-  );
-  store.updateNodePositionsBatch([{ id: command.node, position: { x: command.x, y: command.y } }]);
-
-  const graphAfter = useCanvasStore.getState().nodeGraph;
-  const movedNodeIds: string[] = [];
-  let finalPosition = { x: command.x, y: command.y };
-  if (graphAfter !== null) {
-    for (const node of graphAfter.nodes) {
-      const before = beforePositions.get(node.id);
-      if (before === undefined) continue;
-      if (before.x === node.position.x && before.y === node.position.y) continue;
-      // 容器 position 是成员包围盒的派生量（成员位移后自动重派生），不属移动面
-      if (isContainerNode(node)) continue;
-      movedNodeIds.push(node.id);
-      if (node.id === command.node) {
-        finalPosition = { x: node.position.x, y: node.position.y };
-      }
-    }
-  }
-  return {
-    command: 'canvas.node.move',
-    request_id: requestId,
-    node_id: command.node,
-    position: finalPosition,
-    moved_node_ids: movedNodeIds,
-  };
-};
+// canvas.node.move / canvas.nodes.move / canvas.group.move / canvas.layout / canvas.undo
+// 的实现拆到 cliCanvasWriteCommands.ts（行数预算拆分）；接收器只保留分派。
 
 /**
  * canvas.node.delete → 删除咽喉 removeNodes（spec CLI-029）。
@@ -270,164 +180,10 @@ const executeNodeDelete = (
     request_id: requestId,
     deleted: true,
     deleted_node_ids: deletedNodeIds,
+    // 删除属「不支持按操作撤销」的写命令：仍返回操作标识，使 canvas.undo 能返回
+    // command_rejected（而不是把它当作未知标识）。
+    operation_id: issueUnsupportedOperationId(),
   };
-};
-
-/**
- * canvas.layout 的 `order` 显式顺序前置校验（spec CLI-030）：order 节点必须存在且属于本次
- * 整理作用域。缺失 → node_not_found；存在但越界（容器/他组成员等不在作用域）→ command_rejected。
- * 校验失败时命令拒绝、画布零改动；order 缺省（空）时不校验、不透传。
- */
-const validateLayoutOrder = (
-  requestId: string,
-  nodeGraph: NodeGraph,
-  orderIds: readonly string[],
-  eligibleIds: ReadonlySet<string>,
-): CliProxyCommandError | null => {
-  if (orderIds.length === 0) return null;
-  const nodeById = new Map(nodeGraph.nodes.map((node) => [node.id, node] as const));
-  const missing = orderIds.filter((id) => !nodeById.has(id));
-  if (missing.length > 0) {
-    console.debug('[cliProxyReceiver] layout rejected: order nodes not found', {
-      request_id: requestId,
-      missing,
-    });
-    return buildErrorResponse(
-      'canvas.layout',
-      requestId,
-      'node_not_found',
-      `顺序清单里有画布上不存在的节点：${missing.join('、')}。请确认节点标识后重试。`,
-    );
-  }
-  const outOfScope = orderIds.filter((id) => !eligibleIds.has(id));
-  if (outOfScope.length > 0) {
-    console.debug('[cliProxyReceiver] layout rejected: order nodes outside layout scope', {
-      request_id: requestId,
-      outOfScope,
-    });
-    return buildErrorResponse(
-      'canvas.layout',
-      requestId,
-      'command_rejected',
-      `这些节点不在本次整理范围内，不能指定摆放顺序：${outOfScope.join('、')}。scope=all 只能指定未分组节点，scope=group 只能指定该组成员。`,
-    );
-  }
-  return null;
-};
-
-const executeCanvasLayout = async (
-  command: Extract<CliProxyCommand, { command: 'canvas.layout' }>,
-): Promise<CliProxyCommandResponse> => {
-  const requestId = command.request_id;
-  const store = useCanvasStore.getState();
-  const nodeGraph = store.nodeGraph;
-  if (nodeGraph === null) {
-    return projectNotOpenResponse('canvas.layout', requestId);
-  }
-
-  // --order 去重保序（首次出现为准）；空数组视为未指定
-  const orderIds = [...new Set(command.order ?? [])];
-
-  if (command.scope === 'containers') {
-    if (command.columns !== undefined || orderIds.length > 0) return buildErrorResponse('canvas.layout', requestId, 'command_rejected', 'scope=containers 不支持 --columns/--order：容器按整组平移，不重排成员。');
-    const result = await store.layoutContainers();
-    return result === null ? buildErrorResponse('canvas.layout', requestId, 'command_rejected', '无法整理组间布局，请稍后重试。') : readFinalPositions(requestId, Object.keys(result.positions));
-  }
-
-  if (command.scope === 'all') {
-    // columns 语义对齐（spec §5.3「均映射列数语义」/ CLI-032）：scope=all 与 group 同语义，
-    // --columns 透传给布局引擎（缺省单列，默认行为不变）。
-    const affectedNodeIds = nodeGraph.nodes
-      .filter((node) => !isContainerNode(node) && !isGroupMember(node))
-      .map((node) => node.id);
-    const orderRejection = validateLayoutOrder(
-      requestId,
-      nodeGraph,
-      orderIds,
-      new Set(affectedNodeIds),
-    );
-    if (orderRejection !== null) return orderRejection;
-    // columns/order 都缺省时不传 options：默认排序与列数行为完全不变（数组序、单列，spec CLI-030）
-    const layoutOptions =
-      command.columns === undefined && orderIds.length === 0
-        ? undefined
-        : {
-            measuredSizeByNodeId: undefined,
-            derivedSizeByNodeId: undefined,
-            columns: command.columns,
-            ...(orderIds.length > 0 ? { order: orderIds } : {}),
-          };
-    await store.autoLayout(layoutOptions);
-    return readFinalPositions(requestId, affectedNodeIds);
-  }
-
-  const groupId = command.scope.group;
-  const container = nodeGraph.nodes.find((node) => node.id === groupId && isContainerNode(node));
-  if (!container) {
-    console.debug('[cliProxyReceiver] layout rejected: group not found', {
-      request_id: requestId,
-      group: groupId,
-    });
-    return buildErrorResponse(
-      'canvas.layout',
-      requestId,
-      'group_not_found',
-      `画布上找不到这个组：${groupId}。请确认组标识后重试。`,
-    );
-  }
-  if (isContainerCollapsed(container)) {
-    console.debug('[cliProxyReceiver] layout rejected: container collapsed', {
-      request_id: requestId,
-      group: groupId,
-    });
-    return buildErrorResponse(
-      'canvas.layout',
-      requestId,
-      'command_rejected',
-      '这个组当前处于折叠状态，展开后才能整理布局。',
-    );
-  }
-  const members = getGroupMembers(nodeGraph, groupId);
-  if (members.length === 0) {
-    console.debug('[cliProxyReceiver] layout rejected: no layout-able members', {
-      request_id: requestId,
-      group: groupId,
-    });
-    return buildErrorResponse(
-      'canvas.layout',
-      requestId,
-      'command_rejected',
-      '这个组还没有成员，无法整理布局。',
-    );
-  }
-  const orderRejection = validateLayoutOrder(
-    requestId,
-    nodeGraph,
-    orderIds,
-    new Set(members.map((member) => member.id)),
-  );
-  if (orderRejection !== null) return orderRejection;
-
-  // measured 传 undefined：走 store 会话态缓存兜底（与全局整理同口径，视口外节点不可实时测量）
-  const result = await store.autoLayoutContainer(groupId, {
-    measuredSizeByNodeId: undefined,
-    derivedSizeByNodeId: undefined,
-    columns: command.columns,
-    ...(orderIds.length > 0 ? { order: orderIds } : {}),
-  });
-  if (result === null) {
-    console.debug('[cliProxyReceiver] container layout returned null', {
-      request_id: requestId,
-      group: groupId,
-    });
-    return buildErrorResponse(
-      'canvas.layout',
-      requestId,
-      'command_rejected',
-      '无法整理这个组的布局，请稍后重试。',
-    );
-  }
-  return readFinalPositions(requestId, members.map((member) => member.id));
 };
 
 const executeTaskCancel = async (
@@ -598,6 +354,126 @@ const executeSelectionGet = (
 };
 
 /**
+ * 画布可视区像素尺寸（CSS px）：优先 ReactFlow 容器 DOM 的 clientWidth/clientHeight，
+ * 容器不可得（未挂载 / 隐藏）时回落 window.innerWidth/innerHeight；非法或非正值输出 null。
+ */
+const readCanvasVisibleSize = (): { width: number | null; height: number | null } => {
+  const normalize = (domValue: number | undefined, windowValue: number | undefined): number | null => {
+    const value =
+      typeof domValue === 'number' && Number.isFinite(domValue) && domValue > 0
+        ? domValue
+        : windowValue;
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+    return null;
+  };
+  const windowWidth = typeof window === 'undefined' ? undefined : window.innerWidth;
+  const windowHeight = typeof window === 'undefined' ? undefined : window.innerHeight;
+  const container = typeof document === 'undefined' ? null : document.querySelector('.react-flow');
+  if (container instanceof HTMLElement) {
+    return {
+      width: normalize(container.clientWidth, windowWidth),
+      height: normalize(container.clientHeight, windowHeight),
+    };
+  }
+  console.debug('[cliProxyReceiver] canvas container not found; viewport size falls back to window');
+  return {
+    width: normalize(undefined, windowWidth),
+    height: normalize(undefined, windowHeight),
+  };
+};
+
+/** 画布视口现值 → 契约视口形状（含可视区宽高）；缺失或数值非法输出 null（不伪造）。 */
+const readCanvasViewport = (
+  viewport: NodeGraph['viewport'],
+): { x: number; y: number; zoom: number; width: number | null; height: number | null } | null => {
+  if (viewport === undefined) return null;
+  if (!Number.isFinite(viewport.x) || !Number.isFinite(viewport.y) || !Number.isFinite(viewport.zoom)) {
+    console.debug('[cliProxyReceiver] viewport values non-finite; output null');
+    return null;
+  }
+  const visible = readCanvasVisibleSize();
+  return {
+    x: viewport.x,
+    y: viewport.y,
+    zoom: viewport.zoom,
+    width: visible.width,
+    height: visible.height,
+  };
+};
+
+/**
+ * canvas.geometry.get → 整张画布几何只读查询（canvas.inspect 的 exact 合并输入）。
+ *
+ * 直读 canvasStore 现值：普通节点尺寸经统一入口 resolveEffectiveSize 解析（layoutModel >
+ * measured > default），容器 position/size 由 buildGroupDerivedSize 派生（与画布渲染同一
+ * owner），容器派生 entry 缺失时按 nodeOccupancy 同口径回落有效尺寸 + store position。
+ * 不映射 action、不进撤销栈、不产生任何写入。画布尚未就绪（nodeGraph 未载入）时返回空
+ * 几何集合与 null 视口/选中态——主进程侧据此整体回落 derived，命令不失败。
+ */
+const executeGeometryGet = (
+  command: Extract<CliProxyCommand, { command: 'canvas.geometry.get' }>,
+): CliProxyCommandResponse => {
+  const requestId = command.request_id;
+  const store = useCanvasStore.getState();
+  const nodeGraph = store.nodeGraph;
+  if (nodeGraph === null) {
+    console.debug('[cliProxyReceiver] geometry read skipped: canvas graph not loaded', {
+      request_id: requestId,
+    });
+    return {
+      command: 'canvas.geometry.get',
+      request_id: requestId,
+      sizes: {},
+      containers: {},
+      viewport: null,
+      selection: null,
+    };
+  }
+
+  const sizeSources = buildCanvasSizeSources(store);
+  const derived = buildGroupDerivedSize({ nodes: nodeGraph.nodes, sizeSources });
+  const sizes: Record<string, { width: number; height: number }> = {};
+  const containers: Record<
+    string,
+    { position: { x: number; y: number }; size: { width: number; height: number } }
+  > = {};
+
+  for (const node of nodeGraph.nodes) {
+    if (isContainerNode(node)) {
+      const entry = derived.byGroupId[node.id];
+      if (entry === undefined) {
+        console.debug('[cliProxyReceiver] container derived entry missing, fallback to effective size', {
+          nodeId: node.id,
+          type: node.type,
+        });
+      }
+      const size = entry?.size ?? resolveEffectiveSize(node, sizeSources);
+      const position = entry?.position ?? { x: node.position.x, y: node.position.y };
+      sizes[node.id] = { width: size.width, height: size.height };
+      containers[node.id] = {
+        position: { x: position.x, y: position.y },
+        size: { width: size.width, height: size.height },
+      };
+      continue;
+    }
+    const size = resolveEffectiveSize(node, sizeSources);
+    sizes[node.id] = { width: size.width, height: size.height };
+  }
+
+  return {
+    command: 'canvas.geometry.get',
+    request_id: requestId,
+    sizes,
+    containers,
+    viewport: readCanvasViewport(nodeGraph.viewport),
+    selection: {
+      node_ids: [...store.selectedNodeIds],
+      annotation_ids: [...store.selectedAnnotationIds],
+    },
+  };
+};
+
+/**
  * 执行单条已通过 schema 校验的命令并产出响应。
  *
  * 所有可预期失败都在映射层收敛为错误响应；本函数自身不再向外抛异常以外的失败
@@ -611,22 +487,33 @@ export const executeCliProxyCommand = async (
     case 'asset.import':
       return executeAssetImport(command);
     case 'canvas.group.create':
+    case 'canvas.group.rename':
     case 'canvas.group.dissolve':
     case 'canvas.group.add':
     case 'canvas.group.remove':
       return executeGroupCommand(command);
     case 'canvas.node.move':
       return executeNodeMove(command);
+    case 'canvas.nodes.move':
+      return executeNodesMove(command);
+    case 'canvas.group.move':
+      return executeGroupMove(command);
     case 'canvas.node.delete':
       return executeNodeDelete(command);
+    case 'canvas.node.create':
+      return executeCanvasNodeCreate(command);
     case 'canvas.layout':
-      return executeCanvasLayout(command);
+      return executeCanvasLayoutCommand(command);
+    case 'canvas.undo':
+      return executeCanvasUndo(command);
     case 'task.cancel':
       return executeTaskCancel(command);
     case 'generate':
       return executeGenerate(command);
     case 'canvas.selection.get':
       return executeSelectionGet(command);
+    case 'canvas.geometry.get':
+      return executeGeometryGet(command);
   }
 };
 
@@ -700,15 +587,21 @@ export const handleCliProxyPayload = (
     const commandName =
       rawCommand === 'asset.import' ||
       rawCommand === 'canvas.group.create' ||
+      rawCommand === 'canvas.group.rename' ||
       rawCommand === 'canvas.group.dissolve' ||
       rawCommand === 'canvas.group.add' ||
       rawCommand === 'canvas.group.remove' ||
       rawCommand === 'canvas.node.move' ||
+      rawCommand === 'canvas.nodes.move' ||
+      rawCommand === 'canvas.group.move' ||
       rawCommand === 'canvas.node.delete' ||
+      rawCommand === 'canvas.node.create' ||
       rawCommand === 'canvas.layout' ||
+      rawCommand === 'canvas.undo' ||
       rawCommand === 'task.cancel' ||
       rawCommand === 'generate' ||
-      rawCommand === 'canvas.selection.get'
+      rawCommand === 'canvas.selection.get' ||
+      rawCommand === 'canvas.geometry.get'
         ? rawCommand
         : null;
     if (commandName !== null && rawRequestId !== null) {

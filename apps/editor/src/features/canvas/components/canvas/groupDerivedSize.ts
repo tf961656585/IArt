@@ -31,8 +31,9 @@ import {
   GROUP_PADDING,
   GROUP_COLLAPSED_MIN_WIDTH,
   GROUP_COLLAPSED_HEIGHT,
-  computeGroupExpandedPosition,
-} from "../../services/groupGeometry";
+  computeGroupExpandedBox,
+  estimateGroupCollapsedWidth,
+} from "@iart/utils/canvas-geometry";
 import { isContainerCollapsed, isContainerNode } from "../../services/groupMembership";
 import {
   resolveEffectiveSize,
@@ -68,29 +69,6 @@ type BuildGroupDerivedSizeParams = {
 
 const EMPTY_PROJECTION: GroupDerivedProjection = { byGroupId: {} };
 
-/**
- * 估算折叠态卡片宽度。
- *
- * spec（画布节点组.md「折叠」）：
- *   width = max( 标题文字宽度 + 成员数徽章宽度 + 内边距, 最小卡片宽度 )
- *
- * 估算分量：
- *   - 标题文字：8px/字符（保守估计；空名按 3 字符兜底）
- *   - 成员数徽章：固定预留宽度（含徽章自身 padding 与徽章和标题之间的间隙）；
- *     按典型 2 位数成员数预估，不为位数差异化（差异化由 DOM 测量在渲染期补偿）
- *   - 折叠按钮：20px
- *   - 左右内边距 + 安全余量：56px
- *
- * 这是保守下限估计，真实文字宽度由 DOM 测量决定；此公式只用于派生尺寸 selector
- * 产出渲染前的稳定 size，避免渲染抖动。
- */
-const estimateCollapsedWidth = (name: string): number => {
-  const charCount = name && name.length > 0 ? name.length : 3;
-  // 成员数徽章：圆角 badge "12 项" 之类，预留 44px（徽章 padding + 数字 + 单位 + 与标题间隙）
-  const badgeWidth = 44;
-  return Math.max(GROUP_COLLAPSED_MIN_WIDTH, charCount * 8 + badgeWidth + 56);
-};
-
 /** 读取容器节点的显示名（组 = name；Agent 容器 = label），用于折叠卡片宽度估算。 */
 const readContainerDisplayName = (container: GraphNode): string => {
   if (container.type === 'group') {
@@ -102,60 +80,31 @@ const readContainerDisplayName = (container: GraphNode): string => {
 };
 
 /**
- * 展开态派生 entry（成员包围盒 + padding + 容器头高度），position 走共享算法 owner，
- * 保证投影层、store 层与本 selector 算出的容器 position 一致。
+ * 展开态派生 entry（成员包围盒 + padding + 容器头高度），position 与 size 由共享
+ * 包围盒算法产出，保证投影层、store 层与本 selector 算出的容器几何一致。
  * 无成员或算法无法产出（成员几何非法）时返回 null，由调用方回落。
  */
 const deriveExpandedEntry = (
   members: ReadonlyArray<GraphNode>,
   sizeSources: EffectiveSizeSources,
 ): GroupDerivedEntry | null => {
-  // 收集成员几何：position + resolved size，供共享 position 算法与 size 计算共用。
   // 成员尺寸经统一解析入口 resolveEffectiveSize 按 layoutModel > measured > default 解析，
   // 不在此处自实现私有回退链（spec：画布节点尺寸管理架构.md 派生尺寸节）。
-  const memberGeometries: Array<{
-    position: { x: number; y: number };
-    size: { width: number; height: number };
-  }> = [];
-  let minX = Number.POSITIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  let maxX = Number.NEGATIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
+  const memberGeometries = members.map((member) => ({
+    position: member.position,
+    size: resolveEffectiveSize(member, sizeSources),
+  }));
 
-  for (const member of members) {
-    const memberSize = resolveEffectiveSize(member, sizeSources);
-    memberGeometries.push({ position: member.position, size: memberSize });
-    const w = memberSize.width;
-    const h = memberSize.height;
-    const left = member.position.x;
-    const top = member.position.y;
-    const right = left + w;
-    const bottom = top + h;
-    if (left < minX) minX = left;
-    if (top < minY) minY = top;
-    if (right > maxX) maxX = right;
-    if (bottom > maxY) maxY = bottom;
-  }
-
-  const derivedPosition = computeGroupExpandedPosition(memberGeometries);
-  if (derivedPosition === null) return null;
-
-  const bboxW = Math.max(0, maxX - minX);
-  const bboxH = Math.max(0, maxY - minY);
-  return {
-    position: derivedPosition,
-    size: {
-      width: bboxW + GROUP_PADDING.left + GROUP_PADDING.right,
-      height: bboxH + GROUP_PADDING.top + GROUP_PADDING.bottom + GROUP_HEADER_HEIGHT,
-    },
-  };
+  const box = computeGroupExpandedBox(memberGeometries);
+  if (box === null) return null;
+  return { position: box.position, size: box.size };
 };
 
 /** 折叠态卡片 entry（position 保持原位，不跳跃）。 */
 const deriveCollapsedEntry = (container: GraphNode): GroupDerivedEntry => ({
   position: { x: container.position.x, y: container.position.y },
   size: {
-    width: estimateCollapsedWidth(readContainerDisplayName(container)),
+    width: estimateGroupCollapsedWidth(readContainerDisplayName(container)),
     height: GROUP_COLLAPSED_HEIGHT,
   },
 });

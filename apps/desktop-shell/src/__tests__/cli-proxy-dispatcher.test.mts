@@ -80,6 +80,8 @@ describe("cli-proxy-dispatcher 代理分发端（spec §6.3）", () => {
       command: "canvas.group.create",
       request_id: parsedCommand.request_id,
       group_node_id: "group-1",
+      member_ids: ["node-1"],
+      operation_id: "op-create",
     });
     const outcome = await pending;
     expect(outcome.ok).toBe(true);
@@ -148,6 +150,11 @@ describe("cli-proxy-dispatcher 代理分发端（spec §6.3）", () => {
         command: "canvas.layout",
         request_id: "not-the-one",
         positions: {},
+        summary: { inspected: 0, moved: 0, unchanged: 0, skipped: [] },
+        operation_id: null,
+        dry_run: true,
+        columns: null,
+        gap: null,
       });
       expect(debugSpy).toHaveBeenCalledWith(
         expect.stringContaining("无配对挂起命令"),
@@ -166,6 +173,11 @@ describe("cli-proxy-dispatcher 代理分发端（spec §6.3）", () => {
         command: "canvas.layout",
         request_id: sentPayload.request_id,
         positions: { n1: { x: 1, y: 2 } },
+        summary: { inspected: 1, moved: 1, unchanged: 0, skipped: [] },
+        operation_id: "op-layout",
+        dry_run: false,
+        columns: null,
+        gap: null,
       });
       const outcome = await pending;
       expect(outcome.ok).toBe(true);
@@ -188,6 +200,11 @@ describe("cli-proxy-dispatcher 代理分发端（spec §6.3）", () => {
         command: "canvas.layout",
         request_id: sentPayload.request_id,
         positions: {},
+        summary: { inspected: 0, moved: 0, unchanged: 0, skipped: [] },
+        operation_id: "op-layout",
+        dry_run: false,
+        columns: null,
+        gap: null,
       });
       const outcome = await pending;
       expect(outcome.ok).toBe(true);
@@ -274,6 +291,11 @@ describe("cli-proxy-dispatcher 代理分发端（spec §6.3）", () => {
       command: "canvas.layout",
       request_id: sentPayload.request_id,
       positions: {},
+      summary: { inspected: 0, moved: 0, unchanged: 0, skipped: [] },
+      operation_id: "op-layout",
+      dry_run: false,
+      columns: null,
+      gap: null,
     });
     expect((await first).ok).toBe(true);
   });

@@ -50,6 +50,11 @@
       "types": "./dist/css-color.d.cts",
       "require": "./dist/css-color.cjs",
       "default": "./dist/css-color.cjs"
+    },
+    "./canvas-geometry": {
+      "types": "./dist/canvas-geometry.d.cts",
+      "require": "./dist/canvas-geometry.cjs",
+      "default": "./dist/canvas-geometry.cjs"
     }
   },
   "scripts": {

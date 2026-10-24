@@ -134,6 +134,11 @@
         "note": "GROUP_BUTTON_CLASS 组头钮（节点宿主样式体系完整定义）"
       },
       {
+        "file": "apps/editor/src/features/canvas/components/nodes/ContainerGrip.tsx",
+        "condition": "②",
+        "note": "屏幕恒定容器握把（节点宿主样式体系完整定义：屏幕反算尺寸、hover/focus/拖动光标由组件自持；原生 button 承载拖动与键盘激活语义，不套共享 Button 的几何档位）"
+      },
+      {
         "file": "apps/editor/src/features/canvas/components/nodes/TaskNode.tsx",
         "condition": "②",
         "note": "task-cancel 24×24 白圆钮（画布孵化节点悬停钮群 h-6 口径，2xs 28px 放不下；task-cancel 类名仅作 morphing 淡出状态钩子）"

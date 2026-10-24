@@ -289,7 +289,9 @@ describe('CLI 代理执行通道 · 画布操作四命令', () => {
 
       const response = parseResponse(await executeCliProxyCommand(command));
 
-      if (!('node_id' in response)) throw new Error('expected move success response');
+      if (response.command !== 'canvas.node.move' || 'error' in response) {
+        throw new Error('expected move success response');
+      }
       expect(response.node_id).toBe('n1');
       expect(response.position).toEqual({ x: -120, y: 240.5 });
       expect(response.moved_node_ids).toEqual(['n1']);
@@ -311,7 +313,9 @@ describe('CLI 代理执行通道 · 画布操作四命令', () => {
 
       const response = parseResponse(await executeCliProxyCommand(command));
 
-      if (!('node_id' in response)) throw new Error('expected move success response');
+      if (response.command !== 'canvas.node.move' || 'error' in response) {
+        throw new Error('expected move success response');
+      }
       expect(findNode('m1')?.position).toEqual({ x: 300, y: 300 });
       expect(findNode('m1')?.groupId).toBe('g0');
       expect(findNode('g0')).toBeDefined();

@@ -22,8 +22,6 @@
 
 import type { CliErrorCode, CliImportedAssetEntry, CliProxyCommand, CliProxyCommandResponse } from '@iart/contracts';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
-import { normalizeViewport } from '@/features/canvas/components/canvas/nodeCanvasConstants';
-import { resolveNodeTypeDefaultSize } from '@/features/canvas/utils/effectiveSize';
 import { base64DataUrlToBlob } from '@/features/canvas/utils/mediaUtils';
 import {
   getFileNameFromPath,
@@ -31,18 +29,6 @@ import {
   resolveMimeTypeFromPath,
   type MediaFileKind,
 } from '@/features/canvas/utils/mediaFileKind';
-import {
-  buildCanvasSizeSources,
-  buildNodeOccupancyRects,
-  type OccupancyRect,
-} from '@/features/canvas/utils/nodeOccupancy';
-import {
-  TASK_BATCH_GAP_X,
-  TASK_BATCH_GAP_Y,
-  computeGridCellsForSizes,
-  computeViewportRects,
-  searchFreeBlockPosition,
-} from '@/features/canvas/utils/taskNodePlacement';
 import type {
   AudioInputNodeData,
   GraphNode,
@@ -51,10 +37,9 @@ import type {
   VideoInputNodeData,
 } from '@/features/canvas/types/node';
 import { buildErrorResponse } from './cliProxyErrorResponses';
+import { computeCliPlacementPositions } from './cliCanvasPlacement';
+import { registerUnsupportedOperation } from './cliOperationRegistry';
 import { importMediaBytes, readLocalFileBytes } from './localMediaImport';
-
-/** 批量导入网格每行个数（与任务批次投影落位同口径：3 列一块）。 */
-const MEDIA_IMPORT_PER_ROW = 3;
 
 const MEDIA_NODE_KEY_BY_KIND = {
   image: 'imageInput',
@@ -140,53 +125,11 @@ const preflightImportFiles = async (
 // ---------------------------------------------------------------------------
 
 /**
- * 计算整批导入节点的落位坐标（与 kinds 顺序一一对应）。
- *
- * 批内相对几何由 computeGridCellsForSizes 按节点类型默认尺寸（注册表 defaultSize）构造，
- * 整块经 searchFreeBlockPosition 在安全区定位；安全区放不下退化到可见区、再退化到无界平面
- * （不重叠是硬约束，不存在允许重叠的兜底）。返回 null 仅发生在图未载入（防御分支）。
+ * 整批导入节点的落位（与 kinds 顺序一一对应）。
+ * 落位算法由 cliCanvasPlacement 承载（与 canvas node create 共用同一几何源，不复制第二套）。
  */
-const computeImportPositions = (kinds: readonly MediaFileKind[]): NodePosition[] | null => {
-  const state = useCanvasStore.getState();
-  const graph = state.nodeGraph;
-  if (graph === null) return null;
-
-  const { visible, safe } = computeViewportRects(
-    normalizeViewport(graph.viewport),
-    state.ui.canvasContainerSize,
-  );
-  const sizes = kinds.map((kind) => resolveNodeTypeDefaultSize(MEDIA_NODE_KEY_BY_KIND[kind]));
-  const { cells } = computeGridCellsForSizes(sizes, MEDIA_IMPORT_PER_ROW, TASK_BATCH_GAP_X, TASK_BATCH_GAP_Y);
-  const firstCell = cells[0];
-  if (firstCell === undefined) return [];
-  const batchWidth = Math.max(...cells.map((cell) => cell.dx + cell.width));
-  const batchHeight = Math.max(...cells.map((cell) => cell.dy + cell.height));
-  const anchor: NodePosition = {
-    x: safe.x + (safe.width - batchWidth) / 2,
-    y: safe.y + (safe.height - batchHeight) / 2,
-  };
-  const stepX = Math.max(...sizes.map((size) => size.width)) + TASK_BATCH_GAP_X;
-  const stepY = Math.max(...sizes.map((size) => size.height)) + TASK_BATCH_GAP_Y;
-  const search = (target: OccupancyRect | null): NodePosition | null =>
-    searchFreeBlockPosition({
-      occupancy: buildNodeOccupancyRects(graph.nodes, buildCanvasSizeSources(state)),
-      anchor,
-      cells,
-      stepX,
-      stepY,
-      target,
-    });
-
-  const base = search(safe) ?? search(visible) ?? search(null);
-  if (base === null) {
-    // 防御分支：无界搜索不返回 null（超限在 search 内抛内部断言），走到这里说明几何输入被污染
-    console.debug('[cliAssetImport] placement search exhausted all target zones', {
-      fileCount: kinds.length,
-    });
-    return null;
-  }
-  return cells.map((cell) => ({ x: base.x + cell.dx, y: base.y + cell.dy }));
-};
+const computeImportPositions = (kinds: readonly MediaFileKind[]): NodePosition[] | null =>
+  computeCliPlacementPositions(kinds.map((kind) => MEDIA_NODE_KEY_BY_KIND[kind]));
 
 // ---------------------------------------------------------------------------
 // 素材节点创建（与界面拖入同一 action、同一 data 形状）
@@ -371,5 +314,11 @@ export const executeAssetImport = async (
   if (failure !== null) {
     return buildErrorResponse('asset.import', requestId, failure.code, failure.message);
   }
-  return { command: 'asset.import', request_id: requestId, imported };
+  return {
+    command: 'asset.import',
+    request_id: requestId,
+    imported,
+    // 导入属「不支持按操作撤销」的写命令：返回操作标识，canvas.undo 对该标识返回 command_rejected。
+    operation_id: registerUnsupportedOperation(),
+  };
 };

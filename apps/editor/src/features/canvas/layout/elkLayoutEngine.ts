@@ -7,20 +7,20 @@
  * - 画布无连线、无端口、无拓扑：布局是纯几何遍历，默认按传入顺序单列垂直摆放，
  *   给出列数时按网格分行摆放；不读取、不生成也不推导任何连接信息
  *  （spec：画布自动布局算法.md「不支持边界」）。
- * - snap grid 由 placeGridFlow 内的 alignPosition 保证。
+ * - 坐标不做逐点网格吸附（2026-10-24 取消）：格子间距精确等于 `nodeGap`，网格吸附只由
+ *   调用层对整块包围盒左上角（锚点）做一次。
  * - 算法是纯函数语义：输入 nodes/sizeMap/options，输出 positions。
  * - 输入 nodes 不含组节点（type==='group'）。组节点不参与位置布局计算，调用层在算法入口前
  *   过滤掉组节点（spec：画布自动布局算法.md「组节点在布局中的地位」）。
- * - 方向固定 LR（左→右），间距固定标准值。spec：画布自动布局算法.md「布局配置项」。
+ * - 方向固定 LR（左→右），默认间距 `NODE_GAP`。spec：画布自动布局算法.md「布局配置项」。
  *
  * spec：docs/runtime/画布自动布局算法.md
  */
 
 import type { GraphNode, NodePosition, NodeSize } from '../types';
-import { NODE_GAP, placeGridFlow } from './layoutPrimitives';
+import { normalizeNodeGap, placeGridFlow } from './layoutPrimitives';
 
 export interface ElkLayoutOptions {
-  snapGrid: [number, number];
   /**
    * 网格排布列数（容器内整理的「整理为网格」本次选取值）。
    *
@@ -28,6 +28,8 @@ export interface ElkLayoutOptions {
    * 行数由节点数与列数决定（spec：画布自动布局算法.md「网格摆放」）。
    */
   columns?: number | undefined;
+  /** 本次格子间距（缺省 `NODE_GAP`）；精确推进，不做网格取整。 */
+  nodeGap?: number | undefined;
 }
 
 /**
@@ -43,7 +45,7 @@ export interface ElkLayoutOptions {
  *
  * @param nodes 参与布局的节点（已过滤作用域，不含组节点）
  * @param sizeMap 每个节点的尺寸（必须覆盖全部 nodes，经 resolveEffectiveSize 解析）
- * @param options snap grid 与可选网格列数
+ * @param options 可选网格列数与本次格子间距
  * @returns 每个节点的 position
  */
 export const computeLayoutWithElk = async (
@@ -54,7 +56,6 @@ export const computeLayoutWithElk = async (
   placeGridFlow(
     nodes,
     sizeMap,
-    options.snapGrid,
-    NODE_GAP,
+    normalizeNodeGap(options.nodeGap),
     options.columns !== undefined ? options.columns : 1,
   );

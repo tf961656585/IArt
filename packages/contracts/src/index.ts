@@ -42,5 +42,43 @@ export * from './skill-store';
 export * from './onboarding-contract';
 export * from './window-chrome-ipc';
 export * from './cli-contract';
+// 画布场景图 DTO 的可导入面（cli-contract 已 re-export；此处显式列出以固化 barrel 入口）。
+export {
+  CliCanvasInspectPointSchema,
+  CliCanvasInspectSizeSchema,
+  CliCanvasInspectBBoxSchema,
+  CliCanvasInspectViewportSchema,
+  CliCanvasInspectSceneViewportSchema,
+  CliCanvasInspectNodeAssetSchema,
+  CliCanvasInspectNodeSchema,
+  CliCanvasInspectNearestNeighborSchema,
+  CliCanvasInspectContainerSchema,
+  CliCanvasInspectUnplacedAssetSchema,
+  CliCanvasInspectAnnotationSchema,
+  CliCanvasInspectOverlapSchema,
+  CliCanvasInspectMinGapSchema,
+  CliCanvasInspectResultSchema,
+  CliCanvasGeometrySnapshotSchema,
+  CliCanvasGeometryGetResultSchema,
+} from './cli-canvas-inspect-contract';
+export type {
+  CliCanvasInspectPoint,
+  CliCanvasInspectSize,
+  CliCanvasInspectBBox,
+  CliCanvasInspectViewport,
+  CliCanvasInspectSceneViewport,
+  CliCanvasInspectNodeAsset,
+  CliCanvasInspectNode,
+  CliCanvasInspectNearestNeighbor,
+  CliCanvasInspectContainer,
+  CliCanvasInspectUnplacedAsset,
+  CliCanvasInspectAnnotation,
+  CliCanvasInspectOverlap,
+  CliCanvasInspectMinGap,
+  CliCanvasInspectResult,
+  CliCanvasGeometrySnapshot,
+  CliCanvasGeometryGetResult,
+} from './cli-canvas-inspect-contract';
+export * from './cli-canvas-plan-contract';
 export * from './cli-proxy-channels';
 export * from './cli-settings-channels';

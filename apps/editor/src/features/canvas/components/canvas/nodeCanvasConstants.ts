@@ -17,6 +17,11 @@ export const EMPTY_NODE_ID_SET = new Set<string>();
 export const ZOOM_LIMITS = { min: 0.125, max: 4 };
 export const CANVAS_INTERACTION_DELAY_MS = 150;
 
+/** 节点拖拽启动阈值（屏幕 px）。必须与 CANVAS_NODE_CLICK_DISTANCE 相等，避免点击/拖拽死区。 */
+export const CANVAS_NODE_DRAG_THRESHOLD = 4;
+/** 节点点击距离（屏幕 px）。位移 ≤ 此值仍算点击；必须与拖拽启动阈值相等。 */
+export const CANVAS_NODE_CLICK_DISTANCE = 4;
+
 /**
  * fitView 周围留白（ReactFlow Padding，单位 % 相对视口）。
  * 底部多留 35%：底部 PromptDock 浮层卡片常驻（对齐 原型 composer-wrap 语义），

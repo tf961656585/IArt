@@ -41,6 +41,7 @@ import { createBirthGroup } from '@/features/promptdock/projection/taskProjectio
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
 import type { NodeGraph } from '@/features/canvas/types';
 import { buildErrorResponse, projectNotOpenResponse } from './cliProxyErrorResponses';
+import { registerUnsupportedOperation } from './cliOperationRegistry';
 
 const executeGroupCreate = (
   command: Extract<CliProxyCommand, { command: 'canvas.group.create' }>,
@@ -72,6 +73,10 @@ const executeGroupCreate = (
       command: 'canvas.group.create',
       request_id: requestId,
       group_node_id: emptyGroupId,
+      // 空组建组：创建后组内没有成员，如实回传空数组（不伪造成员）。
+      member_ids: [],
+      // 建组不支持按操作撤销：仍返回操作标识，使 canvas.undo 返回 command_rejected。
+      operation_id: registerUnsupportedOperation(),
     };
   }
 
@@ -161,10 +166,90 @@ const executeGroupCreate = (
     useCanvasStore.getState().renameGroup(groupId, groupName);
   }
 
+  // 创建后实际在组内的成员：从 store 现值读取（不假定 createGroup 的内部写入结果）。
+  const graphAfterCreate = useCanvasStore.getState().nodeGraph;
+  const memberIdsInGroup =
+    graphAfterCreate !== null ? getGroupMembers(graphAfterCreate, groupId).map((member) => member.id) : [];
+
   return {
     command: 'canvas.group.create',
     request_id: requestId,
     group_node_id: groupId,
+    member_ids: memberIdsInGroup,
+    operation_id: registerUnsupportedOperation(),
+  };
+};
+
+/**
+ * `canvas group rename` → 节点组重命名（spec §5.3 / CLI-057）。
+ *
+ * 目标必须是节点组：不存在 → `group_not_found`；Agent 容器（标题由会话管理）与其他节点
+ * → `command_rejected`。映射既有 renameGroup（非合批感知、自带一条历史记录），因此
+ * 一次重命名 = 一条撤销记录。本命令属非位置类，按既有按操作撤销范围不登记，
+ * `operation_id` 恒为 null。
+ */
+const executeGroupRename = (
+  command: Extract<CliProxyCommand, { command: 'canvas.group.rename' }>,
+): CliProxyCommandResponse => {
+  const requestId = command.request_id;
+  const store = useCanvasStore.getState();
+  const nodeGraph = store.nodeGraph;
+  if (nodeGraph === null) {
+    return projectNotOpenResponse('canvas.group.rename', requestId);
+  }
+
+  const target = nodeGraph.nodes.find((node) => node.id === command.group);
+  if (target === undefined) {
+    console.debug('[cliProxyReceiver] group rename rejected: target not found', {
+      request_id: requestId,
+      group: command.group,
+    });
+    return buildErrorResponse(
+      'canvas.group.rename',
+      requestId,
+      'group_not_found',
+      `画布上找不到这个组：${command.group}。请确认组标识后重试。`,
+    );
+  }
+  if (target.type !== 'group') {
+    console.debug('[cliProxyReceiver] group rename rejected: target is not a node group', {
+      request_id: requestId,
+      group: command.group,
+      nodeType: target.type,
+    });
+    return buildErrorResponse(
+      'canvas.group.rename',
+      requestId,
+      'command_rejected',
+      target.type === 'agent'
+        ? `这个节点是 Agent 容器，其标题由会话管理，不能通过命令重命名：${command.group}。`
+        : `这个节点不是节点组：${command.group}。重命名命令只作用于节点组。`,
+    );
+  }
+
+  const name = command.name.trim();
+  if (name.length === 0) {
+    // 解析器已按用法错误拒绝一次；代理通道可被直接调用，此处兜底。
+    console.debug('[cliProxyReceiver] group rename rejected: empty name', {
+      request_id: requestId,
+      group: command.group,
+    });
+    return buildErrorResponse(
+      'canvas.group.rename',
+      requestId,
+      'command_rejected',
+      '组名不能为空：去除首尾空白后必须至少包含一个字符。',
+    );
+  }
+
+  store.renameGroup(command.group, name);
+
+  return {
+    command: 'canvas.group.rename',
+    request_id: requestId,
+    group_node_id: command.group,
+    name,
+    operation_id: null,
   };
 };
 
@@ -234,6 +319,7 @@ const executeGroupDissolve = (
       dissolved: true,
       group_node_id: command.group,
       member_ids: members.map((member) => member.id),
+      operation_id: registerUnsupportedOperation(),
     };
   }
 
@@ -246,6 +332,7 @@ const executeGroupDissolve = (
     dissolved: true,
     group_node_id: command.group,
     member_ids: members.map((member) => member.id),
+    operation_id: registerUnsupportedOperation(),
   };
 };
 
@@ -392,6 +479,7 @@ const executeGroupAdd = (
     added_node_ids: addedNodeIds,
     moved_node_ids: movedNodeIds,
     unchanged_node_ids: unchangedNodeIds,
+    operation_id: registerUnsupportedOperation(),
   };
 };
 
@@ -479,6 +567,7 @@ const executeGroupRemove = (
     request_id: requestId,
     group_node_id: command.group,
     removed_node_ids: memberIds,
+    operation_id: registerUnsupportedOperation(),
   };
 };
 
@@ -488,6 +577,7 @@ export const executeGroupCommand = (
     {
       command:
         | 'canvas.group.create'
+        | 'canvas.group.rename'
         | 'canvas.group.dissolve'
         | 'canvas.group.add'
         | 'canvas.group.remove';
@@ -497,6 +587,8 @@ export const executeGroupCommand = (
   switch (command.command) {
     case 'canvas.group.create':
       return executeGroupCreate(command);
+    case 'canvas.group.rename':
+      return executeGroupRename(command);
     case 'canvas.group.dissolve':
       return executeGroupDissolve(command);
     case 'canvas.group.add':

@@ -164,7 +164,7 @@ let httpServer: http.Server | null = null;
 let bundleUrlBase = '';
 let serverHits = 0;
 
-const bridge = createHubPlatformBridge();
+let bridge: ReturnType<typeof createHubPlatformBridge>;
 
 let firstTargetId = '';
 let currentTargetId = '';
@@ -175,6 +175,14 @@ beforeAll(async () => {
   fs.mkdirSync(fakeHome, { recursive: true });
   process.env['HOME'] = fakeHome;
   process.env['USERPROFILE'] = fakeHome;
+
+  // HOME 必须先行：安装目标 store 在解析注册表路径时读取 HOME。先建 bridge/加载 handler
+  // 会让整组用例共用真实 HOME 的注册表（跨运行残留条目污染），因此清掉 CJS 缓存后重载。
+  clearCjsCache(
+    path.join(process.cwd(), 'apps/desktop-shell/dist/skill-store/skill-install-targets-store.cjs'),
+  );
+  clearCjsCache(skillStoreIpcPath);
+  bridge = createHubPlatformBridge();
 
   const exposedApi = loadRealPreloadWithFakeIpcRenderer();
   (window as { electron?: unknown }).electron = exposedApi;

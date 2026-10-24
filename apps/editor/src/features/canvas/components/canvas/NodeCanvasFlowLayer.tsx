@@ -13,7 +13,12 @@ import {
 import { nodeTypes } from "../nodes";
 import { AnnotationOverlay } from "./AnnotationOverlay";
 import { CanvasOverviewLayer } from "./CanvasOverviewLayer";
-import { FIT_VIEW_PADDING, ZOOM_LIMITS } from "./nodeCanvasConstants";
+import {
+  CANVAS_NODE_CLICK_DISTANCE,
+  CANVAS_NODE_DRAG_THRESHOLD,
+  FIT_VIEW_PADDING,
+  ZOOM_LIMITS,
+} from "./nodeCanvasConstants";
 import type { useFlowRenderState } from "./useFlowRenderState";
 import type { useNodeCanvasChangeController } from "./useNodeCanvasChangeController";
 import type { useNodeCanvasFlowModel } from "./useNodeCanvasFlowModel";
@@ -103,6 +108,8 @@ export function NodeCanvasFlowLayer({
         zoomOnScroll
         panOnDrag
         selectNodesOnDrag={false}
+        nodeDragThreshold={CANVAS_NODE_DRAG_THRESHOLD}
+        nodeClickDistance={CANVAS_NODE_CLICK_DISTANCE}
         onlyRenderVisibleElements={!preLayoutMeasuring}
         className="bg-background"
       >

@@ -47,7 +47,19 @@ export type ResolveContainerOverlapsParams = {
   snapGrid: ReadonlyArray<number> | undefined;
   /** 需要检查的容器 id；内部归并到最外层容器并按首次出现序去重 */
   containerIds: ReadonlyArray<string>;
+  /**
+   * 跳过观察钩子（可选，仅观测不改结果）：容器未参与让位时回传稳定原因短句，
+   * 供 CLI `canvas.layout --scope containers` 的执行报告区分「检查过但无相交」与
+   * 「被跳过」。纯函数侧不做 IO，调用方决定留痕方式。
+   */
+  onSkip?: ((containerId: string, reason: ContainerOverlapSkipReason) => void) | undefined;
 };
+
+/** 容器让位跳过原因（稳定短句，与 CLI 执行报告的 skipped.reason 同源）。 */
+export type ContainerOverlapSkipReason =
+  | 'not_a_container'
+  | 'no_derived_box'
+  | 'position_search_failed';
 
 /** 无 snapGrid（或取值非法）时的搜索步距兜底。 */
 const DEFAULT_OVERLAP_STEP = 20;
@@ -199,7 +211,7 @@ const buildOutermostRectMap = (
 export const resolveContainerOverlaps = (
   params: ResolveContainerOverlapsParams,
 ): ContainerOverlapRelocation[] => {
-  const { nodes, sizeSources, snapGrid, containerIds } = params;
+  const { nodes, sizeSources, snapGrid, containerIds, onSkip } = params;
   if (containerIds.length === 0 || nodes.length === 0) return [];
 
   const nodeById = new Map<string, GraphNode>();
@@ -214,6 +226,7 @@ export const resolveContainerOverlaps = (
     const outermostId = resolveOutermostContainerId(nodeById, id);
     if (outermostId === undefined) {
       console.debug('[containerOverlap] candidate is not a container, skipped', { containerId: id });
+      onSkip?.(id, 'not_a_container');
       continue;
     }
     if (seen.has(outermostId)) continue;
@@ -233,6 +246,7 @@ export const resolveContainerOverlaps = (
     const entry = rectById.get(containerId);
     if (!entry) {
       console.debug('[containerOverlap] container rect missing, skipped', { containerId });
+      onSkip?.(containerId, 'no_derived_box');
       continue;
     }
     if (!intersectsOtherContainer(containerId, entry, rectById)) {
@@ -258,9 +272,13 @@ export const resolveContainerOverlaps = (
         containerId,
         error,
       });
+      onSkip?.(containerId, 'position_search_failed');
       continue;
     }
-    if (found === null) continue;
+    if (found === null) {
+      onSkip?.(containerId, 'position_search_failed');
+      continue;
+    }
 
     const delta: NodePosition = {
       x: found.x - entry.position.x,

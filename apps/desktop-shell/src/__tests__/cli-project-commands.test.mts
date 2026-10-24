@@ -134,6 +134,26 @@ describe("cli-command-executors 项目生命周期（假依赖注入）", () => 
     expect(twinEntry?.last_opened_at).toBeNull();
   });
 
+  // @spec: CLI-057
+  it("project.list：--limit/--offset 在既有顺序之后切片，响应仍是 {projects}", async () => {
+    const paged = await runExecutor(registry, "project.list", { command: "project.list", limit: 1, offset: 1 });
+    const parsed = parseResponse(paged);
+    if (!parsed.ok || parsed.command !== "project.list") throw new Error("unexpected");
+    expect(parsed.projects).toEqual([{ name: "twin", path: projectBPath, last_opened_at: null }]);
+    expect(parsed).not.toHaveProperty("total");
+
+    const tail = await runExecutor(registry, "project.list", { command: "project.list", offset: 2 });
+    const tailParsed = parseResponse(tail);
+    if (!tailParsed.ok || tailParsed.command !== "project.list") throw new Error("unexpected");
+    expect(tailParsed.projects).toHaveLength(1);
+    expect(tailParsed.projects[0]?.path).toBe(join(tempRoot, "twin-2"));
+
+    const beyond = await runExecutor(registry, "project.list", { command: "project.list", offset: 99 });
+    const beyondParsed = parseResponse(beyond);
+    if (!beyondParsed.ok || beyondParsed.command !== "project.list") throw new Error("unexpected");
+    expect(beyondParsed.projects).toEqual([]);
+  });
+
   it("project.status：按名解析唯一命中 → 解析结果 + 在册 + 窗口状态 + 在途任务数", async () => {
     windowOpenPaths = [projectAPath];
     fakeTasksPayload.total = 3;

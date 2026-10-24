@@ -38,6 +38,12 @@ export type CliImportedAssetEntry = z.infer<typeof CliImportedAssetEntrySchema>;
 export const CliAssetImportResultSchema = z
   .object({
     imported: z.array(CliImportedAssetEntrySchema),
+    /**
+     * 操作标识（批次二）：导入是写命令，按 spec §5.3 返回。导入属「不支持按操作撤销」的
+     * 操作类型——该标识可被 `canvas.undo` 识别为存在但拒绝（command_rejected），而不是
+     * 当作未知标识（operation_not_found）。可选：兼容批次二之前的响应形状。
+     */
+    operation_id: z.string().min(1).optional(),
   })
   .strict();
 export type CliAssetImportResult = z.infer<typeof CliAssetImportResultSchema>;

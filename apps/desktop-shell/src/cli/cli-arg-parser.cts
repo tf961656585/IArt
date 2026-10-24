@@ -1,4 +1,18 @@
-import { CliCommandRequestSchema, type CliCommandName, type CliCommandRequest } from "@iart/contracts/cli-contract";
+import * as path from "node:path";
+
+import { CliCommandRequestSchema, type CliCommandRequest } from "@iart/contracts/cli-contract";
+import {
+  COMMAND_SPECS,
+  COMMAND_SPEC_LIST,
+  FLAG_SPECS,
+  type CliHelpTopic,
+  type CommandSpec,
+} from "./cli-command-catalog.cjs";
+
+// 帮助主题与三层帮助渲染承载在 cli-command-catalog（行数预算拆分）：解析与帮助消费同一份
+// 命令表；此处 re-export 保持既有取用面（cli-client / 测试仍从 parser 取用）。
+export { renderCliHelpText, CLI_USAGE_TEXT } from "./cli-command-catalog.cjs";
+export type { CliHelpTopic, CommandFlagSpec, CommandSpec } from "./cli-command-catalog.cjs";
 
 /**
  * CLI 客户端参数解析（spec docs/integrations/CLI与本地Agent集成.md §5 命令面）。
@@ -11,17 +25,6 @@ import { CliCommandRequestSchema, type CliCommandName, type CliCommandRequest } 
  * 布尔 flag（--yes/--wait）与带值参数区分处理；未知参数报错；位置参数
  * （如 model get <model_id>、task get <taskId>）支持。
  */
-
-/**
- * 帮助主题（--help 的解析结果身份）：
- * - top：`iart --help` 顶层命令总表；
- * - noun：`iart <名词> --help` 该名词下的子命令摘要（如 model / canvas）；
- * - command：`iart <命令短语> --help` 该命令自己的参数说明（如 task list）。
- */
-export type CliHelpTopic =
-  | { kind: "top" }
-  | { kind: "noun"; noun: string }
-  | { kind: "command"; phrase: string };
 
 /** 参数错误时的人读单行指引（不再全量倾倒用法提示，spec CLI-041）。 */
 export const CLI_USAGE_HINT = "用法见 iart --help。";
@@ -42,440 +45,6 @@ const failure = (message: string): CliArgParseResult => ({ ok: false, reason: "u
 
 /** 参数解析用户可见错误（退出码 2 语义），由 parseCliArgs 统一捕获转 failure。 */
 class CliArgError extends Error {}
-
-type FlagKind = "string" | "number" | "numberAny" | "boolean" | "stringList" | "pathList" | "kvList" | "scope";
-
-interface FlagSpec {
-  /** 契约 params 字段名（snake_case）——CLI flag → 契约字段的显式映射。 */
-  field: string;
-  kind: FlagKind;
-  /** 命令级帮助中的用法形态（布尔开关只显示 flag 名）。 */
-  usage: string;
-  /** 命令级帮助中的一句话说明（含默认值与合法值）。 */
-  help: string;
-}
-
-/** CLI flag → 契约 params 字段映射与帮助说明（字段名以 packages/contracts cli-contract 为准）。 */
-const FLAG_SPECS = new Map<string, FlagSpec>([
-  ["--project", { field: "project", kind: "string", usage: "--project <路径或名称>", help: "目标项目（路径或项目名）" }],
-  ["--name", { field: "name", kind: "string", usage: "--name <名称>", help: "名称：project create 为项目名，canvas group create 为组名" }],
-  ["--path", { field: "path", kind: "string", usage: "--path <目录>", help: "项目所在父目录（不推断默认位置）" }],
-  ["--prompt", { field: "prompt", kind: "string", usage: "--prompt <文本>", help: "生成提示词" }],
-  ["--model", { field: "model", kind: "string", usage: "--model <模型id>", help: "模型标识（generate 必填；asset list 按生成模型过滤）" }],
-  ["--query", { field: "query", kind: "string", usage: "--query <关键词>", help: "按原始文件名或提交提示词做大小写不敏感子串筛选" }],
-  ["--media-type", { field: "media_type", kind: "string", usage: "--media-type <image|video|audio>", help: "按媒体类型过滤" }],
-  ["--limit", { field: "limit", kind: "number", usage: "--limit <N>", help: "最多返回条数（正整数）" }],
-  ["--offset", { field: "offset", kind: "number", usage: "--offset <N>", help: "跳过前 N 条（非负整数，缺省 0）" }],
-  ["--count", { field: "count", kind: "number", usage: "--count <N>", help: "生成任务数（正整数）" }],
-  ["--ref", { field: "ref", kind: "stringList", usage: "--ref <id>[:<用途>]", help: "引用资产标识（逗号分隔，须为项目内已存在资产）；用途取自 iart model get 的 media_slots[].slotId，省略则按模型能力自动归入" }],
-  ["--arg", { field: "arg", kind: "kvList", usage: "--arg <k=v,k2=v2>", help: "模型参数键值对（逗号分隔，受该模型参数 schema 约束）" }],
-  ["--members", { field: "members", kind: "stringList", usage: "--members <id1,id2>", help: "组成员节点标识（逗号分隔；group create 省略时创建空组，group add/remove 必填）" }],
-  // --file 是文件路径列表（spec §5.3 / CLI-047）：完整路径可合法含逗号，按 pathList
-  // 语义每次累积一项、不拆分（区别于 --members/--ref 的逗号拆分语义）。
-  ["--file", { field: "file", kind: "pathList", usage: "--file <路径>", help: "要导入的本地媒体文件（可重复；每次一个完整路径，不按逗号拆分）" }],
-  ["--group", { field: "group", kind: "string", usage: "--group <组名或组id>", help: "generate 为出生组组名；canvas group dissolve 为目标容器标识；canvas group add/remove 为目标组标识" }],
-  ["--node", { field: "node", kind: "string", usage: "--node <节点id>", help: "目标节点标识" }],
-  ["--nodes", { field: "nodes", kind: "stringList", usage: "--nodes <id1,id2>", help: "待删除节点标识（逗号分隔，至少一项）" }],
-  ["--order", { field: "order", kind: "stringList", usage: "--order <id1,id2>", help: "显式摆放顺序（数组序即最高优先摆放序）" }],
-  ["--x", { field: "x", kind: "numberAny", usage: "--x <数值>", help: "目标画布 X 坐标（可负、可小数）" }],
-  ["--y", { field: "y", kind: "numberAny", usage: "--y <数值>", help: "目标画布 Y 坐标（可负、可小数）" }],
-  ["--scope", { field: "scope", kind: "scope", usage: "--scope <all|containers|group:<id>>", help: "整理范围：all 全画布、containers 仅容器、group:<id> 指定组" }],
-  ["--columns", { field: "columns", kind: "number", usage: "--columns <N>", help: "整理列数（正整数，缺省 1）" }],
-  ["--yes", { field: "yes", kind: "boolean", usage: "--yes", help: "危险操作显式确认（project delete 必需；canvas node delete 命中 Agent 节点时必需）" }],
-  ["--wait", { field: "wait", kind: "boolean", usage: "--wait", help: "受理后继续轮询直至全部任务终态" }],
-  ["--timeout", { field: "timeout", kind: "number", usage: "--timeout <秒>", help: "等待超时秒数（缺省不设时限，到期后任务继续在后台执行）" }],
-  ["--request-id", { field: "client_request_id", kind: "string", usage: "--request-id <ID>", help: "受理幂等键（generate 未传时自动生成；task list 按该键反查）" }],
-  ["--status", { field: "status", kind: "string", usage: "--status <状态>", help: "按任务状态过滤：submitting|generating|polling|downloading|succeeded|failed|cancelled" }],
-  ["--since", { field: "since", kind: "string", usage: "--since <ISO时间>", help: "仅列出创建时间不早于该时刻的任务" }],
-]);
-
-/** 命令接受的参数（name 必须是 FLAG_SPECS 的键；required 只影响帮助标注，解析必填仍由草稿分支裁定）。 */
-interface CommandFlagSpec {
-  name: string;
-  required?: boolean;
-}
-
-interface CommandSpec {
-  /** 命令短语（`iart ` 之后的部分）。 */
-  phrase: string;
-  command: CliCommandName;
-  /** 位置参数的展示标签；数量即该命令允许的位置参数个数。 */
-  positionals: readonly string[];
-  /** 该命令接受的参数白名单（不含 --json/--help 通用项）——不属于白名单的 flag 按用法错误拒绝。 */
-  flags: readonly CommandFlagSpec[];
-  /** 一句话摘要（名词级帮助展示）。 */
-  summary: string;
-  /** 完整用法串（含默认值与合法值），顶层表与命令级帮助共同消费。 */
-  syntax: string;
-  /** 命令级帮助的补充说明。 */
-  notes?: readonly string[];
-}
-
-const REQUIRED_PROJECT: CommandFlagSpec = { name: "--project", required: true };
-
-/**
- * 命令面唯一事实源：短语 → 契约命令名、位置参数、参数白名单、摘要与用法串。
- * 顶层用法表、名词级帮助与命令级帮助全部由本表渲染，禁止另写命令/参数清单。
- */
-const COMMAND_SPEC_LIST: readonly CommandSpec[] = [
-  {
-    phrase: "project list",
-    command: "project.list",
-    positionals: [],
-    flags: [],
-    summary: "列出项目注册表中的项目（名称、路径、最近打开时间）。",
-    syntax: "iart project list",
-  },
-  {
-    phrase: "project status",
-    command: "project.status",
-    positionals: [],
-    flags: [REQUIRED_PROJECT],
-    summary: "查看项目解析结果、在册状态、画布窗口状态与在途任务数。",
-    syntax: "iart project status --project P",
-  },
-  {
-    phrase: "project create",
-    command: "project.create",
-    positionals: [],
-    flags: [
-      { name: "--name", required: true },
-      { name: "--path", required: true },
-    ],
-    summary: "在指定目录下创建项目（名称与目录均必填）。",
-    syntax: "iart project create --name N --path D",
-  },
-  {
-    phrase: "project open",
-    command: "project.open",
-    positionals: [],
-    flags: [REQUIRED_PROJECT],
-    summary: "打开项目并聚焦其画布窗口；已打开时幂等聚焦。",
-    syntax: "iart project open --project P",
-  },
-  {
-    phrase: "project close",
-    command: "project.close",
-    positionals: [],
-    flags: [REQUIRED_PROJECT],
-    summary: "关闭承载该项目的画布窗口；项目未打开时幂等成功。",
-    syntax: "iart project close --project P",
-  },
-  {
-    phrase: "project delete",
-    command: "project.delete",
-    positionals: [],
-    flags: [REQUIRED_PROJECT, { name: "--yes", required: true }],
-    summary: "把项目从项目注册表移除（不删除磁盘文件）。",
-    syntax: "iart project delete --project P --yes",
-    notes: ["只从项目注册表移除，磁盘上的项目文件不会被删除。"],
-  },
-  {
-    phrase: "model list",
-    command: "model.list",
-    positionals: [],
-    flags: [],
-    summary: "列出可执行模型目录（模型标识、能力角色、可执行状态）。",
-    syntax: "iart model list",
-  },
-  {
-    phrase: "model get",
-    command: "model.get",
-    positionals: ["<model_id>"],
-    flags: [],
-    summary: "输出单个模型的完整信息，含参数 schema。",
-    syntax: "iart model get <model_id>",
-  },
-  {
-    phrase: "asset list",
-    command: "asset.list",
-    positionals: [],
-    flags: [
-      REQUIRED_PROJECT,
-      { name: "--query" },
-      { name: "--media-type" },
-      { name: "--model" },
-      { name: "--limit" },
-      { name: "--offset" },
-    ],
-    summary: "列出项目资产（标识、媒体类型、生成来源摘要），支持筛选与分页。",
-    syntax:
-      "iart asset list --project P [--query K] [--media-type image|video|audio] [--model M] [--limit N] [--offset O]",
-    notes: ["不带筛选与分页参数时输出全量；列表类命令中只有 asset list 支持分页。"],
-  },
-  {
-    phrase: "asset get",
-    command: "asset.get",
-    positionals: ["<assetId>"],
-    flags: [REQUIRED_PROJECT],
-    summary: "输出单个资产详情（含本地文件绝对路径与同内容等价 id）。",
-    syntax: "iart asset get <assetId> --project P",
-  },
-  {
-    phrase: "asset import",
-    command: "asset.import",
-    positionals: [],
-    flags: [{ name: "--project", required: true }, { name: "--file", required: true }],
-    summary: "导入本地媒体文件并在画布创建素材节点（--file 可重复）。",
-    syntax: "iart asset import --file <路径> [--file <路径> ...] --project P",
-  },
-  {
-    phrase: "canvas nodes list",
-    command: "canvas.nodes.list",
-    positionals: [],
-    flags: [REQUIRED_PROJECT],
-    summary: "列出画布节点（标识、类型、位置、组归属与引用）。",
-    syntax: "iart canvas nodes list --project P",
-  },
-  {
-    phrase: "canvas group list",
-    command: "canvas.group.list",
-    positionals: [],
-    flags: [REQUIRED_PROJECT],
-    summary: "列出画布组与 Agent 容器（标识、名称、类型、成员数）。",
-    syntax: "iart canvas group list --project P",
-  },
-  {
-    phrase: "canvas group create",
-    command: "canvas.group.create",
-    positionals: [],
-    flags: [{ name: "--project", required: true }, { name: "--name", required: true }, { name: "--members" }],
-    summary: "创建组并加入成员；省略 --members 时创建空组。",
-    syntax: "iart canvas group create --name N [--members id1,id2] --project P",
-  },
-  {
-    phrase: "canvas group dissolve",
-    command: "canvas.group.dissolve",
-    positionals: [],
-    flags: [{ name: "--project", required: true }, { name: "--group", required: true }],
-    summary: "解散组或 Agent 容器；成员保留在画布上。",
-    syntax: "iart canvas group dissolve --group <容器id> --project P",
-  },
-  {
-    phrase: "canvas group add",
-    command: "canvas.group.add",
-    positionals: [],
-    flags: [
-      { name: "--project", required: true },
-      { name: "--group", required: true },
-      { name: "--members", required: true },
-    ],
-    summary: "把成员加入目标组；已在组内无操作，属于其他组时迁移过来。",
-    syntax: "iart canvas group add --group <组id> --members id1,id2 --project P",
-    notes: ["目标必须是节点组；Agent 容器的成员由会话管理，不接受加入/移出。"],
-  },
-  {
-    phrase: "canvas group remove",
-    command: "canvas.group.remove",
-    positionals: [],
-    flags: [
-      { name: "--project", required: true },
-      { name: "--group", required: true },
-      { name: "--members", required: true },
-    ],
-    summary: "把成员移出目标组；成员保留在画布原位。",
-    syntax: "iart canvas group remove --group <组id> --members id1,id2 --project P",
-    notes: ["成员必须当前属于该组；任一成员不属于时整批拒绝。"],
-  },
-  {
-    phrase: "canvas node move",
-    command: "canvas.node.move",
-    positionals: [],
-    flags: [
-      { name: "--project", required: true },
-      { name: "--node", required: true },
-      { name: "--x", required: true },
-      { name: "--y", required: true },
-    ],
-    summary: "把单个节点移动到目标画布坐标。",
-    syntax: "iart canvas node move --node <节点id> --x N --y N --project P",
-  },
-  {
-    phrase: "canvas node delete",
-    command: "canvas.node.delete",
-    positionals: [],
-    flags: [{ name: "--project", required: true }, { name: "--nodes", required: true }, { name: "--yes" }],
-    summary: "删除一个或多个节点；直接命中 Agent 节点时需要 --yes 确认。",
-    syntax: "iart canvas node delete --nodes id1,id2 [--yes] --project P",
-  },
-  {
-    phrase: "canvas layout",
-    command: "canvas.layout",
-    positionals: [],
-    flags: [
-      { name: "--project", required: true },
-      { name: "--scope", required: true },
-      { name: "--columns" },
-      { name: "--order" },
-    ],
-    summary: "整理画布、组或容器布局（--columns 缺省 1；--order 指定摆放顺序）。",
-    syntax: "iart canvas layout --scope all|containers|group:<id> [--columns N] [--order id1,id2] --project P",
-    notes: ["containers 作用域只消除容器之间的占位相交，不接受 --columns 与 --order。"],
-  },
-  {
-    phrase: "generate",
-    command: "generate",
-    positionals: [],
-    flags: [
-      { name: "--project", required: true },
-      { name: "--prompt", required: true },
-      { name: "--model", required: true },
-      { name: "--count" },
-      { name: "--ref" },
-      { name: "--arg" },
-      { name: "--group" },
-      { name: "--request-id" },
-      { name: "--wait" },
-    ],
-    summary: "提交一次生成；--wait 时轮询至全部任务终态。",
-    syntax:
-      "iart generate --prompt T --model M [--count N] [--ref id[:用途],id2] [--arg k=v,k2=v2] [--group 组名] [--request-id ID] [--wait] --project P",
-    notes: ["未传 --request-id 时客户端自动生成幂等键并在受理回执中回显。"],
-  },
-  {
-    phrase: "task list",
-    command: "task.list",
-    positionals: [],
-    flags: [REQUIRED_PROJECT, { name: "--status" }, { name: "--since" }, { name: "--request-id" }],
-    summary: "列出运行域任务，可按状态、创建时间与受理幂等键过滤。",
-    syntax:
-      "iart task list --project P [--status submitting|generating|polling|downloading|succeeded|failed|cancelled] [--since ISO时间] [--request-id ID]",
-  },
-  {
-    phrase: "task get",
-    command: "task.get",
-    positionals: ["<taskId>"],
-    flags: [REQUIRED_PROJECT],
-    summary: "输出单个任务的当前状态（含生成档案与画布投影身份）。",
-    syntax: "iart task get <taskId> --project P",
-  },
-  {
-    phrase: "task cancel",
-    command: "task.cancel",
-    positionals: ["<taskId>"],
-    flags: [REQUIRED_PROJECT],
-    summary: "取消任务。",
-    syntax: "iart task cancel <taskId> --project P",
-  },
-  {
-    phrase: "task wait",
-    command: "task.wait",
-    positionals: ["<taskId>"],
-    flags: [REQUIRED_PROJECT, { name: "--timeout" }],
-    summary: "等待任务至终态并输出结果；--timeout 缺省不设时限。",
-    syntax: "iart task wait <taskId> [--timeout S] --project P",
-    notes: ["缺省不设时限；--timeout 到期后任务仍在后台继续执行，可稍后用 task get 查看结果。"],
-  },
-  {
-    phrase: "batch get",
-    command: "batch.get",
-    positionals: ["<batchId>"],
-    flags: [REQUIRED_PROJECT],
-    summary: "读取批次受理时冻结的生成档案（含提示词全文）。",
-    syntax: "iart batch get <batchId> --project P",
-  },
-  {
-    phrase: "app status",
-    command: "app.status",
-    positionals: [],
-    flags: [],
-    summary: "查看应用当前打开的项目、焦点与画布选中态。",
-    syntax: "iart app status",
-  },
-];
-
-const COMMAND_SPECS = new Map<string, CommandSpec>(COMMAND_SPEC_LIST.map((spec) => [spec.phrase, spec]));
-
-/** 名词 → 一句话说明（仅用于名词级帮助标题，不构成命令事实源）。 */
-const NOUN_SUMMARIES = new Map<string, string>([
-  ["project", "项目生命周期"],
-  ["model", "可用模型查询"],
-  ["asset", "资产查询与导入"],
-  ["canvas", "画布操作（节点、组与布局）"],
-  ["task", "任务查询、等待与取消"],
-  ["batch", "生成档案查询"],
-  ["app", "应用状态感知"],
-]);
-
-const nounOf = (phrase: string): string => phrase.split(" ")[0] ?? phrase;
-
-const renderFlagHelpLine = (flag: CommandFlagSpec): string => {
-  const spec = FLAG_SPECS.get(flag.name);
-  if (spec === undefined) return `  ${flag.name}`;
-  const requiredNote = flag.required === true ? "（必填）" : "";
-  return `  ${spec.usage}  ${spec.help}${requiredNote}`;
-};
-
-const renderCommandHelpText = (spec: CommandSpec): string => {
-  const lines = [
-    `iart ${spec.phrase} — ${spec.summary}`,
-    "",
-    "用法：",
-    `  ${spec.syntax}`,
-    "",
-    "参数：",
-    ...spec.flags.map(renderFlagHelpLine),
-    "  --json  输出机器可读 JSON",
-    "  --help  显示本命令帮助",
-  ];
-  if (spec.notes !== undefined && spec.notes.length > 0) {
-    lines.push("", "说明：", ...spec.notes.map((note) => `  - ${note}`));
-  }
-  lines.push("", "顶层命令列表见 iart --help。");
-  return lines.join("\n");
-};
-
-const renderNounHelpText = (noun: string): string => {
-  const specs = COMMAND_SPEC_LIST.filter((spec) => nounOf(spec.phrase) === noun);
-  if (specs.length === 0) return CLI_USAGE_TEXT;
-  const lines = [
-    `iart ${noun} — ${NOUN_SUMMARIES.get(noun) ?? "命令组"}`,
-    "",
-    "子命令：",
-    ...specs.map((spec) => `  ${spec.syntax}\n      ${spec.summary}`),
-    "",
-    "查看单个命令的参数说明：iart <命令短语> --help",
-  ];
-  return lines.join("\n");
-};
-
-const buildTopLevelUsageText = (): string => {
-  const lines = [
-    "iart — 驱动 IARTStudio 的命令行入口（应用需在运行）",
-    "",
-    "命令：",
-    ...COMMAND_SPEC_LIST.map((spec) => `  ${spec.syntax}`),
-    "",
-    "帮助：",
-    "  iart <名词> --help        列出该名词下的子命令（如 iart model --help、iart canvas --help）",
-    "  iart <命令短语> --help    查看该命令自己的参数说明（如 iart task list --help）",
-    "",
-    "通用参数：",
-    "  --json                   输出机器可读 JSON",
-    "  --version                显示应用版本（iart --version）",
-    "  --help                   显示本用法提示",
-    "",
-    "退出码：0 成功；1 命令失败（含应用未在运行）；2 用法/执行错误",
-  ];
-  return lines.join("\n");
-};
-
-/** 顶层用法总表（`iart --help`），由 COMMAND_SPEC_LIST 渲染。 */
-export const CLI_USAGE_TEXT = buildTopLevelUsageText();
-
-/** 按解析出的帮助主题渲染帮助文本（顶层 / 名词级 / 命令级）。 */
-export const renderCliHelpText = (topic: CliHelpTopic): string => {
-  switch (topic.kind) {
-    case "top":
-      return CLI_USAGE_TEXT;
-    case "noun":
-      return renderNounHelpText(topic.noun);
-    case "command": {
-      const spec = COMMAND_SPECS.get(topic.phrase);
-      return spec === undefined ? CLI_USAGE_TEXT : renderCommandHelpText(spec);
-    }
-  }
-};
 
 const splitList = (raw: string): string[] =>
   raw
@@ -518,6 +87,40 @@ const parseScope = (raw: string): "all" | "containers" | { group: string } => {
   const groupId = match?.[1];
   if (groupId !== undefined && groupId.length > 0) return { group: groupId };
   throw new CliArgError(`--scope 仅支持 all、containers 或 group:<组标识>，收到：${raw}`);
+};
+
+/**
+ * `--positions <节点id>=<x>,<y>` 条目（可重复）。
+ *
+ * 每次一个节点：只按**第一个** `=` 拆分节点标识与坐标，坐标再按逗号拆两段；
+ * 形状不合法、x/y 非有限数值、节点标识重复都按用法错误拒绝（退出码 2）。
+ */
+const parsePositionAssignments = (
+  rawValues: readonly string[],
+): { node_id: string; x: number; y: number }[] => {
+  const seen = new Set<string>();
+  return rawValues.map((raw) => {
+    const eq = raw.indexOf("=");
+    if (eq <= 0) {
+      throw new CliArgError(`--positions 需要 <节点id>=<x>,<y> 形式，收到：${raw}`);
+    }
+    const nodeId = raw.slice(0, eq).trim();
+    const coords = raw.slice(eq + 1).split(",");
+    const xRaw = coords[0]?.trim() ?? "";
+    const yRaw = coords[1]?.trim() ?? "";
+    if (nodeId.length === 0 || coords.length !== 2 || xRaw.length === 0 || yRaw.length === 0) {
+      throw new CliArgError(`--positions 需要 <节点id>=<x>,<y> 形式，收到：${raw}`);
+    }
+    if (seen.has(nodeId)) {
+      throw new CliArgError(`--positions 节点标识重复：${nodeId}`);
+    }
+    seen.add(nodeId);
+    return {
+      node_id: nodeId,
+      x: parseCoordinate("--positions 的 x", xRaw),
+      y: parseCoordinate("--positions 的 y", yRaw),
+    };
+  });
 };
 
 const parseKvList = (raw: string): { key: string; value: string }[] =>
@@ -576,13 +179,17 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
 
   const resolved = resolveCommandSpec();
   if (!resolved) {
-    // 名词级帮助：`iart <名词> --help`（如 iart model --help、iart canvas --help）。
-    // 只在命令短语未命中时生效；已知命令短语（如 generate）走命令级帮助。
-    const noun = argv[0] ?? "";
-    const wantsHelp = argv[1] === "--help" || argv[1] === "-h";
-    const isKnownNoun = COMMAND_SPEC_LIST.some((spec) => spec.phrase === noun || spec.phrase.startsWith(`${noun} `));
-    if (wantsHelp && isKnownNoun) {
-      return { ok: false, reason: "help", topic: { kind: "noun", noun } };
+    // 名词级帮助（支持两级名词）：`iart <名词前缀> --help`，如 iart model --help、
+    // iart canvas --help、iart canvas nodes --help。规则：`--help` 之前的全部 token 组成
+    // 名词前缀；它不是某条完整命令短语、但存在以 `<前缀> ` 开头的命令短语即渲染名词帮助。
+    // 只在命令短语未命中时生效；已知命令短语（如 generate、task list）走命令级帮助。
+    const helpIndex = argv.findIndex((token) => token === "--help" || token === "-h");
+    if (helpIndex > 0) {
+      const noun = argv.slice(0, helpIndex).join(" ");
+      const isNounPrefix = COMMAND_SPEC_LIST.some((spec) => spec.phrase.startsWith(`${noun} `));
+      if (isNounPrefix) {
+        return { ok: false, reason: "help", topic: { kind: "noun", noun } };
+      }
     }
     return failure(`无法识别的命令：${argv.slice(0, 3).join(" ")}`);
   }
@@ -618,7 +225,7 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
       if (!allowedFlagNames.has(flagName)) {
         return failure(`参数 ${flagName} 不适用于命令 ${spec.phrase}。`);
       }
-      if (flagSpec.kind === "boolean") {
+      if (flagSpec.kind === "boolean" || flagSpec.kind === "booleanNegated") {
         if (inlineValue !== undefined) {
           return failure(`${flagName} 是开关参数，不接受值`);
         }
@@ -702,9 +309,18 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
 
   let draft: unknown;
   switch (spec.command) {
-    case "project.list":
-      draft = { command: "project.list" };
+    case "project.list": {
+      // 分页参数与 asset list 同形（limit 正整数缺省 null、offset 非负整数缺省 0）；
+      // 在既有排序之后切片，响应不新增 total（spec §5.1）。
+      const limit = optionalNumber("limit", "--limit");
+      const offsetRaw = scalarValues.get("offset");
+      draft = {
+        command: "project.list",
+        ...(limit !== undefined ? { limit } : {}),
+        ...(offsetRaw !== undefined ? { offset: parseNonNegativeInt("--offset", offsetRaw) } : {}),
+      };
       break;
+    }
     case "project.status":
     case "project.open":
     case "project.close":
@@ -738,11 +354,16 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
       if (mediaTypeRaw !== undefined && mediaTypeRaw !== "image" && mediaTypeRaw !== "video" && mediaTypeRaw !== "audio") {
         throw new CliArgError(`--media-type 需要 image|video|audio 之一，收到：${mediaTypeRaw}`);
       }
+      const onCanvasRaw = scalarValues.get("on_canvas");
+      if (onCanvasRaw !== undefined && onCanvasRaw !== "true" && onCanvasRaw !== "false") {
+        throw new CliArgError(`--on-canvas 需要 true 或 false，收到：${onCanvasRaw}`);
+      }
       draft = {
         command: "asset.list",
         project: requireScalar("project", "--project"),
         ...(query !== undefined ? { query } : {}),
         ...(mediaTypeRaw !== undefined ? { media_type: mediaTypeRaw } : {}),
+        ...(onCanvasRaw !== undefined ? { on_canvas: onCanvasRaw === "true" } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(limit !== undefined ? { limit } : {}),
         ...(offsetRaw !== undefined ? { offset: parseNonNegativeInt("--offset", offsetRaw) } : {}),
@@ -771,6 +392,23 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
     case "canvas.group.list":
       draft = { command: "canvas.group.list", project: requireScalar("project", "--project") };
       break;
+    case "canvas.inspect": {
+      // 场景图查询参数（批次 1a）：--full / --group / --prompt-limit / --no-unplaced。
+      // 缺省值（compact、含未落画布资产）由执行侧按字段缺失兜底，解析器只传显式给出的值。
+      const group = scalarValues.get("group");
+      const promptLimitRaw = scalarValues.get("prompt_limit");
+      draft = {
+        command: "canvas.inspect",
+        project: requireScalar("project", "--project"),
+        ...(booleanFlags.has("full") ? { full: true } : {}),
+        ...(group !== undefined ? { group } : {}),
+        ...(promptLimitRaw !== undefined
+          ? { prompt_limit: parseNonNegativeInt("--prompt-limit", promptLimitRaw) }
+          : {}),
+        ...(booleanFlags.has("include_unplaced") ? { include_unplaced: false } : {}),
+      };
+      break;
+    }
     case "canvas.group.create":
       // --members 可选（spec §5.3 / CLI-044 空组建组）：缺省视为空成员清单。
       draft = {
@@ -780,6 +418,20 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
         members: optionalStringList("members") ?? [],
       };
       break;
+    case "canvas.group.rename": {
+      // 组名去首尾空白后必须非空（spec §5.3）；Agent 容器标题由会话管理，由执行侧拒绝。
+      const name = requireScalar("name", "--name").trim();
+      if (name.length === 0) {
+        throw new CliArgError("--name 不能为空：组名去除首尾空白后必须至少包含一个字符。");
+      }
+      draft = {
+        command: "canvas.group.rename",
+        project: requireScalar("project", "--project"),
+        group: requireScalar("group", "--group"),
+        name,
+      };
+      break;
+    }
     case "canvas.group.dissolve":
       draft = {
         command: "canvas.group.dissolve",
@@ -806,6 +458,67 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
         node: requireScalar("node", "--node"),
         x: parseCoordinate("--x", xRaw),
         y: parseCoordinate("--y", yRaw),
+        ...(booleanFlags.has("dry_run") ? { dry_run: true } : {}),
+      };
+      break;
+    }
+    case "canvas.nodes.move": {
+      // 绝对坐标族（--positions，可重复）与相对位移族（--nodes/--dx/--dy）互斥（批次 1a）。
+      // 互斥与「两族都没给」在解析器先按用法错误拒绝；执行侧另有 command_rejected 兜底。
+      const positionsRaw = listValues.get("positions");
+      const nodesRaw = listValues.get("nodes");
+      const dxRaw = scalarValues.get("dx");
+      const dyRaw = scalarValues.get("dy");
+      const hasRelative = nodesRaw !== undefined || dxRaw !== undefined || dyRaw !== undefined;
+      if (positionsRaw !== undefined && hasRelative) {
+        throw new CliArgError("--positions（绝对坐标）与 --nodes/--dx/--dy（相对位移）不能同时使用，请只选一种。");
+      }
+      if (positionsRaw === undefined && !hasRelative) {
+        throw new CliArgError(
+          "请给出 --positions <节点id>=<x>,<y>（绝对坐标）或 --nodes/--dx/--dy（相对位移）中的一族。",
+        );
+      }
+      draft =
+        positionsRaw !== undefined
+          ? {
+              command: "canvas.nodes.move",
+              project: requireScalar("project", "--project"),
+              positions: parsePositionAssignments(positionsRaw),
+              ...(booleanFlags.has("dry_run") ? { dry_run: true } : {}),
+            }
+          : {
+              command: "canvas.nodes.move",
+              project: requireScalar("project", "--project"),
+              nodes: requireStringList("nodes", "--nodes"),
+              dx: parseCoordinate("--dx", requireScalar("dx", "--dx")),
+              dy: parseCoordinate("--dy", requireScalar("dy", "--dy")),
+              ...(booleanFlags.has("dry_run") ? { dry_run: true } : {}),
+            };
+      break;
+    }
+    case "canvas.group.move": {
+      const dxRaw = scalarValues.get("dx");
+      const dyRaw = scalarValues.get("dy");
+      const xRaw = scalarValues.get("x");
+      const yRaw = scalarValues.get("y");
+      const hasRelative = dxRaw !== undefined || dyRaw !== undefined;
+      const hasAbsolute = xRaw !== undefined || yRaw !== undefined;
+      // 两族互斥（spec §5.3 / CLI-052）：同时出现按用法错误拒绝（执行侧另有 command_rejected 兜底）。
+      if (hasRelative && hasAbsolute) {
+        throw new CliArgError("--dx/--dy（相对位移）与 --x/--y（绝对落点）不能同时使用，请只选一种。");
+      }
+      if (!hasRelative && !hasAbsolute) {
+        throw new CliArgError("请给出 --dx/--dy（相对位移）或 --x/--y（绝对落点）中的至少一项。");
+      }
+      draft = {
+        command: "canvas.group.move",
+        project: requireScalar("project", "--project"),
+        group: requireScalar("group", "--group"),
+        ...(dxRaw !== undefined ? { dx: parseCoordinate("--dx", dxRaw) } : {}),
+        ...(dyRaw !== undefined ? { dy: parseCoordinate("--dy", dyRaw) } : {}),
+        ...(xRaw !== undefined ? { x: parseCoordinate("--x", xRaw) } : {}),
+        ...(yRaw !== undefined ? { y: parseCoordinate("--y", yRaw) } : {}),
+        ...(booleanFlags.has("dry_run") ? { dry_run: true } : {}),
       };
       break;
     }
@@ -819,16 +532,98 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
       };
       break;
     }
+    case "canvas.node.create": {
+      const xRaw = scalarValues.get("x");
+      const yRaw = scalarValues.get("y");
+      // 两轴必须成对（spec §5.3 / CLI-056）：只给一个轴按用法错误拒绝（退出码 2）；
+      // 执行侧另有 command_rejected 兜底（代理通道可被直接调用，不假定经过解析器）。
+      if ((xRaw === undefined) !== (yRaw === undefined)) {
+        throw new CliArgError("--x 与 --y 必须同时给出或同时省略：只给一个轴无法确定落点。");
+      }
+      const group = scalarValues.get("group");
+      draft = {
+        command: "canvas.node.create",
+        project: requireScalar("project", "--project"),
+        asset: requireScalar("asset", "--asset"),
+        ...(group !== undefined ? { group } : {}),
+        ...(xRaw !== undefined && yRaw !== undefined
+          ? { x: parseCoordinate("--x", xRaw), y: parseCoordinate("--y", yRaw) }
+          : {}),
+        ...(booleanFlags.has("dry_run") ? { dry_run: true } : {}),
+      };
+      break;
+    }
     case "canvas.layout": {
-      const scopeRaw = requireScalar("scope", "--scope");
+      // 两种模式二选一（批次 1b）：--scope 族（逐次整理）或 --plan（计划文件）。
+      // 互斥与「两者都缺」在解析器先按用法错误拒绝（退出码 2）；执行侧另有 command_rejected 兜底。
+      const planRaw = scalarValues.get("plan_path");
+      const scopeRaw = scalarValues.get("scope");
+      const columnsRaw = scalarValues.get("columns");
+      const orderRaw = listValues.get("order");
+      const gapRaw = scalarValues.get("gap");
+      const orderModeRaw = scalarValues.get("order_mode");
+      const hasScopeFamily =
+        scopeRaw !== undefined ||
+        columnsRaw !== undefined ||
+        orderRaw !== undefined ||
+        orderModeRaw !== undefined ||
+        gapRaw !== undefined ||
+        booleanFlags.has("pack");
+      if (planRaw === undefined && !hasScopeFamily) {
+        throw new CliArgError("请给出 --scope all|containers|group:<id>（逐次整理）或 --plan <路径>（计划文件）中的一种。");
+      }
+      if (planRaw !== undefined) {
+        if (hasScopeFamily) {
+          throw new CliArgError(
+            "--plan 不能与 --scope/--columns/--order/--order-mode/--gap/--pack 同时使用：计划文件自成一套，请只给出 --plan。",
+          );
+        }
+        if (planRaw.trim().length === 0) {
+          throw new CliArgError("--plan 需要非空文件路径。");
+        }
+        // 计划文件只支持磁盘路径：`-`（标准输入）不是文件路径，按用法错误拒绝。
+        if (planRaw === "-") {
+          throw new CliArgError("--plan 不接受 -（标准输入）：请给出计划文件路径。");
+        }
+        draft = {
+          command: "canvas.layout",
+          project: requireScalar("project", "--project"),
+          // 解析器只做路径归一（绝对路径），不读文件、不校验内容（纯模块无 IO）。
+          plan_path: path.resolve(planRaw),
+          ...(booleanFlags.has("dry_run") ? { dry_run: true } : {}),
+        };
+        break;
+      }
       const columns = optionalNumber("columns", "--columns");
       const order = optionalStringList("order");
+      // 排序模式（批次 1a）：非法枚举值按用法错误拒绝（退出码 2），不依赖契约 parse 兜底。
+      if (
+        orderModeRaw !== undefined &&
+        orderModeRaw !== "position" &&
+        orderModeRaw !== "created" &&
+        orderModeRaw !== "insertion"
+      ) {
+        throw new CliArgError(`--order-mode 需要 position、created 或 insertion 之一，收到：${orderModeRaw}`);
+      }
       draft = {
         command: "canvas.layout",
         project: requireScalar("project", "--project"),
-        scope: parseScope(scopeRaw),
+        scope: parseScope(requireScalar("scope", "--scope")),
         ...(columns !== undefined ? { columns } : {}),
         ...(order !== undefined ? { order } : {}),
+        ...(orderModeRaw !== undefined ? { order_mode: orderModeRaw } : {}),
+        // --gap 非负整数（0 合法）：scope all/group 与 --pack 都生效，缺省由执行侧按 120 兜底。
+        ...(gapRaw !== undefined ? { gap: parseNonNegativeInt("--gap", gapRaw) } : {}),
+        ...(booleanFlags.has("pack") ? { pack: true } : {}),
+        ...(booleanFlags.has("dry_run") ? { dry_run: true } : {}),
+      };
+      break;
+    }
+    case "canvas.undo": {
+      draft = {
+        command: "canvas.undo",
+        project: requireScalar("project", "--project"),
+        operation: requireScalar("operation", "--operation"),
       };
       break;
     }

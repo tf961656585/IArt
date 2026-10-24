@@ -1,3 +1,5 @@
+import { computeFittedCanvasSize } from '@iart/utils/canvas-geometry';
+
 export const DEFAULT_MAX_IMAGE_DIMENSION = 768;
 
 export type ImageDimensions = { width: number; height: number };
@@ -32,25 +34,18 @@ export const readImageDimensions = async (src: string): Promise<ImageDimensions 
   }
 };
 
+/**
+ * 按最大边长等比缩放。
+ *
+ * maxDimension 为 undefined / 非有限 / 非正时不缩放（等价于无上限）；
+ * 返回的 resized 表示是否发生缩放，调用方据此决定是否重绘。
+ */
 export const computeFittedSize = (
   width: number,
   height: number,
   maxDimension: number | undefined
-): { width: number; height: number; resized: boolean } => {
-  const safeWidth = Math.max(Math.round(width), 1);
-  const safeHeight = Math.max(Math.round(height), 1);
-  const safeMax =
-    Number.isFinite(maxDimension) && (maxDimension as number) > 0
-      ? Math.floor(maxDimension as number)
-      : Infinity;
-  if (safeWidth <= safeMax && safeHeight <= safeMax) {
-    return { width: safeWidth, height: safeHeight, resized: false };
-  }
-  const ratio = Math.min(safeMax / safeWidth, safeMax / safeHeight);
-  const fittedWidth = Math.max(Math.round(safeWidth * ratio), 1);
-  const fittedHeight = Math.max(Math.round(safeHeight * ratio), 1);
-  return { width: fittedWidth, height: fittedHeight, resized: true };
-};
+): { width: number; height: number; resized: boolean } =>
+  computeFittedCanvasSize(width, height, maxDimension);
 
 const drawToCanvas = async (
   image: HTMLImageElement,

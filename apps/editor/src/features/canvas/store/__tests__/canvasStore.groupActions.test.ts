@@ -1,4 +1,4 @@
-// @spec: AG-CN-018, AL-GC-003
+// @spec: AG-CN-018, AL-GC-003, AL-GC-004, AL-GC-005, AL-GC-006
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useCanvasStore } from '../canvasStore';
 import { createNodeGraph } from '../../types/nodeGraph';
@@ -7,6 +7,7 @@ import type { AgentNodeData } from '../../types/agentNode';
 import { buildGroupDerivedSize } from '../../components/canvas/groupDerivedSize';
 import { buildCanvasSizeSources } from '../../utils/nodeOccupancy';
 import { rectsIntersect } from '../../utils/taskNodePlacement';
+import type { CanvasGroupAutoLayoutStoreOptions } from '../internal/canvasStore.core';
 
 const createTestGraph = () =>
   createNodeGraph({
@@ -126,14 +127,22 @@ describe('canvasStore group actions', () => {
       expect(groupNode?.groupId).toBeUndefined();
     });
 
-    it('组节点位置取成员包围盒左上角', () => {
+    it('组节点位置取成员派生渲染框左上角（成员包围盒 − (12, 40)）', () => {
       addTextInputNode('n1', 150, 120);
       addTextInputNode('n2', 100, 200);
       const groupId = useCanvasStore.getState().createGroup(['n1', 'n2'], undefined);
       expect(groupId).not.toBeNull();
       const groupNode = findNode(groupId as string);
-      // 成员最小 x=100, 最小 y=120
-      expect(groupNode?.position).toEqual({ x: 100, y: 120 });
+      // 成员最小 x=100, 最小 y=120；派生渲染框左上角 = (100-12, 120-8-32) = (88, 80)
+      expect(groupNode?.position).toEqual({ x: 88, y: 80 });
+    });
+
+    it('空组保持调用方给的位置（无成员可派生）', () => {
+      const groupId = useCanvasStore
+        .getState()
+        .createGroup([], { x: 400, y: 300 }, { allowEmpty: true });
+      expect(groupId).not.toBeNull();
+      expect(findNode(groupId as string)?.position).toEqual({ x: 400, y: 300 });
     });
 
     it('已是组成员的节点不被纳入新组', () => {
@@ -436,17 +445,17 @@ describe('canvasStore group actions', () => {
     });
   });
 
-  describe('autoLayoutContainer 容器内整理锚点保持（组）', () => {
-    it('容器内整理后成员包围盒左上角不变（组不漂移）', async () => {
+  describe('autoLayoutContainer 容器内整理锚点吸附（组）', () => {
+    it('容器内整理后成员包围盒左上角吸附到最近网格点（默认 snapGrid 15）', async () => {
       addTextInputNode('m1', 800, 700);
       addTextInputNode('m2', 900, 850);
       addTextInputNode('m3', 1100, 780);
       const groupId = useCanvasStore.getState().createGroup(['m1', 'm2', 'm3'], undefined);
       expect(groupId).not.toBeNull();
 
-      // 整理前成员包围盒左上角
-      const beforeMinX = Math.min(800, 900, 1100);
-      const beforeMinY = Math.min(700, 850, 780);
+      // 整理前成员包围盒左上角吸附到最近网格点：800→795、700→705
+      const alignedMinX = 795;
+      const alignedMinY = 705;
 
       const result = await useCanvasStore.getState().autoLayoutContainer(groupId as string, undefined);
       expect(result).not.toBeNull();
@@ -468,8 +477,8 @@ describe('canvasStore group actions', () => {
         (afterM2 ?? { y: Infinity }).y,
         (afterM3 ?? { y: Infinity }).y,
       );
-      expect(afterMinX).toBe(beforeMinX);
-      expect(afterMinY).toBe(beforeMinY);
+      expect(afterMinX).toBe(alignedMinX);
+      expect(afterMinY).toBe(alignedMinY);
     });
 
     it('容器内整理不改动组外节点 position', async () => {
@@ -485,7 +494,7 @@ describe('canvasStore group actions', () => {
       expect(findNode('outside')?.position).toEqual(outsideBefore);
     });
 
-    it('给出列数时按网格分行摆放，并保持锚点不变', async () => {
+    it('给出列数时按网格分行摆放，并保持锚点吸附口径', async () => {
       addTextInputNode('m1', 800, 700);
       addTextInputNode('m2', 900, 850);
       addTextInputNode('m3', 1100, 780);
@@ -502,6 +511,8 @@ describe('canvasStore group actions', () => {
           measuredSizeByNodeId: undefined,
           derivedSizeByNodeId: undefined,
           columns: 2,
+          // 显式 order 固定占格序（缺省视觉序见「排序口径与重排差异」用例）
+          order: ['m1', 'm2', 'm3', 'm4'],
         });
       expect(result).not.toBeNull();
 
@@ -516,9 +527,126 @@ describe('canvasStore group actions', () => {
       expect(p3.y).toBeGreaterThan(p1.y);
       expect(p3.x).toBe(p1.x);
 
-      // 锚点保持：整理后成员包围盒左上角与整理前一致
-      expect(Math.min(p1.x, p2.x, p3.x, p4.x)).toBe(800);
-      expect(Math.min(p1.y, p2.y, p3.y, p4.y)).toBe(700);
+      // 锚点吸附：整理后成员包围盒左上角 = 整理前锚点吸附到最近网格点
+      expect(Math.min(p1.x, p2.x, p3.x, p4.x)).toBe(795);
+      expect(Math.min(p1.y, p2.y, p3.y, p4.y)).toBe(705);
+    });
+  });
+
+  describe('autoLayoutContainer 排序口径与重排差异（batch 1a）', () => {
+    type OrderSummary = {
+      contentReordered: boolean;
+      orderChanges: Array<{ nodeId: string; fromSlot: number; toSlot: number }>;
+    };
+    // store core 的 options / 返回类型尚未包含本批新增字段（契约收敛由主 agent 统一），
+    // 测试侧用更宽的本地类型转接：扩展字段可选，可赋值给核心 options 类型，无需断言。
+    type ExtendedContainerOptions = CanvasGroupAutoLayoutStoreOptions & {
+      gap?: number | undefined;
+      orderMode?: 'position' | 'insertion' | 'created' | undefined;
+      order_mode?: 'position' | 'insertion' | 'created' | undefined;
+    };
+    const layoutContainer = (containerId: string, options: ExtendedContainerOptions) =>
+      useCanvasStore.getState().autoLayoutContainer(containerId, options);
+    // 返回形状新增字段：单次断言读取（不改变运行时行为）。
+    const withOrderSummary = <T,>(result: T): T & OrderSummary => result as T & OrderSummary;
+
+    /** 插入序与视觉序相反的两成员组：先加入下方的 bottom，再加入上方的 top。 */
+    const setupInvertedGroup = (): string => {
+      addTextInputNode('bottom', 800, 900);
+      addTextInputNode('top', 800, 700);
+      const groupId = useCanvasStore.getState().createGroup(['bottom', 'top'], undefined);
+      if (groupId === null) throw new Error('建组失败');
+      return groupId;
+    };
+
+    const yOf = (id: string): number => findNode(id)?.position.y ?? Number.NaN;
+
+    it('缺省按视觉阅读序占格（README 阅读方向），并报告 content_reordered=false', async () => {
+      const groupId = setupInvertedGroup();
+      const result = await layoutContainer(groupId, {
+        measuredSizeByNodeId: undefined,
+        derivedSizeByNodeId: undefined,
+        columns: 1,
+      });
+      if (result === null) throw new Error('整理未执行');
+      // 视觉序：top(y=700) 在 bottom(y=900) 之前
+      expect(yOf('top')).toBeLessThan(yOf('bottom'));
+      const summary = withOrderSummary(result);
+      expect(summary.contentReordered).toBe(false);
+      expect(summary.orderChanges).toEqual([]);
+    });
+
+    it('orderMode=insertion 按插入序占格，并报告重排差异', async () => {
+      const groupId = setupInvertedGroup();
+      const result = await layoutContainer(groupId, {
+        measuredSizeByNodeId: undefined,
+        derivedSizeByNodeId: undefined,
+        columns: 1,
+        orderMode: 'insertion',
+      });
+      if (result === null) throw new Error('整理未执行');
+      expect(yOf('bottom')).toBeLessThan(yOf('top'));
+      const summary = withOrderSummary(result);
+      expect(summary.contentReordered).toBe(true);
+      expect(summary.orderChanges).toEqual([
+        { nodeId: 'bottom', fromSlot: 1, toSlot: 0 },
+        { nodeId: 'top', fromSlot: 0, toSlot: 1 },
+      ]);
+    });
+
+    it('显式 order 优先于排序口径（缺省视觉序时仍按 order 占格）', async () => {
+      const groupId = setupInvertedGroup();
+      const result = await layoutContainer(groupId, {
+        measuredSizeByNodeId: undefined,
+        derivedSizeByNodeId: undefined,
+        columns: 1,
+        order: ['bottom', 'top'],
+      });
+      if (result === null) throw new Error('整理未执行');
+      expect(yOf('bottom')).toBeLessThan(yOf('top'));
+      expect(withOrderSummary(result).contentReordered).toBe(true);
+    });
+
+    it('order_mode=created 在画布侧按插入序处理（落 debug 后等价 insertion）', async () => {
+      const groupId = setupInvertedGroup();
+      const result = await layoutContainer(groupId, {
+        measuredSizeByNodeId: undefined,
+        derivedSizeByNodeId: undefined,
+        columns: 1,
+        order_mode: 'created',
+      });
+      if (result === null) throw new Error('整理未执行');
+      expect(yOf('bottom')).toBeLessThan(yOf('top'));
+    });
+
+    it('组内 gap 透传：格子间距精确等于本次 gap（与缺省 120 相差 80）', async () => {
+      // 两个互不相交的组，成员尺寸与相对位置相同，只有 gap 不同。
+      addTextInputNode('a1', 800, 700);
+      addTextInputNode('a2', 900, 850);
+      const wideGroup = useCanvasStore.getState().createGroup(['a1', 'a2'], undefined);
+      addTextInputNode('b1', 3000, 700);
+      addTextInputNode('b2', 3100, 850);
+      const narrowGroup = useCanvasStore.getState().createGroup(['b1', 'b2'], undefined);
+      if (wideGroup === null || narrowGroup === null) throw new Error('建组失败');
+
+      await layoutContainer(wideGroup, {
+        measuredSizeByNodeId: undefined,
+        derivedSizeByNodeId: undefined,
+        columns: 1,
+        gap: 120,
+      });
+      await layoutContainer(narrowGroup, {
+        measuredSizeByNodeId: undefined,
+        derivedSizeByNodeId: undefined,
+        columns: 1,
+        gap: 40,
+      });
+
+      const widePitch = yOf('a2') - yOf('a1');
+      const narrowPitch = yOf('b2') - yOf('b1');
+      expect(widePitch - narrowPitch).toBe(80);
+      // 精确间距：同一成员尺寸下 pitch = 成员高 + gap，二者都不含网格取整残差
+      expect(narrowPitch).toBeGreaterThan(40);
     });
   });
 
@@ -561,7 +689,7 @@ describe('canvasStore group actions', () => {
       // Agent 容器是容器节点：整理门按 isContainerNode 判定，不得被 type==='group' 拒绝
       expect(result).not.toBeNull();
 
-      // 锚点保持：整理后成员包围盒左上角 = 整理前 (800, 700)
+      // 锚点吸附：整理后成员包围盒左上角 = 整理前锚点吸附到最近网格点（800→795, 700→705）
       const afterA1 = findNode('a1')?.position;
       const afterA2 = findNode('a2')?.position;
       const afterA3 = findNode('a3')?.position;
@@ -570,10 +698,10 @@ describe('canvasStore group actions', () => {
       expect(afterA3).toBeDefined();
       expect(
         Math.min((afterA1 ?? { x: Infinity }).x, (afterA2 ?? { x: Infinity }).x, (afterA3 ?? { x: Infinity }).x),
-      ).toBe(800);
+      ).toBe(795);
       expect(
         Math.min((afterA1 ?? { y: Infinity }).y, (afterA2 ?? { y: Infinity }).y, (afterA3 ?? { y: Infinity }).y),
-      ).toBe(700);
+      ).toBe(705);
 
       // undo 整体恢复成员位置与折叠态
       useCanvasStore.getState().undo();
@@ -703,7 +831,7 @@ describe('canvasStore group actions', () => {
       expect(a2.y - a1.y).toBe(240);
     });
 
-    it('单组无邻居时锚点保持不漂移（让位逻辑不介入）', async () => {
+    it('单组无邻居时锚点吸附到最近网格点（让位逻辑不介入）', async () => {
       addTextInputNode('m1', 800, 700);
       addTextInputNode('m2', 900, 850);
       const groupId = useCanvasStore.getState().createGroup(['m1', 'm2'], undefined);
@@ -720,9 +848,10 @@ describe('canvasStore group actions', () => {
       expect(result).not.toBeNull();
 
       const after = derivedRect(groupId);
-      // 无邻居可让位：容器锚点（派生 position）保持，成员相对网格重排
-      expect(after.x).toBe(before.x);
-      expect(after.y).toBe(before.y);
+      // 无邻居可让位：容器锚点吸附到最近网格点（成员左上角 800/700 → 795/705），
+      // 派生框 = 吸附后成员包围盒左上角 − (12, 40)。相对漂移只有吸附量 (5, 5)。
+      expect(after.x).toBe(before.x - 5);
+      expect(after.y).toBe(before.y + 5);
     });
   });
 });

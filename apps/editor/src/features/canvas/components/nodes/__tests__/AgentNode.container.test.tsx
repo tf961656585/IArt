@@ -23,7 +23,10 @@ import { AgentNode } from '../AgentNode';
  * - 被组包裹（node.groupId 非空）时背板底档走 --agent-surface-nested（4% 嵌套档，CN-V-07）；
  * - 容器头 chip 必显 model_id（mono 11px）+ 标题 + 审批档 pill（CN-V-02），流式脉冲为 chip 内 dot；
  * - 折叠卡与组折叠卡同构（展开钮 + 标题 + model_id 截断 + 成员计数徽章），点击展开回落形态；
- * - LOD：<80px 屏幕尺寸降级锚点（title 带「标题 · N」）、展开态 <120px 显定位气泡（CN-V-03/05）。
+ * - LOD（AG-CN-021）：折叠卡屏幕宽 < 120px 或屏幕高 < 48px 降级为 44px 屏幕恒定锚点
+ *   （title 带「标题 · N」），100% 缩放下 240×72 折叠卡正常显示；
+ * - 屏幕恒定容器握把（AG-CN-019）：展开容器过小时于容器框上方显示（顶边翻转进框内），
+ *   单节点形态只在卡片屏幕高 < 48px 时显示。
  *
  * 尺寸口径（240×64 ↔ 派生容器尺寸）由投影层/机制层承载（layoutModel 静态 240×64、
  * buildGroupDerivedSize 派生容器 entry），组件测试断言两态的结构形态与不预渲染背板。
@@ -113,7 +116,12 @@ const seedGraph = (nodes: GraphNode[]): void => {
 };
 
 const renderNode = (
-  props: { selected?: boolean; width?: number; height?: number } = {},
+  props: {
+    selected?: boolean;
+    width?: number;
+    height?: number;
+    positionAbsoluteY?: number;
+  } = {},
 ) =>
   render(
     <AgentNode
@@ -122,6 +130,8 @@ const renderNode = (
         selected: props.selected ?? false,
         width: props.width,
         height: props.height,
+        // 默认放在视口 y=200 处：握把放置为 above（容器框上方）
+        positionAbsoluteY: props.positionAbsoluteY ?? 200,
       })}
     />,
   );
@@ -278,7 +288,7 @@ describe('Agent 容器背板选中与嵌套底档', () => {
 });
 
 describe('Agent 容器折叠卡', () => {
-  // @spec: AG-CT-005
+  // @spec: AG-CT-005, AG-CN-021
   it('折叠卡与组折叠卡同构：展开钮 + 标题 + model_id 截断 + 成员计数徽章；无背板无副行', () => {
     seedGraph([agentNode({ collapsed: true }), ...THREE_MEMBERS()]);
     renderNode();
@@ -317,26 +327,77 @@ describe('Agent 容器折叠卡', () => {
   });
 });
 
-describe('Agent 容器 LOD 投影', () => {
-  // @spec: AG-CT-005
-  it('折叠态屏幕尺寸 <80px 降级为锚点，锚点 title 带「标题 · N」', () => {
+describe('Agent 容器 LOD 投影与握把', () => {
+  // @spec: AG-CN-021
+  it('折叠态屏幕宽 < 120 或高 < 48 降级为 44px 居中锚点，锚点 title 带「标题 · N」', () => {
     seedGraph([agentNode({ collapsed: true }), ...THREE_MEMBERS()]);
     renderNode({ width: 50, height: 50 });
 
-    const anchor = document.querySelector('[data-agent-node][role="button"]');
-    if (!(anchor instanceof HTMLElement)) throw new Error('lod anchor not rendered');
+    const anchor = screen.getByTestId('container-lod-anchor');
+    expect(anchor.style.width).toBe('44px');
+    expect(anchor.style.height).toBe('44px');
+    // (50 - 44) / 2 = 3：锚点居中于容器框
+    expect(anchor.style.left).toBe('3px');
+    expect(anchor.style.top).toBe('3px');
     expect(anchor.title).toContain('夜景改造 · 3');
     expect(screen.queryByTestId('agent-node-member-count')).toBeNull();
   });
 
-  // @spec: AG-CT-005
-  it('展开态屏幕尺寸 <120px 显示定位气泡，气泡文字带「标题 · N」', () => {
+  // @spec: AG-CN-021
+  it('100% 缩放下 240×72 折叠卡正常显示（不降级），成员徽章与展开钮可见', () => {
+    seedGraph([agentNode({ collapsed: true }), ...THREE_MEMBERS()]);
+    renderNode({ width: 240, height: 72 });
+
+    expect(rootNode().getAttribute('data-agent-form')).toBe('collapsed');
+    expect(screen.queryByTestId('container-lod-anchor')).toBeNull();
+    expect(screen.queryByTestId('agent-node-member-count')).toHaveTextContent('3');
+    expect(screen.getByTitle('展开容器')).not.toBeNull();
+  });
+
+  // @spec: AG-CN-019
+  it('展开容器过小时在容器框上方显示屏幕恒定握把（无 nodrag、文本带「标题 · N」）', () => {
     seedGraph([agentNode(), ...THREE_MEMBERS()]);
     renderNode({ width: 240, height: 100 });
 
-    const bubble = Array.from(document.querySelectorAll('button')).find(
-      (candidate) => (candidate.textContent ?? '').includes('夜景改造 · 3'),
-    );
-    expect(bubble).toBeDefined();
+    const grip = screen.getByTestId('container-grip');
+    expect(grip.textContent).toContain('夜景改造 · 3');
+    expect(grip.getAttribute('data-placement')).toBe('above');
+    // 44 / 1 = 44px 命中高；min(240, 240) / 1 = 240px 宽
+    expect(grip.style.height).toBe('44px');
+    expect(grip.style.width).toBe('240px');
+    // 拖动交给 React Flow 既有节点拖动链路
+    expect(grip.closest('.nodrag')).toBeNull();
+  });
+
+  // @spec: AG-CN-019
+  it('容器贴近视口顶边（positionAbsoluteY=0）时握把翻转为框内首行', () => {
+    seedGraph([agentNode(), ...THREE_MEMBERS()]);
+    renderNode({ width: 240, height: 100, positionAbsoluteY: 0 });
+
+    const grip = screen.getByTestId('container-grip');
+    expect(grip.getAttribute('data-placement')).toBe('inside');
+    expect(grip.style.top).toBe('0px');
+  });
+
+  // @spec: AG-CN-019
+  it('单节点形态 Agent 在卡片屏幕高 < 48px 时显示握把，零成员不带「 · 0」', () => {
+    seedGraph([agentNode()]);
+    renderNode({ width: 240, height: 40 });
+
+    expect(rootNode().getAttribute('data-agent-form')).toBe('leaf');
+    const grip = screen.getByTestId('container-grip');
+    const label = screen.getByTestId('container-grip-label');
+    expect(label.textContent).toBe('夜景改造');
+    expect(label.textContent).not.toContain(' · 0');
+    expect(grip.getAttribute('data-container-id')).toBe(AGENT_NODE_ID);
+  });
+
+  // @spec: AG-CN-019
+  it('单节点形态在 100% 缩放下不显示握把（避免与卡片自身标题重复）', () => {
+    seedGraph([agentNode()]);
+    renderNode();
+
+    expect(rootNode().getAttribute('data-agent-form')).toBe('leaf');
+    expect(screen.queryByTestId('container-grip')).toBeNull();
   });
 });

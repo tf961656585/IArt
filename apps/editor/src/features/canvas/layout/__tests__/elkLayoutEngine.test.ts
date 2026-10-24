@@ -3,8 +3,6 @@ import { computeLayoutWithElk } from '../elkLayoutEngine';
 import { applyLayoutInputOrder } from '../layoutPrimitives';
 import type { GraphNode, NodePosition, NodeSize } from '../../types';
 
-const SNAP_GRID: [number, number] = [15, 15];
-
 const makeNode = (
   id: string,
   type: GraphNode['type'],
@@ -61,7 +59,6 @@ describe('computeLayoutWithElk 基本布局', () => {
     const sizeMap = buildSizeMap(nodes);
 
     const positions = await computeLayoutWithElk(nodes, sizeMap, {
-      snapGrid: SNAP_GRID,
     });
 
     expect(Object.keys(positions).length).toBe(3);
@@ -91,10 +88,8 @@ describe('computeLayoutWithElk 节点顺序稳定性', () => {
     );
 
     const forwardPositions = await computeLayoutWithElk(forward, buildSizeMap(forward), {
-      snapGrid: SNAP_GRID,
     });
     const reversedPositions = await computeLayoutWithElk(reversed, buildSizeMap(reversed), {
-      snapGrid: SNAP_GRID,
     });
 
     const fa = forwardPositions['a'];
@@ -122,7 +117,6 @@ describe('computeLayoutWithElk 孤立节点垂直摆列', () => {
     const sizeMap = buildSizeMap(nodes);
 
     const positions = await computeLayoutWithElk(nodes, sizeMap, {
-      snapGrid: SNAP_GRID,
     });
 
     expect(Object.keys(positions).length).toBe(4);
@@ -154,7 +148,6 @@ describe('computeLayoutWithElk 孤立节点垂直摆列', () => {
     const sizeMap = buildSizeMap(nodes);
 
     const positions = await computeLayoutWithElk(nodes, sizeMap, {
-      snapGrid: SNAP_GRID,
     });
 
     const topY = positions['top']?.y ?? 0;
@@ -175,7 +168,6 @@ describe('computeLayoutWithElk 孤立节点垂直摆列', () => {
     const sizeMap = buildSizeMap(nodes);
 
     const positions = await computeLayoutWithElk(nodes, sizeMap, {
-      snapGrid: SNAP_GRID,
     });
 
     const topY = positions['top']?.y ?? 0;
@@ -185,24 +177,34 @@ describe('computeLayoutWithElk 孤立节点垂直摆列', () => {
   });
 });
 
-describe('computeLayoutWithElk snap grid 吸附', () => {
-  it('输出坐标均为 grid 倍数', async () => {
+// @spec: AL-GC-004
+describe('computeLayoutWithElk 精确格子间距（取消逐点吸附）', () => {
+  it('算法层不做网格取整：输出坐标是精确累加值（不出现 117/132 一类吸附偏差）', async () => {
     const nodes = [
       makeNode('a', 'asset', { x: 0, y: 0 }, { width: 220, height: 120 }),
-      makeNode('b', 'asset', { x: 0, y: 0 }, { width: 220, height: 120 }),
+      makeNode('b', 'asset', { x: 0, y: 0 }, { width: 223, height: 137 }),
     ];
     const sizeMap = buildSizeMap(nodes);
 
-    const positions = await computeLayoutWithElk(nodes, sizeMap, {
-      snapGrid: SNAP_GRID,
-    });
+    const positions = await computeLayoutWithElk(nodes, sizeMap, {});
 
-    for (const id of Object.keys(positions)) {
-      const pos = positions[id];
-      if (!pos) continue;
-      expect(pos.x % 15).toBe(0);
-      expect(pos.y % 15).toBe(0);
-    }
+    // 单列：b 的 y = a 的高 120 + gap 120 = 240（精确值，不取整）
+    expect(positions['a']).toEqual({ x: 0, y: 0 });
+    expect(positions['b']).toEqual({ x: 0, y: 240 });
+  });
+
+  it('nodeGap 覆盖缺省 120：相邻格子间距精确等于本次 gap', async () => {
+    const nodes = [
+      makeNode('a', 'asset', { x: 0, y: 0 }, { width: 220, height: 120 }),
+      makeNode('b', 'asset', { x: 0, y: 0 }, { width: 220, height: 120 }),
+      makeNode('c', 'asset', { x: 0, y: 0 }, { width: 220, height: 120 }),
+    ];
+    const sizeMap = buildSizeMap(nodes);
+
+    const positions = await computeLayoutWithElk(nodes, sizeMap, { nodeGap: 40 });
+
+    expect(positions['b']?.y).toBe(160);
+    expect(positions['c']?.y).toBe(320);
   });
 });
 
@@ -217,7 +219,6 @@ describe('computeLayoutWithElk 组节点不参与布局', () => {
     const sizeMap = buildSizeMap(freeNodes);
 
     const positions = await computeLayoutWithElk(freeNodes, sizeMap, {
-      snapGrid: SNAP_GRID,
     });
 
     expect(positions['a']).toBeDefined();
@@ -238,7 +239,6 @@ describe('computeLayoutWithElk 组节点不参与布局', () => {
     const sizeMap = buildSizeMap(freeNodes);
 
     const positions = await computeLayoutWithElk(freeNodes, sizeMap, {
-      snapGrid: SNAP_GRID,
     });
 
     const a = positions['a'];
@@ -262,7 +262,6 @@ describe('computeLayoutWithElk 网格摆放（容器内整理列数）', () => {
     const sizeMap = buildSizeMap(nodes);
 
     const positions = await computeLayoutWithElk(nodes, sizeMap, {
-      snapGrid: SNAP_GRID,
       columns: 3,
     });
 
@@ -288,10 +287,8 @@ describe('computeLayoutWithElk 网格摆放（容器内整理列数）', () => {
     const sizeMap = buildSizeMap(nodes);
 
     const withoutColumns = await computeLayoutWithElk(nodes, sizeMap, {
-      snapGrid: SNAP_GRID,
     });
     const singleColumn = await computeLayoutWithElk(nodes, sizeMap, {
-      snapGrid: SNAP_GRID,
       columns: 1,
     });
 
@@ -303,7 +300,6 @@ describe('computeLayoutWithElk 网格摆放（容器内整理列数）', () => {
     const sizeMap = buildSizeMap(nodes);
 
     const positions = await computeLayoutWithElk(nodes, sizeMap, {
-      snapGrid: SNAP_GRID,
       columns: 10,
     });
 
@@ -311,21 +307,22 @@ describe('computeLayoutWithElk 网格摆放（容器内整理列数）', () => {
     expect(new Set(ys).size).toBe(1);
   });
 
-  it('网格摆放同样满足 snap grid 吸附', async () => {
+  // @spec: AL-GC-004
+  it('网格摆放不做逐点吸附：行内/行间间距精确等于 gap', async () => {
     const nodes = buildNodes(6);
     const sizeMap = buildSizeMap(nodes);
 
     const positions = await computeLayoutWithElk(nodes, sizeMap, {
-      snapGrid: SNAP_GRID,
       columns: 4,
     });
 
-    for (const id of Object.keys(positions)) {
-      const pos = positions[id];
-      if (!pos) continue;
-      expect(pos.x % 15).toBe(0);
-      expect(pos.y % 15).toBe(0);
-    }
+    const n0 = positions['n0'];
+    const n1 = positions['n1'];
+    const n4 = positions['n4'];
+    if (!n0 || !n1 || !n4) throw new Error('expected positions');
+    // 节点宽 210 高 120，gap 120：列距 = 210 + 120，行距 = 120 + 120
+    expect(n1.x - n0.x).toBe(330);
+    expect(n4.y - n0.y).toBe(240);
   });
 
   it('列宽取该列最大宽度、行高取该行最大高度：异形节点不重叠', async () => {
@@ -338,7 +335,6 @@ describe('computeLayoutWithElk 网格摆放（容器内整理列数）', () => {
     const sizeMap = buildSizeMap(nodes);
 
     const positions = await computeLayoutWithElk(nodes, sizeMap, {
-      snapGrid: SNAP_GRID,
       columns: 2,
     });
 

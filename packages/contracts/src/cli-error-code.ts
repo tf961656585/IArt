@@ -31,6 +31,11 @@ export const CLI_ERROR_CODES = [
   'task_not_found',
   'wait_timeout',
   'command_rejected',
+  /**
+   * 按操作撤销的目标标识无效：从未登记 / 已撤销 / 画布窗口重建后内存登记表丢失。
+   * 登记表只存在于画布窗口渲染进程内存，窗口重载即失效（已知边界，spec §5.3）。
+   */
+  'operation_not_found',
   'internal_error',
 ] as const;
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useCallback } from 'react';
-import { type NodeProps, useStore as useReactFlowStore } from '@xyflow/react';
+import { type NodeProps } from '@xyflow/react';
 
 import { formatBeijingShortDateTime } from '@/shared/utils/time';
 import { cn } from '@/lib/utils';
@@ -17,16 +17,17 @@ import { useCanvasStore } from '../../store/canvasStore';
 import { selectContainerMemberCount } from '../../store/internal/containerMemberIndex';
 import {
   GROUP_HEADER_HEIGHT,
-  GROUP_LOD_TRIGGER_SCREEN_SIZE,
   GROUP_LOD_ANCHOR_SCREEN_SIZE,
   GROUP_COLLAPSED_MIN_WIDTH,
   GROUP_COLLAPSED_HEIGHT,
-  GROUP_EXPANDED_BUBBLE_TRIGGER_SCREEN_SIZE,
-  GROUP_EXPANDED_BUBBLE_SCREEN_HEIGHT,
-  GROUP_EXPANDED_BUBBLE_FONT_SCREEN_SIZE,
+  isContainerLodDegraded,
+  shouldShowContainerGrip,
+  shouldShowAgentLeafGrip,
   computeLodAnchorLocateZoom,
 } from '../../services/groupGeometry';
+import { useCanvasZoom, useContainerGripPlacement } from '../../hooks/useCanvasViewport';
 import { CollapseIcon, ExpandIcon } from './GroupNode';
+import { ContainerGrip, GripDots } from './ContainerGrip';
 // 容器共享组件级样式（背板/折叠卡 keyframes、--group-anchor-text；自 globals.css 下沉）
 import './containerNodes.css';
 
@@ -44,6 +45,14 @@ import './containerNodes.css';
  *   副行退场（仅单节点形态与孵化期显示）。
  * - 折叠态（data.collapsed，与组同一 toggleGroupCollapse 机制）：组折叠卡同构——展开钮 +
  *   标题 + model_id 截断 + 成员计数徽章；成员不挂载由机制层承载。
+ *
+ * 屏幕恒定容器握把（AG-CN-019）：展开容器在「容器头屏幕高 < 28 或容器最短边 < 120」时
+ * 于容器框上方显示握把（视觉 24px / 命中 44px，顶边时翻转进框内首行）；单节点形态 Agent
+ * （无成员、整卡可拖）只在卡片屏幕高 < 48px 时显示。握把无 nodrag，拖动走 React Flow 既有
+ * 节点拖动链路，单击定位走既有 locateToNode。容器头 chip 与折叠卡常显 2×3 握把点。
+ *
+ * LOD（AG-CN-021）：折叠卡屏幕宽 < 120px 或屏幕高 < 48px 时降级为 44px 屏幕恒定锚点
+ * （居中于容器框、整块可拖、Enter/Space 定位）；100% 缩放下折叠卡正常显示。
  *
  * 计数口径（AG-NP-005 / AG-CT-005 / AG-CT-007）：成员计数徽章只在折叠态展示，**计数=容器
  * 成员数**（selectContainerMemberCount 增量索引，禁容器实例扫描全图、与会话产物消息脱钩），
@@ -148,22 +157,8 @@ const AGENT_BADGE_CLASS = cn(
 );
 
 /**
- * 画布 zoom（hairline 1/zoom 与 LOD 屏幕尺寸判定用）。
- * RF 内部 store 仅在 ReactFlowProvider 祖先内可用，组件级测试裸渲染时按 useOptionalReactFlow
- * 同款降级先例回落 store viewport zoom（等值订阅；值为最近一次收敛的视口 zoom，手势结束后
- * 由视口同步通道回写）。
+ * 定位 no-op（组件级测试无 RF Provider 裸渲染时的降级；真实画布恒有 Provider 走完整链）。
  */
-const useCanvasZoom = (): number => {
-  try {
-    return useReactFlowStore((state) => state.transform[2]);
-  } catch {
-    // 无 Provider 裸渲染（组件级测试）：非响应式回落 store viewport zoom——
-    // 测试环境视口静止；catch 内不调 Hook（rules-of-hooks），回落经 getState 读取
-    return useCanvasStore.getState().nodeGraph?.viewport?.zoom ?? 1;
-  }
-};
-
-/** 定位 no-op（组件级测试无 RF Provider 裸渲染时的降级；真实画布恒有 Provider 走完整链）。 */
 const noopLocate: LocateToNodeFn = () => undefined;
 
 /**
@@ -179,7 +174,13 @@ const useOptionalLocateToNode = (): LocateToNodeFn => {
   }
 };
 
-export const AgentNode = memo(function AgentNode({ id, selected, width, height }: NodeProps) {
+export const AgentNode = memo(function AgentNode({
+  id,
+  selected,
+  width,
+  height,
+  positionAbsoluteY,
+}: NodeProps) {
   const { data: nodeData, node } = useNodeFromStore<AgentNodeData, AgentNodeSelection>({
     nodeId: id,
     fallback: createFallbackAgentNode(id),
@@ -198,7 +199,11 @@ export const AgentNode = memo(function AgentNode({ id, selected, width, height }
   const isDropTarget = useCanvasStore((state) => state.ui.groupDropTargetGroupId === id);
   const isDraggingSelf = useCanvasStore((state) => state.ui.groupDraggingId === id);
   const toggleGroupCollapse = useCanvasStore((state) => state.toggleGroupCollapse);
+  // 视口读取拆成两个 primitive selector：zoom 只随缩放变；握把放置只在 above ↔ inside
+  // 翻转时变（平移不再让所有容器节点逐帧重渲染）。
   const zoom = useCanvasZoom();
+  const absoluteY = typeof positionAbsoluteY === 'number' ? positionAbsoluteY : 0;
+  const gripPlacement = useContainerGripPlacement(absoluteY);
   const locateToNode = useOptionalLocateToNode();
   // 绑定环（spec 02「选中态工具栏·绑定态视觉」）：PromptDock 正绑定该节点会话时升级选中环。
   // 从 PromptDock store 派生，不写进节点 data（节点只持会话稳定引用）。
@@ -254,16 +259,19 @@ export const AgentNode = memo(function AgentNode({ id, selected, width, height }
   // LOD 判定（触发维度是屏幕空间尺寸 = 画布尺寸 × zoom；初渲染 width/height 未注入时不降级）
   const screenW = typeof width === 'number' ? width * zoom : Number.POSITIVE_INFINITY;
   const screenH = typeof height === 'number' ? height * zoom : Number.POSITIVE_INFINITY;
-  const isLodDegraded =
-    form === 'collapsed' &&
-    (screenW < GROUP_LOD_TRIGGER_SCREEN_SIZE || screenH < GROUP_LOD_TRIGGER_SCREEN_SIZE);
-  // 展开容器远缩放气泡：屏幕宽或高低于阈值时显示（视图投影，不改 position/派生尺寸/成员事实）
-  const isFarZoomBubble =
+  const isLodDegraded = form === 'collapsed' && isContainerLodDegraded(screenW, screenH);
+  // 屏幕恒定容器握把（AG-CN-019）：
+  // - 容器形态：容器头屏幕高 < 28 或容器最短边 < 120 时显示；
+  // - 单节点形态：只在卡片屏幕高 < 48px 时显示（100% 缩放下与卡片自身标题重复，不显示）。
+  const showContainerGrip =
     form === 'container' &&
-    Number.isFinite(screenW) &&
-    Number.isFinite(screenH) &&
-    Math.min(screenW, screenH) < GROUP_EXPANDED_BUBBLE_TRIGGER_SCREEN_SIZE;
-  const bubbleInverseScale = zoom > 0 ? 1 / zoom : 1;
+    shouldShowContainerGrip({
+      headerScreenHeight: GROUP_HEADER_HEIGHT * zoom,
+      screenWidth: screenW,
+      screenHeight: screenH,
+    });
+  const showLeafGrip = form === 'leaf' && shouldShowAgentLeafGrip(screenH);
+  // 握把放置（above / 顶边翻转 inside）由 useContainerGripPlacement 的 primitive selector 承载。
 
   const handleToggleCollapse = useCallback(() => {
     toggleGroupCollapse(id);
@@ -278,8 +286,8 @@ export const AgentNode = memo(function AgentNode({ id, selected, width, height }
     locateToNode(id, 'lod-anchor-click', { zoom: locateZoom, duration: 300, select: true });
   }, [id, locateToNode, width, height]);
 
-  const handleBubbleClick = useCallback(() => {
-    locateToNode(id, 'agent-bubble-click', { zoom: 1, duration: 300, select: true });
+  const handleGripClick = useCallback(() => {
+    locateToNode(id, 'container-grip-click', { zoom: 1, duration: 300, select: true });
   }, [id, locateToNode]);
 
   const sessionStateAttr =
@@ -288,32 +296,42 @@ export const AgentNode = memo(function AgentNode({ id, selected, width, height }
 
   // ---- 折叠态：LOD 锚点 / 组折叠卡同构信息卡（CN-V-05） ----
   if (form === 'collapsed') {
-    // 屏幕空间极小（<80px）：固定屏幕尺寸锚点块（反向缩放抵消 viewport zoom，恒定 40px）
+    // 屏幕宽 < 120 或高 < 48（AG-CN-021）：固定 44px 屏幕尺寸锚点块，居中于容器框，
+    // 整块可拖、Enter/Space 定位。
     if (isLodDegraded) {
       const inverseScale = zoom > 0 ? 1 / zoom : 1;
       const canvasSize = GROUP_LOD_ANCHOR_SCREEN_SIZE * inverseScale;
       const initial = displayName.length > 0 ? displayName.charAt(0) : '?';
+      const anchorLeft = typeof width === 'number' ? (width - canvasSize) / 2 : 0;
+      const anchorTop = typeof height === 'number' ? (height - canvasSize) / 2 : 0;
+      const anchorLabel = `${displayName} · ${memberCount} 成员（拖动移动；单击定位）`;
       return (
         <div
           data-agent-node={id}
           data-agent-form="collapsed"
           data-session-state={sessionStateAttr}
           data-bound={boundAttr}
+          data-testid="container-lod-anchor"
           role="button"
           tabIndex={0}
+          aria-label={anchorLabel}
           className={cn(
-            'agent-node pointer-events-auto flex h-full w-full cursor-pointer items-center justify-center rounded-[6px] border shadow-sm transition-shadow',
+            'agent-node pointer-events-auto flex cursor-pointer items-center justify-center rounded-[6px] border shadow-sm transition-shadow',
             AGENT_TRANSITION_CLASS,
             AGENT_BASE_BORDER_CLASS,
             selected && 'border-[var(--select-ring)] shadow-[0_0_0_2px_var(--select-ring),0_0_0_6px_var(--select-glow)]',
           )}
           style={{
+            position: 'absolute',
+            left: anchorLeft,
+            top: anchorTop,
             width: canvasSize,
             height: canvasSize,
             backgroundColor: 'var(--agent-accent)',
             fontSize: Math.floor(GROUP_LOD_ANCHOR_SCREEN_SIZE * 0.5 * inverseScale),
             fontWeight: 700,
             borderWidth: hairlineBorderWidth,
+            borderRadius: 10 * inverseScale,
           }}
           onClick={handleLodAnchorClick}
           onKeyDown={(e) => {
@@ -322,7 +340,7 @@ export const AgentNode = memo(function AgentNode({ id, selected, width, height }
               handleLodAnchorClick();
             }
           }}
-          title={`${displayName} · ${memberCount} 成员（点击定位）`}
+          title={anchorLabel}
         >
           <span className="text-[var(--group-anchor-text)]">{initial}</span>
         </div>
@@ -379,6 +397,8 @@ export const AgentNode = memo(function AgentNode({ id, selected, width, height }
             {memberCount}
           </span>
         ) : null}
+        {/* 折叠卡常显 2×3 握把点（零成员徽章不显示时仍显示，AG-CN-019） */}
+        <GripDots size={2} />
       </div>
     );
   }
@@ -421,6 +441,8 @@ export const AgentNode = memo(function AgentNode({ id, selected, width, height }
               'animate-[iart-group-surface-in_150ms_cubic-bezier(0.4,0,0.2,1)] motion-reduce:animate-none',
             )}
           >
+            {/* 容器头常显 2×3 握把点：提示标题条可拖（AG-CN-019） */}
+            <GripDots size={2} />
             <button
               type="button"
               onClick={handleToggleCollapse}
@@ -466,28 +488,20 @@ export const AgentNode = memo(function AgentNode({ id, selected, width, height }
             ) : null}
           </div>
         </div>
-        {/* 远缩放标题气泡：屏幕尺寸过小时的视图投影（固定屏幕尺寸经 1/zoom 反向缩放） */}
-        {isFarZoomBubble ? (
-          <button
-            type="button"
-            onClick={handleBubbleClick}
-            className={cn(
-              buildAgentChipClass(),
-              'nodrag pointer-events-auto absolute cursor-pointer font-medium text-foreground',
-            )}
-            style={{
-              left: 4 * bubbleInverseScale,
-              top: 4 * bubbleInverseScale,
-              height: GROUP_EXPANDED_BUBBLE_SCREEN_HEIGHT * bubbleInverseScale,
-              padding: `0 ${6 * bubbleInverseScale}px`,
-              borderRadius: 5 * bubbleInverseScale,
-              fontSize: GROUP_EXPANDED_BUBBLE_FONT_SCREEN_SIZE * bubbleInverseScale,
-              lineHeight: 1,
-            }}
-            title="点击定位到容器"
-          >
-            {displayName} · {memberCount}
-          </button>
+        {/* 屏幕恒定容器握把（AG-CN-019）：容器框上方（成员区域之外），顶边时翻转进框内。
+            按钮无 nodrag：拖动走 React Flow 既有节点拖动链路；单击定位到容器。 */}
+        {showContainerGrip ? (
+          <ContainerGrip
+            containerId={id}
+            label={displayName}
+            memberCount={memberCount}
+            accent="var(--agent-accent)"
+            zoom={zoom}
+            screenWidth={screenW}
+            placement={gripPlacement}
+            isDragging={isDraggingSelf}
+            onLocate={handleGripClick}
+          />
         ) : null}
       </div>
     );
@@ -521,6 +535,20 @@ export const AgentNode = memo(function AgentNode({ id, selected, width, height }
         </div>
         <div className="agent-sub">{summaryText}</div>
       </div>
+      {/* 单节点形态握把（AG-CN-019）：只在卡片屏幕高 < 48px 时显示，避免与卡片标题重复。 */}
+      {showLeafGrip ? (
+        <ContainerGrip
+          containerId={id}
+          label={displayName}
+          memberCount={0}
+          accent="var(--agent-accent)"
+          zoom={zoom}
+          screenWidth={screenW}
+          placement={gripPlacement}
+          isDragging={isDraggingSelf}
+          onLocate={handleGripClick}
+        />
+      ) : null}
     </div>
   );
 });

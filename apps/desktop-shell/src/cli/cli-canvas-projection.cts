@@ -53,8 +53,11 @@ export const projectCanvasNodePayload = (payload: unknown): CliCanvasNodeEntry |
   const groupId = typeof raw.groupId === "string" && raw.groupId.length > 0 ? raw.groupId : null;
   const data =
     raw.data !== null && typeof raw.data === "object" && !Array.isArray(raw.data)
-      ? (raw.data as { assetId?: unknown; taskId?: unknown })
+      ? (raw.data as { assetId?: unknown; taskId?: unknown; name?: unknown; label?: unknown })
       : null;
+  // 显示名（spec §5.2 / CLI-057）：组取组名 data.name，其余节点取 data.label；缺失空串。
+  const nameField = nodeType === "group" ? data?.name : data?.label;
+  const name = typeof nameField === "string" ? nameField : "";
   const assetId =
     ASSET_ID_NODE_TYPES.has(nodeType) &&
     data !== null &&
@@ -66,7 +69,7 @@ export const projectCanvasNodePayload = (payload: unknown): CliCanvasNodeEntry |
     nodeType === "task" && data !== null && typeof data.taskId === "string" && data.taskId.length > 0
       ? data.taskId
       : null;
-  return { node_id: nodeId, node_type: nodeType, position: { x, y }, group_id: groupId, asset_id: assetId, task_id: taskId };
+  return { node_id: nodeId, node_type: nodeType, name, position: { x, y }, group_id: groupId, asset_id: assetId, task_id: taskId };
 };
 
 /**
@@ -160,6 +163,29 @@ export const projectCanvasGroupSummaries = (payloads: readonly unknown[]): CliCa
     type: container.type,
     member_count: memberCountByGroupId.get(container.id) ?? 0,
   }));
+};
+
+/**
+ * 画布节点载荷 → asset_id → 引用它的画布节点标识列表（spec §5.2 asset list 的
+ * `node_ids` / `--on-canvas` 过滤底座，CLI-056）。
+ *
+ * 引用口径与 canvas nodes list 一致（CLI-017）：资产节点与图片/视频/音频素材节点的
+ * data.assetId 都是资产引用，任务节点的占位 assetId 不入列。同一资产可被多个节点引用，
+ * 节点顺序按载荷数组序；残缺载荷由 projectCanvasNodePayload 跳过并留痕。
+ */
+export const buildAssetNodeIndex = (payloads: readonly unknown[]): ReadonlyMap<string, string[]> => {
+  const index = new Map<string, string[]>();
+  for (const payload of payloads) {
+    const entry = projectCanvasNodePayload(payload);
+    if (entry === null || entry.asset_id === null) continue;
+    const existing = index.get(entry.asset_id);
+    if (existing === undefined) {
+      index.set(entry.asset_id, [entry.node_id]);
+    } else {
+      existing.push(entry.node_id);
+    }
+  }
+  return index;
 };
 
 /**

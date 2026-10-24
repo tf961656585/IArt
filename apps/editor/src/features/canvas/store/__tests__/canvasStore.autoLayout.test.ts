@@ -6,6 +6,7 @@ import { buildGroupDerivedSize } from '../../components/canvas/groupDerivedSize'
 import { buildCanvasSizeSources, type OccupancyRect } from '../../utils/nodeOccupancy';
 import { resolveEffectiveSizeByNodeId } from '../../utils/effectiveSize';
 import { rectsIntersect } from '../../utils/taskNodePlacement';
+import type { CanvasAutoLayoutStoreOptions } from '../internal/canvasStore.core';
 
 // 全局整理（scope=all）行为测试：真实节点图 → 真实 store action（禁止手工构造理想输入）。
 // 覆盖：散点避开容器占位（展开态组按成员派生包围盒）、锚点保持（整块包围盒左上角与
@@ -156,13 +157,14 @@ describe('全局整理：散点避开容器占位与锚点保持', () => {
   });
 
   // @spec: AL-GC-002
-  it('CLI 路径（autoLayout 缺省 options）整理后整块包围盒左上角与整理前一致（不甩到原点）', async () => {
+  it('CLI 路径（autoLayout 缺省 options）整理后整块包围盒左上角吸附到最近网格点（不甩到原点）', async () => {
     addTextInputNode('f1', 1000, 1000);
     addTextInputNode('f2', 1040, 1040);
 
     await useCanvasStore.getState().autoLayout(undefined);
 
-    expect(freeBlockTopLeft(['f1', 'f2'])).toEqual({ x: 1000, y: 1000 });
+    // 锚点吸附到最近网格点（默认 snapGrid 15）：1000 → 1005
+    expect(freeBlockTopLeft(['f1', 'f2'])).toEqual({ x: 1005, y: 1005 });
   });
 
   // @spec: AL-GC-002
@@ -177,7 +179,7 @@ describe('全局整理：散点避开容器占位与锚点保持', () => {
       columns: 2,
     });
 
-    expect(freeBlockTopLeft(['f1', 'f2', 'f3'])).toEqual({ x: 1000, y: 1000 });
+    expect(freeBlockTopLeft(['f1', 'f2', 'f3'])).toEqual({ x: 1005, y: 1005 });
   });
 
   // @spec: AL-GC-002
@@ -190,6 +192,115 @@ describe('全局整理：散点避开容器占位与锚点保持', () => {
       derivedSizeByNodeId: undefined,
     });
 
-    expect(freeBlockTopLeft(['f1', 'f2'])).toEqual({ x: 1000, y: 1000 });
+    // 锚点吸附到最近网格点（默认 snapGrid 15）：1000 → 1005
+    expect(freeBlockTopLeft(['f1', 'f2'])).toEqual({ x: 1005, y: 1005 });
+  });
+});
+
+// @spec: AL-GC-004, AL-GC-005
+describe('全局整理：排序口径、gap 与重排差异', () => {
+  type OrderSummary = {
+    contentReordered: boolean;
+    orderChanges: Array<{ nodeId: string; fromSlot: number; toSlot: number }>;
+  };
+  // store core 的 options / 返回类型尚未包含本批新增字段（契约收敛由主 agent 统一）。
+  type ExtendedGlobalOptions = CanvasAutoLayoutStoreOptions & {
+    gap?: number | undefined;
+    orderMode?: 'position' | 'insertion' | 'created' | undefined;
+    order_mode?: 'position' | 'insertion' | 'created' | undefined;
+  };
+  const globalLayout = (options: ExtendedGlobalOptions) =>
+    useCanvasStore.getState().autoLayout(options);
+  const withOrderSummary = <T,>(result: T): T & OrderSummary => result as T & OrderSummary;
+
+  const yOf = (id: string): number => findNode(id)?.position.y ?? Number.NaN;
+
+  beforeEach(async () => {
+    await resetStore();
+  });
+
+  /** 插入序与视觉序相反：先加入 y 更大的 lower，再加入 y 更小的 upper。 */
+  const setupInvertedFreeNodes = () => {
+    addTextInputNode('lower', 1000, 1400);
+    addTextInputNode('upper', 1000, 1000);
+  };
+
+  it('缺省按视觉阅读序占格，content_reordered=false', async () => {
+    setupInvertedFreeNodes();
+    const result = await globalLayout({
+      measuredSizeByNodeId: undefined,
+      derivedSizeByNodeId: undefined,
+    });
+    if (result === null) throw new Error('整理未执行');
+    expect(yOf('upper')).toBeLessThan(yOf('lower'));
+    const summary = withOrderSummary(result);
+    expect(summary.contentReordered).toBe(false);
+    expect(summary.orderChanges).toEqual([]);
+  });
+
+  it('orderMode=insertion 按插入序占格并报告重排差异', async () => {
+    setupInvertedFreeNodes();
+    const result = await globalLayout({
+      measuredSizeByNodeId: undefined,
+      derivedSizeByNodeId: undefined,
+      orderMode: 'insertion',
+    });
+    if (result === null) throw new Error('整理未执行');
+    expect(yOf('lower')).toBeLessThan(yOf('upper'));
+    const summary = withOrderSummary(result);
+    expect(summary.contentReordered).toBe(true);
+    expect(summary.orderChanges.length).toBeGreaterThan(0);
+  });
+
+  it('显式 order 优先于排序口径', async () => {
+    setupInvertedFreeNodes();
+    const result = await globalLayout({
+      measuredSizeByNodeId: undefined,
+      derivedSizeByNodeId: undefined,
+      order: ['lower', 'upper'],
+    });
+    if (result === null) throw new Error('整理未执行');
+    expect(yOf('lower')).toBeLessThan(yOf('upper'));
+    expect(withOrderSummary(result).contentReordered).toBe(true);
+  });
+
+  it('order_mode=created 在画布侧按插入序处理', async () => {
+    setupInvertedFreeNodes();
+    const result = await globalLayout({
+      measuredSizeByNodeId: undefined,
+      derivedSizeByNodeId: undefined,
+      order_mode: 'created',
+    });
+    if (result === null) throw new Error('整理未执行');
+    expect(yOf('lower')).toBeLessThan(yOf('upper'));
+  });
+
+  it('--gap 透传：全局网格间距精确等于本次 gap', async () => {
+    const pitchOf = (positions: Record<string, NodePosition>): number =>
+      (positions['g2']?.y ?? 0) - (positions['g1']?.y ?? 0);
+
+    addTextInputNode('g1', 1000, 1000);
+    addTextInputNode('g2', 1000, 1400);
+    const defaultGap = await globalLayout({
+      measuredSizeByNodeId: undefined,
+      derivedSizeByNodeId: undefined,
+    });
+    if (defaultGap === null) throw new Error('整理未执行');
+    const defaultPitch = pitchOf(defaultGap.positions);
+
+    await resetStore();
+    addTextInputNode('g1', 1000, 1000);
+    addTextInputNode('g2', 1000, 1400);
+    const narrowGap = await globalLayout({
+      measuredSizeByNodeId: undefined,
+      derivedSizeByNodeId: undefined,
+      gap: 40,
+    });
+    if (narrowGap === null) throw new Error('整理未执行');
+    const narrowPitch = pitchOf(narrowGap.positions);
+
+    // 成员尺寸相同、仅 gap 不同：缺省 120 与本次 40 的间距差恰为 80（无网格取整残差）
+    expect(defaultPitch - narrowPitch).toBe(80);
+    expect(narrowPitch).toBeGreaterThan(40);
   });
 });

@@ -1,5 +1,9 @@
 /**
- * 布局基础工具：snap grid 对齐、网格流式摆列、默认尺寸常量。
+ * 布局基础工具：网格对齐原语、网格流式摆列、默认尺寸与间距常量。
+ *
+ * 网格流式摆列（`placeGridFlow`）不再逐点吸附网格：格子间距精确等于本次 `gap`，
+ * 网格吸附只由调用层对整块包围盒左上角（锚点）做一次（spec：画布自动布局算法.md
+ * 「分区内流式摆放」「网格摆放」）。`alignToGrid` 保留给整块锚点吸附与容器看板使用。
  *
  * 这些工具与具体布局引擎无关，ELK 适配器与对齐工具共同消费。
  * 从原 autoLayoutGraph.ts / autoLayoutPlacement.ts 迁移而来。
@@ -19,12 +23,27 @@ export { DEFAULT_NODE_SIZE };
 /** 层间距（主轴方向相邻两层间距）。固定常量，spec：画布自动布局算法.md「布局配置项」。 */
 export const LAYER_GAP = 200;
 
-/** 同层节点间距（次轴方向相邻节点间距）。固定常量，spec：画布自动布局算法.md「布局配置项」。 */
+/**
+ * 默认格子间距（同层节点间距 / 容器内成员间距）。
+ *
+ * 这是**缺省值**，不是固定值：本次整理可经 `gap` 覆盖（spec：画布自动布局算法.md
+ * 「分区内流式摆放」——`gap` 是本次调用入参，缺省 120）。
+ */
 export const NODE_GAP = 120;
 
 /** 对齐到网格 */
 export const alignToGrid = (value: number, grid: number): number =>
   Math.round(value / grid) * grid;
+
+/**
+ * 规范化本次调用的格子间距：非有限值或负数回落 `NODE_GAP`，其余向下取整。
+ *
+ * `gap` 是调用入参（非持久化偏好），0 合法（相邻格子紧贴）。
+ */
+export const normalizeNodeGap = (gap: number | undefined): number => {
+  if (gap === undefined || !Number.isFinite(gap) || gap < 0) return NODE_GAP;
+  return Math.floor(gap);
+};
 
 /**
  * 布局输入序重排（可选 order 入参，CLI canvas.layout --order 承载，spec CLI-030）。
@@ -64,10 +83,6 @@ export const alignPosition = (pos: NodePosition, grid: [number, number]): NodePo
   y: alignToGrid(pos.y, grid[1]),
 });
 
-/** 向上取整对齐到网格（用于间距修正，保证不小于所需值） */
-export const alignToGridCeil = (value: number, grid: number): number =>
-  Math.ceil(value / grid) * grid;
-
 /** 规范化列数：非有限值或小于 1 时回落单列，且不超过参与摆放的节点数。 */
 const normalizeColumnCount = (columns: number, nodeCount: number): number => {
   if (!Number.isFinite(columns) || columns < 1) return 1;
@@ -79,22 +94,25 @@ const normalizeColumnCount = (columns: number, nodeCount: number): number => {
  *
  * 列数由调用层给出（容器内整理的「整理为网格」本次选取值）；行数由节点数与列数决定
  * （`ceil(节点数 / 列数)`），不产生空行。列宽取该列节点有效宽度的最大值，行高取该行
- * 有效高度的最大值，相邻列/行间距固定 `nodeGap`，位置按 `grid` 对齐。
+ * 有效高度的最大值，相邻列/行间距**精确等于** `nodeGap`。
  * 列数为 1 时退化为单列垂直摆列（全局整理与默认容器内整理口径）。
  *
+ * 坐标不做任何网格对齐（spec：画布自动布局算法.md「分区内流式摆放」「网格摆放」，
+ * 2026-10-24 取消逐点吸附）：逐点取整会放大或缩小 `gap`。网格吸附只由调用层对整块
+ * 包围盒左上角（锚点）做一次。
+ *
  * 只消费尺寸集合，不读写 store、不感知分组语义。
- * spec：docs/runtime/画布自动布局算法.md「网格摆放」。
  */
 export const placeGridFlow = (
   nodes: GraphNode[],
   sizeMap: Map<string, NodeSize>,
-  grid: [number, number],
   nodeGap: number,
   columns: number,
 ): Record<string, NodePosition> => {
   const positions: Record<string, NodePosition> = {};
   if (nodes.length === 0) return positions;
 
+  const gap = normalizeNodeGap(nodeGap);
   const columnCount = normalizeColumnCount(columns, nodes.length);
   const rowCount = Math.ceil(nodes.length / columnCount);
 
@@ -113,23 +131,22 @@ export const placeGridFlow = (
   let currentX = 0;
   for (let column = 0; column < columnCount; column += 1) {
     columnOffsets.push(currentX);
-    currentX += (columnWidths[column] ?? 0) + nodeGap;
+    currentX += (columnWidths[column] ?? 0) + gap;
   }
   const rowOffsets: number[] = [];
   let currentY = 0;
   for (let row = 0; row < rowCount; row += 1) {
     rowOffsets.push(currentY);
-    currentY += (rowHeights[row] ?? 0) + nodeGap;
+    currentY += (rowHeights[row] ?? 0) + gap;
   }
 
   nodes.forEach((node, index) => {
     const column = index % columnCount;
     const row = Math.floor(index / columnCount);
-    const rawPos: NodePosition = {
+    positions[node.id] = {
       x: columnOffsets[column] ?? 0,
       y: rowOffsets[row] ?? 0,
     };
-    positions[node.id] = alignPosition(rawPos, grid);
   });
 
   return positions;

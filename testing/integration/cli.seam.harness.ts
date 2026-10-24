@@ -198,6 +198,80 @@ export const seamState: {
 };
 
 // ---------------------------------------------------------------------------
+// 资产 fixture（asset list / canvas node create / canvas.inspect 共用的存储投影数据源）
+// ---------------------------------------------------------------------------
+
+export type SeamAssetView = {
+  assetId: string;
+  mediaType: 'image' | 'video' | 'audio';
+  original: {
+    url: string;
+    fileKey: string;
+    sourceFileName: string | null;
+    mimeType: string;
+    width: number;
+    height: number;
+  };
+  thumbnail: { url: null; status: 'missing' };
+  lifecycle: { createdAt: number; updatedAt: number };
+};
+
+export type SeamGenerationEntry = {
+  taskId: string;
+  batchId: string | null;
+  modelId: string | null;
+  prompt: string | null;
+};
+
+const makeSeamAsset = (
+  assetId: string,
+  mediaType: SeamAssetView['mediaType'],
+  sourceFileName: string | null,
+): SeamAssetView => ({
+  assetId,
+  mediaType,
+  original: {
+    url: `local-media://spid_seam/${assetId}.png`,
+    fileKey: `${assetId}.png`,
+    sourceFileName,
+    mimeType: mediaType === 'video' ? 'video/mp4' : 'image/png',
+    width: 1024,
+    height: 768,
+  },
+  thumbnail: { url: null, status: 'missing' },
+  lifecycle: { createdAt: 1700000000000, updatedAt: 1700000000001 },
+});
+
+/** 生成产物资产（有来源批次/任务/模型）。 */
+export const SEAM_GENERATED_ASSET_ID = 'asset-seam-gen';
+/** 导入素材资产（无生成来源，batch_id 为 null）。 */
+export const SEAM_IMPORTED_ASSET_ID = 'asset-seam-imp';
+/** 生成来源批次（canvas node create 落 sourceBatchId、asset list 输出 batch_id）。 */
+export const SEAM_GENERATION_BATCH_ID = 'batch-seam-1';
+
+const defaultSeamAssets = (): SeamAssetView[] => [
+  makeSeamAsset(SEAM_GENERATED_ASSET_ID, 'image', null),
+  makeSeamAsset(SEAM_IMPORTED_ASSET_ID, 'video', 'seam-import.mp4'),
+];
+
+const defaultSeamGenerationIndex = (): Map<string, SeamGenerationEntry> =>
+  new Map([
+    [
+      SEAM_GENERATED_ASSET_ID,
+      { taskId: 'task-seam-1', batchId: SEAM_GENERATION_BATCH_ID, modelId: 'model-seam', prompt: '接缝提示词' },
+    ],
+  ]);
+
+export const seamAssets: SeamAssetView[] = defaultSeamAssets();
+export const seamGenerationIndex: Map<string, SeamGenerationEntry> = defaultSeamGenerationIndex();
+
+const resetSeamAssetFixtures = (): void => {
+  seamAssets.splice(0, seamAssets.length, ...defaultSeamAssets());
+  seamGenerationIndex.clear();
+  for (const [assetId, entry] of defaultSeamGenerationIndex()) seamGenerationIndex.set(assetId, entry);
+};
+
+// ---------------------------------------------------------------------------
 // 执行器依赖（数据源与执行后端注入面）
 // ---------------------------------------------------------------------------
 
@@ -271,11 +345,21 @@ const buildExecutorDeps = (proxyWiring: ProxyWiring): Record<string, unknown> =>
       if (entry) entry.lastOpenedAt = openedAt;
       writeRegistryFixture(entries);
     },
-    readMediaAssets: () => [],
-    readMediaAssetById: () => null,
-    readAssetTaskIndex: () => new Map<string, string>(),
+    // 项目级资产投影：fixture 只属于打开的项目（未打开项目没有可读画布/资产上下文，
+    // 保持既有「关闭项目输出空场景图」语义）。asset list 同理按解析出的项目路径读取。
+    readMediaAssets: (projectPath: string) => (projectPath === openProjectDir ? seamAssets : []),
+    readMediaAssetById: (projectPath: string, assetId: string) =>
+      projectPath === openProjectDir ? (seamAssets.find((asset) => asset.assetId === assetId) ?? null) : null,
+    readAssetTaskIndex: () =>
+      new Map([...seamGenerationIndex].map(([assetId, generation]) => [assetId, generation.taskId])),
+    // canvas.inspect / asset.list 的生成来源索引（含批次，CLI-056）。
+    readAssetGenerationIndex: (projectPath: string) =>
+      projectPath === openProjectDir ? seamGenerationIndex : new Map(),
     readTaskOutputAssets: () => [],
-    readCanvasNodePayloads: () => [],
+    // 画布节点投影：打开项目的画布窗口 store 现值（真实 Editor store 是唯一事实源，
+    // 等价于生产环境的持久化读模型投影）；未打开项目无可读画布，返回空清单。
+    readCanvasNodePayloads: (projectPath: string) =>
+      projectPath === openProjectDir ? (useCanvasStore.getState().nodeGraph?.nodes ?? []) : [],
   },
   proxy: {
     dispatch: (projectPath: string, candidate: Record<string, unknown>) =>
@@ -328,6 +412,7 @@ export const stopCliSeamService = async (): Promise<void> => {
 /** beforeEach：fixture 与已打开状态复位 + 画布/运行时 store 种床。 */
 export const resetSeamForTest = async (): Promise<void> => {
   writeRegistryFixture(baseRegistryEntries());
+  resetSeamAssetFixtures();
   seamState.openWindowProjectPath = openProjectDir;
   seamState.extraOpenProjectPaths = [];
   seamState.canvasLoading = false;
@@ -385,6 +470,44 @@ const resetStores = async (): Promise<void> => {
   await useCanvasStore.getState().loadNodeGraph(createTestGraph());
   useCanvasStore.setState((state) => {
     state.ui.canvasContainerSize = { width: 1440, height: 900 };
+  });
+  // 历史基线（生产环境项目加载后即存在）：使「一次写命令 = 一条撤销记录」可按 +1 比较。
+  useCanvasStore.getState().saveToHistory();
+  // 项目媒体资产投影（生产环境由项目加载链写入 store；此处从同一 fixture 映射，
+  // 画布窗口侧的 asset 前置校验读的是 store.mediaAssets）。
+  useCanvasStore.setState((state) => {
+    state.mediaAssets = Object.fromEntries(
+      seamAssets.map((asset) => [
+        asset.assetId,
+        {
+          id: asset.assetId,
+          mediaType: asset.mediaType,
+          original: {
+            url: asset.original.url,
+            projectRef: null,
+            fileKey: asset.original.fileKey,
+            sourceUrl: null,
+            sourceFileName: asset.original.sourceFileName,
+            mimeType: asset.original.mimeType,
+            sizeBytes: null,
+            width: asset.original.width,
+            height: asset.original.height,
+            durationMs: null,
+            fps: null,
+          },
+          thumbnail: {
+            url: null,
+            mimeType: null,
+            width: null,
+            height: null,
+            status: 'missing' as const,
+            generatedAt: null,
+            error: null,
+          },
+          lifecycle: { ...asset.lifecycle },
+        },
+      ]),
+    );
   });
   usePromptDockStore.setState({
     form: 'generate',

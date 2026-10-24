@@ -9,7 +9,7 @@ import type { CliProxyCommand, CliProxyCommandResponse } from '@iart/contracts';
 import { cancelTask } from '@/client/api/promptDockApi';
 import { useCanvasStore } from '../../store/canvasStore';
 import { createNodeGraph } from '../../types/nodeGraph';
-import type { GraphNode, GroupNodeData, TextInputNodeData } from '../../types';
+import type { AgentNodeData, GraphNode, GroupNodeData, TextInputNodeData } from '../../types';
 import {
   executeCliProxyCommand,
   handleCliProxyPayload,
@@ -104,6 +104,25 @@ const addGroupNode = (id: string, collapsed = false): void => {
   });
 };
 
+const addAgentNode = (id: string): void => {
+  const node: GraphNode<AgentNodeData> = {
+    id,
+    type: 'agent',
+    position: { x: 0, y: 0 },
+    data: { label: `agent-${id}`, agentSessionId: `session-${id}`, collapsed: undefined },
+    draggable: true,
+    size: undefined,
+    style: undefined,
+    groupId: undefined,
+  };
+  useCanvasStore.setState((s) => {
+    if (s.nodeGraph) {
+      s.nodeGraph.nodes.push(node);
+      s.structureRevision += 1;
+    }
+  });
+};
+
 const findNode = (id: string): GraphNode | undefined => {
   const graph = useCanvasStore.getState().nodeGraph;
   if (!graph) return undefined;
@@ -163,7 +182,7 @@ describe('CLI 代理执行通道 · 画布窗口接收器', () => {
 
       const response = parseResponse(await executeCliProxyCommand(command));
 
-      if (!('group_node_id' in response)) {
+      if (!('group_node_id' in response) || response.command !== 'canvas.group.create') {
         throw new Error('expected group create success response');
       }
       const groupNode = findNode(response.group_node_id);
@@ -172,6 +191,8 @@ describe('CLI 代理执行通道 · 画布窗口接收器', () => {
       expect(data.name).toBe('设计稿组');
       expect(findNode('n1')?.groupId).toBe(response.group_node_id);
       expect(findNode('n2')?.groupId).toBe(response.group_node_id);
+      // 创建后实际在组内的成员标识（CLI-057）：按成员清单回传，不是空数组
+      expect(response.member_ids).toEqual(['n1', 'n2']);
       expect(response.request_id).toBe('req-g1');
       // 既有 action 自带入撤销栈：建组（合批）+ 命名各落历史，撤销栈非空
       expect(useCanvasStore.getState().history.length).toBeGreaterThanOrEqual(1);
@@ -231,7 +252,7 @@ describe('CLI 代理执行通道 · 画布窗口接收器', () => {
 
       const response = parseResponse(await executeCliProxyCommand(command));
 
-      if (!('group_node_id' in response)) {
+      if (!('group_node_id' in response) || response.command !== 'canvas.group.create') {
         throw new Error('expected group create success response');
       }
       expect(findNode('n2')?.groupId).toBe(response.group_node_id);
@@ -262,6 +283,91 @@ describe('CLI 代理执行通道 · 画布窗口接收器', () => {
       } finally {
         debugSpy.mockRestore();
       }
+    });
+  });
+
+  // @spec: CLI-057
+  describe('canvas.group.rename（CLI-057）', () => {
+    it('重命名节点组：组名更新、一条撤销记录、operation_id 为 null', async () => {
+      addGroupNode('g0');
+      // 先落一次历史，让「首个历史写入附带基线」不干扰本次 delta 断言。
+      useCanvasStore.getState().saveToHistory();
+      const historyBefore = useCanvasStore.getState().history.length;
+      const command: CliProxyCommand = {
+        command: 'canvas.group.rename',
+        request_id: 'req-rename-1',
+        group: 'g0',
+        name: '分镜组',
+      };
+
+      const response = parseResponse(await executeCliProxyCommand(command));
+
+      if (!('group_node_id' in response) || response.command !== 'canvas.group.rename') {
+        throw new Error('expected rename success response');
+      }
+      expect(response.group_node_id).toBe('g0');
+      expect(response.name).toBe('分镜组');
+      // 非位置类不登记按操作撤销：operation_id 恒为 null
+      expect(response.operation_id).toBeNull();
+      const data = findNode('g0')?.data as GroupNodeData;
+      expect(data.name).toBe('分镜组');
+      // renameGroup 自带一条历史记录：一次重命名 = 一条撤销记录
+      expect(useCanvasStore.getState().history.length).toBe(historyBefore + 1);
+    });
+
+    it('目标不存在 → group_not_found，画布零改动', async () => {
+      const command: CliProxyCommand = {
+        command: 'canvas.group.rename',
+        request_id: 'req-rename-2',
+        group: 'ghost',
+        name: '新名',
+      };
+      const response = parseResponse(await executeCliProxyCommand(command));
+      if (!('error' in response)) throw new Error('expected error response');
+      expect(response.error.code).toBe('group_not_found');
+    });
+
+    it('目标不是节点组（普通节点）→ command_rejected', async () => {
+      addTextInputNode('n1', 0, 0);
+      const command: CliProxyCommand = {
+        command: 'canvas.group.rename',
+        request_id: 'req-rename-3',
+        group: 'n1',
+        name: '新名',
+      };
+      const response = parseResponse(await executeCliProxyCommand(command));
+      if (!('error' in response)) throw new Error('expected error response');
+      expect(response.error.code).toBe('command_rejected');
+      expect(response.error.message).toContain('不是节点组');
+    });
+
+    it('Agent 容器 → command_rejected（标题由会话管理）', async () => {
+      addAgentNode('agent1');
+      const command: CliProxyCommand = {
+        command: 'canvas.group.rename',
+        request_id: 'req-rename-4',
+        group: 'agent1',
+        name: '新名',
+      };
+      const response = parseResponse(await executeCliProxyCommand(command));
+      if (!('error' in response)) throw new Error('expected error response');
+      expect(response.error.code).toBe('command_rejected');
+      expect(response.error.message).toContain('Agent 容器');
+      const data = findNode('agent1')?.data as AgentNodeData;
+      expect(data.label).toBe('agent-agent1');
+    });
+
+    it('组名去空白后为空 → command_rejected（代理通道直调兜底）', async () => {
+      addGroupNode('g0');
+      const command: CliProxyCommand = {
+        command: 'canvas.group.rename',
+        request_id: 'req-rename-5',
+        group: 'g0',
+        name: '   ',
+      };
+      const response = parseResponse(await executeCliProxyCommand(command));
+      if (!('error' in response)) throw new Error('expected error response');
+      expect(response.error.code).toBe('command_rejected');
     });
   });
 
@@ -617,6 +723,108 @@ describe('CLI 代理执行通道 · 画布窗口接收器', () => {
       await handleCliProxyPayload({ command: 'canvas.selection.get' }, dropped.send);
       await flushMicrotasks();
       expect(dropped.responses).toHaveLength(0);
+    });
+  });
+
+  // @spec: CLI-051
+  describe('canvas.geometry.get（整张画布几何只读查询，canvas.inspect exact 合并输入）', () => {
+    it('输出全部节点尺寸、容器派生框、视口与选中态（只读，不进撤销栈）', async () => {
+      addTextInputNode('n1', 100, 100, 'g1');
+      addGroupNode('g1');
+      useCanvasStore.setState((state) => {
+        if (state.nodeGraph) state.nodeGraph.viewport = { x: 5, y: 6, zoom: 2 };
+        state.selectedNodeIds = ['n1'];
+        state.selectedAnnotationIds = ['anno-1'];
+      });
+      const historyBefore = useCanvasStore.getState().history.length;
+      const structureRevisionBefore = useCanvasStore.getState().structureRevision;
+
+      const response = parseResponse(
+        await executeCliProxyCommand({ command: 'canvas.geometry.get', request_id: 'req-g1' }),
+      );
+
+      if (!('sizes' in response) || !('containers' in response)) {
+        throw new Error('expected geometry read success response');
+      }
+      expect(response.request_id).toBe('req-g1');
+      // 普通节点：无 layoutModel/measured 时回落注册表默认（textInput 未注册 → 全局兜底 220×120）
+      expect(response.sizes.n1).toEqual({ width: 220, height: 120 });
+      // 容器派生：成员包围盒 + padding + 标题高度
+      expect(response.sizes.g1).toEqual({ width: 244, height: 172 });
+      expect(response.containers.g1).toEqual({
+        position: { x: 88, y: 60 },
+        size: { width: 244, height: 172 },
+      });
+      expect(response.viewport).toMatchObject({ x: 5, y: 6, zoom: 2 });
+      // 视口同时携带画布可视区宽高（无 .react-flow 容器时回落 window）
+      expect(response.viewport?.width).toBeGreaterThan(0);
+      expect(response.viewport?.height).toBeGreaterThan(0);
+      expect(response.selection).toEqual({ node_ids: ['n1'], annotation_ids: ['anno-1'] });
+
+      // 只读：无历史新增、结构修订号不变
+      expect(useCanvasStore.getState().history.length).toBe(historyBefore);
+      expect(useCanvasStore.getState().structureRevision).toBe(structureRevisionBefore);
+    });
+
+    it('视口宽高优先读 ReactFlow 容器 DOM（clientWidth/clientHeight）', async () => {
+      addTextInputNode('n1', 0, 0);
+      useCanvasStore.setState((state) => {
+        if (state.nodeGraph) state.nodeGraph.viewport = { x: 0, y: 0, zoom: 1 };
+      });
+      const container = document.createElement('div');
+      container.className = 'react-flow';
+      Object.defineProperty(container, 'clientWidth', { value: 900, configurable: true });
+      Object.defineProperty(container, 'clientHeight', { value: 600, configurable: true });
+      document.body.appendChild(container);
+      try {
+        const response = parseResponse(
+          await executeCliProxyCommand({ command: 'canvas.geometry.get', request_id: 'req-g4' }),
+        );
+        if (!('sizes' in response) || !('containers' in response)) {
+          throw new Error('expected geometry read success response');
+        }
+        expect(response.viewport).toEqual({ x: 0, y: 0, zoom: 1, width: 900, height: 600 });
+      } finally {
+        container.remove();
+      }
+    });
+
+    it('画布尚未就绪（nodeGraph 未载入）→ 空几何集合与 null 视口/选中态，命令不失败', async () => {
+      useCanvasStore.setState((state) => {
+        state.nodeGraph = null;
+        state.selectedNodeIds = ['n1'];
+        state.selectedAnnotationIds = [];
+      });
+      const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+      try {
+        const response = parseResponse(
+          await executeCliProxyCommand({ command: 'canvas.geometry.get', request_id: 'req-g2' }),
+        );
+        if (!('sizes' in response) || !('containers' in response)) {
+          throw new Error('expected geometry read success response');
+        }
+        expect(response.sizes).toEqual({});
+        expect(response.containers).toEqual({});
+        expect(response.viewport).toBeNull();
+        expect(response.selection).toBeNull();
+        expect(debugSpy).toHaveBeenCalled();
+      } finally {
+        debugSpy.mockRestore();
+      }
+    });
+
+    it('非法载荷（形状非法但 command/request_id 可识别）→ internal_error 错误响应可对账回传', async () => {
+      const collected = collectSend();
+      await handleCliProxyPayload(
+        { command: 'canvas.geometry.get', request_id: 'q-g3', sizes: {} },
+        collected.send,
+      );
+      await flushMicrotasks();
+      expect(collected.responses).toHaveLength(1);
+      const first = collected.responses[0];
+      if (!first || !('error' in first)) throw new Error('expected error response');
+      expect(first.error.code).toBe('internal_error');
+      expect(first.request_id).toBe('q-g3');
     });
   });
 
