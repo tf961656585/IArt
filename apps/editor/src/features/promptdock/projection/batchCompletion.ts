@@ -5,6 +5,8 @@
  * - 受理回执创建投影时登记批次台账（task_id + task_index，内存态，不落盘）；
  * - task:state-changed 终态通知（succeeded / failed / cancelled）逐个记账；某批次全部任务
  *   到达终态时执行一次整块重排，每批次至多一次（finalized 标志在触发判定时同步置位）；
+ * - 「重新查询结果」把未收口批次里的失败任务复活回 polling 时，撤销该任务的终态记账
+ *  （reopenBatchTaskForRequery），等它再次终态后正常收口一次；已收口批次不撤销、不重排；
  * - 只挂接实时终态通知链路，不做轮询；task:state-snapshot（恢复/补全）不触发——
  *   Editor 关闭期间收口的批次不补重排。
  *
@@ -105,6 +107,39 @@ export const noteBatchTaskTerminal = (params: {
   // 触发判定同步置位：重复终态通知（快照补投等）不再二次收口
   ledger.finalized = true;
   void finalizeBatch(params.graphId, ledger);
+};
+
+/**
+ * 「重新查询结果」复活（failed → polling）→ 撤销该任务的已终态记账。
+ *
+ * 口径（spec：docs/editor/失败任务重新查询-design.md §4.1「批次收口」）：
+ * - 只对尚未收口的批次生效：taskId 从终态集合移除，finalized 保持 false，等复活任务再次
+ *   到达终态后正常触发一次收口；
+ * - 已收口批次什么也不做——收口重排是不可逆的布局结果，复活任务成功后只在原位 morph，
+ *   不再让整批重排一次；
+ * - 非台账批次 / 非本批成员跳过（与 noteBatchTaskTerminal 同口径）。
+ */
+export const reopenBatchTaskForRequery = (params: {
+  batchId: string | null | undefined;
+  taskId: string;
+}): void => {
+  if (typeof params.batchId !== 'string' || params.batchId.length === 0) return;
+  const ledger = ledgerByBatchId.get(params.batchId);
+  if (!ledger) return;
+  if (!ledger.tasks.some((task) => task.taskId === params.taskId)) return;
+  if (ledger.finalized) {
+    console.debug('[batchCompletion] batch already finalized, requery revive skips reopen', {
+      batchId: params.batchId,
+      taskId: params.taskId,
+    });
+    return;
+  }
+  if (ledger.terminalTaskIds.delete(params.taskId)) {
+    console.debug('[batchCompletion] requery revive reopened terminal slot', {
+      batchId: params.batchId,
+      taskId: params.taskId,
+    });
+  }
 };
 
 /** 该批已成功产物节点，按 task_index 升序、同任务内按产物序（投影创建序 = nodes 数组序）。 */

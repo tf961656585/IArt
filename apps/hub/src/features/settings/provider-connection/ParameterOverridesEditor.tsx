@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import {
   Button,
   Checkbox,
@@ -14,12 +14,37 @@ import type {
   CustomParameterField,
   FamilyTemplateOfficialField,
   FamilyTemplateParameterDescriptor,
+  GenerationMediaSlotId,
   OfficialParameterOverride,
   ParameterOverrides,
   ParameterOverridesValue,
 } from '@iart/contracts';
-import { GENERATION_WIRE_NAME_PATTERN } from '@iart/contracts';
+import {
+  GENERATION_WIRE_NAME_PATTERN,
+  InterfaceFormatBodyPathSchema,
+  interfaceFormatBodyPathsOverlap,
+  isForbiddenRequestHeaderName,
+  isValidHttpHeaderName,
+  isValidQueryParamName,
+  normalizeHeaderName,
+} from '@iart/contracts';
+import {
+  EnumDefaultSelect,
+  NO_DEFAULT_OPTION,
+  NumberValueInput,
+  OptionListEditor,
+  sameValue,
+  valueKey,
+} from '../components/ParameterValueControls';
 import { InfoHint } from './InfoHint';
+import {
+  CommitInput,
+  IssueLine,
+  MEDIA_MAX_FILES_HINT,
+  MediaSlotParameterRow,
+  MiniLabel,
+  withoutKey,
+} from './ParameterOverrideRowControls';
 
 /**
  * 参数覆盖编辑器（docs/custom-providers/生成模型参数高级自定义-design.md §3.4）。
@@ -44,13 +69,26 @@ export type ParameterOverrideIssue = {
 // ---------------------------------------------------------------------------
 
 const WIRE_NAME_FORMAT_HINT = '发送名称只能用小写字母、数字、下划线，且要以小写字母开头';
+/** 别名按字段当前落点判合法性；提示与后端同一套名称规则（请求体路径 / 查询参数名 / 请求头名）。 */
+const ALIAS_FORMAT_HINTS = {
+  body: '发送名称格式不对：请用字母、数字、_、-，层级之间用点号分隔',
+  query: '查询参数名称格式不对：只能用字母、数字、下划线、点、短横线和方括号',
+  header: '请求头名称只能用字母、数字和 - _ 等符号，不能有空格或冒号',
+} as const;
+const HEADER_FORBIDDEN_HINT = '这个请求头由软件自动管理（如 Content-Type、Authorization），请换一个名称';
 const WIRE_NAME_TAKEN_HINT = '这个发送名称不能用了：可能和别的参数重名，或已被模型自带的内容占用。换一个。';
+/** 官方参数的发出位置（别名只改名，不改位置）。 */
+const WIRE_LOCATION_LABELS = {
+  body: '请求体',
+  query: '查询参数',
+  header: '请求头',
+} as const;
 const WIRE_NAME_REQUIRED_HINT = '要给这个参数一个发送名称';
 const LABEL_REQUIRED_HINT = '显示名不能为空';
 const ENUM_EMPTY_HINT = '下拉选择至少要有一个可选值';
 const DEFAULT_NOT_IN_OPTIONS_HINT = '默认值要从可选值里选';
 const OFFICIAL_SECTION_HINT =
-  '「发送名称」是发给服务商的参数名。服务商的参数名跟官方不一样时才改；可选值和默认值也按服务商支持的来。';
+  '「发送名称」是发给服务商的参数名。服务商的参数名跟官方不一样时才改；可选值和默认值也按服务商支持的来。素材行里的「最多几张」按这家服务商一次最多收几张来填。';
 const CUSTOM_LIMIT = 8;
 const CUSTOM_LIMIT_HINT = `自定义参数最多 ${CUSTOM_LIMIT} 个`;
 
@@ -64,19 +102,6 @@ export const emptyParameterOverrides = (): ParameterOverrides => ({ official: []
 /** 除 field_key 外什么都没改的覆盖条目等于没有覆盖：从数组里拿掉，请求体保持最小。 */
 const isNoopOfficialEntry = (entry: OfficialParameterOverride): boolean =>
   Object.keys(entry).every((key) => key === 'field_key');
-
-/** 可摘除的覆盖维度（field_key 是身份，不在其列）。 */
-type OfficialOverrideKey = Exclude<keyof OfficialParameterOverride, 'field_key'>;
-
-/** 摘掉一个覆盖维度；摘完只剩 field_key 的条目由 applyOfficialChange 统一清理。 */
-const withoutKey = <K extends OfficialOverrideKey>(
-  entry: OfficialParameterOverride,
-  key: K,
-): OfficialParameterOverride => {
-  const next: OfficialParameterOverride = { ...entry };
-  delete next[key];
-  return next;
-};
 
 /** 对官方参数的一条覆盖做一次改动；改动后不再表达任何覆盖（只剩 field_key）时整条移除。 */
 const applyOfficialChange = (
@@ -97,9 +122,6 @@ const applyOfficialChange = (
   return { ...overrides, official };
 };
 
-/** 两个合法值是否同一个值（值域是三种标量，严格相等即可）。 */
-const sameValue = (a: ParameterOverridesValue, b: ParameterOverridesValue): boolean => a === b;
-
 /** 两条枚举列表是否完全一致（顺序也算）：一致即「没改过」，不产生覆盖。 */
 const sameSequence = (a: ParameterOverridesValue[], b: ParameterOverridesValue[]): boolean =>
   a.length === b.length && a.every((item, i) => {
@@ -107,17 +129,93 @@ const sameSequence = (a: ParameterOverridesValue[], b: ParameterOverridesValue[]
     return other !== undefined && sameValue(item, other);
   });
 
-/** 合法值在 Radix Select 里的键（三种标量都可能有，前缀避免 `1` 与 `"1"` 混淆）。 */
-const valueKey = (value: ParameterOverridesValue): string =>
-  typeof value === 'string'
-    ? `s:${value}`
-    : typeof value === 'number'
-      ? `n:${value}`
-      : `b:${value}`;
-
 /** 官方参数当前生效的发送名称（别名优先，回落模板默认）。 */
 const effectiveOfficialWireName = (field: FamilyTemplateOfficialField, override: OfficialParameterOverride | undefined): string =>
   override?.wire_name ?? field.wire_name;
+
+/**
+ * 同一个名字是否指向同一个线路位置（判据与后端同一套）：
+ * - 请求体按键路径判定——同一棵树上的祖孙路径写同一个对象；
+ * - 查询参数按名称全等；
+ * - 请求头名不区分大小写（HTTP 口径，与共享校验的 `normalizeHeaderName` 同源）。
+ *
+ * 命名空间不同则互不相干：同一个名字在请求体与查询参数里是两个不同的字段。
+ */
+const sameWireName = (
+  location: FamilyTemplateOfficialField['wire_location'],
+  left: string,
+  right: string,
+): boolean => {
+  if (location === 'body') return interfaceFormatBodyPathsOverlap(left, right);
+  if (location === 'header') return normalizeHeaderName(left) === normalizeHeaderName(right);
+  return left.trim() === right.trim();
+};
+
+/** 别名在当前落点下的格式原因；`null` = 合法。 */
+const aliasFormatIssue = (
+  location: FamilyTemplateOfficialField['wire_location'],
+  name: string,
+): string | null => {
+  if (location === 'body') {
+    return InterfaceFormatBodyPathSchema.safeParse(name).success ? null : ALIAS_FORMAT_HINTS.body;
+  }
+  if (location === 'query') {
+    return isValidQueryParamName(name) ? null : ALIAS_FORMAT_HINTS.query;
+  }
+  if (!isValidHttpHeaderName(name)) return ALIAS_FORMAT_HINTS.header;
+  if (isForbiddenRequestHeaderName(name)) return HEADER_FORBIDDEN_HINT;
+  return null;
+};
+
+// ---------------------------------------------------------------------------
+// 纯函数：素材位行的生效范围（族能力 × 当前勾选）
+// ---------------------------------------------------------------------------
+
+/**
+ * 当前真正生效的官方参数行：素材位行只在**该位已被勾选**时出现。
+ *
+ * 描述符是**族级**事实（这个接口格式一共能表达哪几行），不掌握某条记录勾了哪些位；
+ * 「哪些行该出现」由弹层当前的勾选清单决定。两处各自过滤会漂移，因此只在这里实现。
+ *
+ * 隐藏的行同时不参与客户端查重与占用表——后端按本次勾选的模板校验，未勾选位的发送名
+ * 并不占名，客户端按未过滤的清单算会拒绝一个本来合法的名字。
+ */
+export const visibleOfficialFields = (
+  descriptor: FamilyTemplateParameterDescriptor,
+  liveMediaSlotIds: readonly GenerationMediaSlotId[],
+): FamilyTemplateOfficialField[] => {
+  const live = new Set(liveMediaSlotIds);
+  return descriptor.official_fields.filter(
+    (field) => field.media_slot_id === undefined || live.has(field.media_slot_id),
+  );
+};
+
+/**
+ * 提交用的覆盖：丢掉「本该出现的行已经不存在」的官方条目。
+ *
+ * 判据只有一条——该条目的字段键属于一个**当前未勾选**的素材位。取消勾选后行从界面上
+ * 消失，用户填过的值仍留在弹层状态里（同一次弹层内勾回来还能看到），但不进请求体：
+ * 后端按本次勾选的模板校验覆盖，带上它必然被整次拒绝。
+ *
+ * 映射缺失（模板没读到）时原样返回——此时提交已被产物位装载状态拦下，不会走到这里。
+ */
+export const pruneOfficialOverridesForLiveMediaSlots = (
+  overrides: ParameterOverrides,
+  liveMediaSlotIds: readonly GenerationMediaSlotId[],
+  fieldKeyBySlotId: Readonly<Partial<Record<GenerationMediaSlotId, string>>>,
+): ParameterOverrides => {
+  const live = new Set(liveMediaSlotIds);
+  const dormantFieldKeys = new Set<string>();
+  for (const [slotId, fieldKey] of Object.entries(fieldKeyBySlotId)) {
+    if (fieldKey === undefined || fieldKey.length === 0) continue;
+    if (!live.has(slotId as GenerationMediaSlotId)) dormantFieldKeys.add(fieldKey);
+  }
+  if (dormantFieldKeys.size === 0) return overrides;
+  return {
+    ...overrides,
+    official: overrides.official.filter((entry) => !dormantFieldKeys.has(entry.field_key)),
+  };
+};
 
 // ---------------------------------------------------------------------------
 // 纯函数：逐条原因收集（编辑器行内提示与提交拦截共用同一份实现）
@@ -126,45 +224,63 @@ const effectiveOfficialWireName = (field: FamilyTemplateOfficialField, override:
 /**
  * 收集当前覆盖里客户端可判定的必然失败。
  *
- * 只检查形状与本地已知信息（格式、占用、枚举非空、默认值落在新合法集内）；
- * 「field_key 必须命中模板」「image 不可覆盖」「合成结果过投影校验器」等语义校验
+ * 只检查形状与本地已知信息（格式、占用、枚举非空、默认值落在新合法集内、素材张数为正整数）；
+ * 「field_key 必须命中模板」「覆盖维度必须与该字段能力匹配」等语义校验
  * 唯一实现在 Runtime Backend（设计 §3.5），这里不复制第二份。
  */
 export const collectOverrideIssues = (
   descriptor: FamilyTemplateParameterDescriptor,
   overrides: ParameterOverrides,
+  liveMediaSlotIds: readonly GenerationMediaSlotId[],
 ): ParameterOverrideIssue[] => {
   const issues: ParameterOverrideIssue[] = [];
   const officialByKey = new Map(overrides.official.map((entry) => [entry.field_key, entry]));
+  // 只算当前生效的行：未勾选位的行不出现在界面上，也不占发送名（后端按本次勾选校验）。
+  const fields = visibleOfficialFields(descriptor, liveMediaSlotIds);
 
   // 占用表：保留键 + 启用中官方参数的生效发送名称 + 自定义参数的发送名称。
-  // 值 → 占用者列表；同名多占用者即查重命中。停用中的参数不占名（它的规则已整体移除）。
-  const ownersByName = new Map<string, string[]>();
-  const claim = (name: string, owner: string): void => {
-    const owners = ownersByName.get(name) ?? [];
-    owners.push(owner);
-    ownersByName.set(name, owners);
+  // 每个命名空间一张表：同一个名字在请求体与查询参数里互不相干。
+  // 停用中的参数不占名（它的规则已整体移除）。
+  const owners: Record<FamilyTemplateOfficialField['wire_location'], Array<{ name: string; owner: string }>> = {
+    body: [],
+    query: [],
+    header: [],
   };
-  for (const name of descriptor.reserved_wire_names) claim(name, 'reserved');
-  for (const field of descriptor.official_fields) {
+  const claim = (location: FamilyTemplateOfficialField['wire_location'], name: string, owner: string): void => {
+    owners[location].push({ name, owner });
+  };
+  for (const name of descriptor.reserved_wire_names.body) claim('body', name, 'reserved');
+  for (const name of descriptor.reserved_wire_names.query) claim('query', name, 'reserved');
+  for (const name of descriptor.reserved_wire_names.header) claim('header', name, 'reserved');
+  for (const field of fields) {
     const override = officialByKey.get(field.field_key);
     if (override?.enabled === false) continue;
-    claim(effectiveOfficialWireName(field, override), `official:${field.field_key}`);
+    claim(field.wire_location, effectiveOfficialWireName(field, override), `official:${field.field_key}`);
   }
-  overrides.custom.forEach((entry, index) => claim(entry.wire_name, `custom:${index}`));
-  const takenByOthers = (name: string, self: string): boolean =>
-    (ownersByName.get(name) ?? []).some((owner) => owner !== self);
+  // 自定义参数固定发到请求体（记录级不给位置选择，与后端口径一致）。
+  overrides.custom.forEach((entry, index) => claim('body', entry.wire_name, `custom:${index}`));
+  const takenByOthers = (location: FamilyTemplateOfficialField['wire_location'], name: string, self: string): boolean =>
+    owners[location].some((entry) => entry.owner !== self && sameWireName(location, entry.name, name));
 
-  for (const field of descriptor.official_fields) {
+  for (const field of fields) {
     const override = officialByKey.get(field.field_key);
     if (override === undefined) continue;
     if (override.enabled === false) continue;
     if (override.wire_name !== undefined) {
-      if (!GENERATION_WIRE_NAME_PATTERN.test(override.wire_name)) {
-        issues.push({ target: field.field_key, message: WIRE_NAME_FORMAT_HINT });
-      } else if (takenByOthers(override.wire_name, `official:${field.field_key}`)) {
+      const formatIssue = aliasFormatIssue(field.wire_location, override.wire_name);
+      if (formatIssue !== null) {
+        issues.push({ target: field.field_key, message: formatIssue });
+      } else if (takenByOthers(field.wire_location, override.wire_name, `official:${field.field_key}`)) {
         issues.push({ target: field.field_key, message: WIRE_NAME_TAKEN_HINT });
       }
+    }
+    // 素材位行只有发送名称与最多几张两个维度：枚举/默认值对它不适用，张数另判正整数
+    if (field.media_slot_id !== undefined) {
+      const maxFiles = override.media_max_files;
+      if (maxFiles !== undefined && (!Number.isInteger(maxFiles) || maxFiles < 1)) {
+        issues.push({ target: field.field_key, message: MEDIA_MAX_FILES_HINT });
+      }
+      continue;
     }
     if (field.enum_options.length > 0) {
       const options = override.enum_options ?? field.enum_options;
@@ -180,7 +296,7 @@ export const collectOverrideIssues = (
   }
 
   overrides.custom.forEach((entry, index) => {
-    for (const message of customFieldIssues(entry, (name) => takenByOthers(name, `custom:${index}`))) {
+    for (const message of customFieldIssues(entry, (name) => takenByOthers('body', name, `custom:${index}`))) {
       issues.push({ target: `custom:${index}`, message });
     }
   });
@@ -216,176 +332,6 @@ export const customFieldIssues = (
   }
   return issues;
 };
-
-// ---------------------------------------------------------------------------
-// 小控件
-// ---------------------------------------------------------------------------
-
-/** 失焦 / 回车才提交的输入框（官方别名、自定义发送名称用）：输入过程不改数据，提交时由调用方决定空值与默认值的语义。 */
-function CommitInput({
-  value,
-  placeholder,
-  ariaLabel,
-  onCommit,
-}: {
-  value: string;
-  placeholder?: string;
-  ariaLabel: string;
-  onCommit: (raw: string) => void;
-}) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-
-  const commit = (): void => {
-    const trimmed = draft.trim();
-    if (trimmed === value) {
-      setDraft(value);
-      return;
-    }
-    onCommit(trimmed);
-    // 没被接受的提交（如自定义参数清空发送名称）把草稿拉回当前值；
-    // 被接受的提交随后由 props 变化经 useEffect 同步
-    setDraft(value);
-  };
-
-  return (
-    <Input
-      aria-label={ariaLabel}
-      className="h-7 flex-1 text-xs"
-      value={draft}
-      placeholder={placeholder}
-      autoComplete="off"
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') event.currentTarget.blur();
-      }}
-    />
-  );
-}
-
-/** 数字默认值输入：能解析成数字就即时写入，解析不了只留在输入框里（不进数据、不拦提交）。 */
-function NumberValueInput({
-  value,
-  ariaLabel,
-  onCommit,
-}: {
-  value: number | undefined;
-  ariaLabel: string;
-  onCommit: (next: number | undefined) => void;
-}) {
-  const [draft, setDraft] = useState(value === undefined ? '' : String(value));
-  useEffect(() => setDraft(value === undefined ? '' : String(value)), [value]);
-
-  return (
-    <Input
-      aria-label={ariaLabel}
-      className="h-7 flex-1 text-xs"
-      value={draft}
-      inputMode="decimal"
-      autoComplete="off"
-      onChange={(event) => {
-        const raw = event.target.value;
-        setDraft(raw);
-        const trimmed = raw.trim();
-        if (trimmed === '') {
-          onCommit(undefined);
-          return;
-        }
-        const parsed = Number(trimmed);
-        if (Number.isFinite(parsed)) onCommit(parsed);
-      }}
-    />
-  );
-}
-
-/** 枚举/可选值的标签列表编辑：普通输入 + 标签删除钮（Radix Select 弹层里不放动作按钮）。 */
-function OptionListEditor({
-  options,
-  onChange,
-  addInputAriaLabel,
-  addButtonAriaLabel,
-  removeButtonAriaPrefix,
-}: {
-  options: ParameterOverridesValue[];
-  onChange: (next: ParameterOverridesValue[]) => void;
-  addInputAriaLabel: string;
-  addButtonAriaLabel: string;
-  removeButtonAriaPrefix: string;
-}) {
-  const [draft, setDraft] = useState('');
-  const add = (): void => {
-    const value = draft.trim();
-    if (value === '' || options.some((option) => sameValue(option, value))) return;
-    onChange([...options, value]);
-    setDraft('');
-  };
-
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {options.map((option) => (
-        <span
-          key={valueKey(option)}
-          className="flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 text-2xs"
-        >
-          {String(option)}
-          {/* 芯片组成件的移除钮（按钮样式标准 §7 出路①）：视觉语义由芯片整体承载，
-              芯片内放不下任何尺寸档——不走共享 Button */}
-          <button
-            type="button"
-            aria-label={`${removeButtonAriaPrefix}「${String(option)}」`}
-            className="text-muted-foreground transition-colors hover:text-destructive"
-            onClick={() => onChange(options.filter((item) => !sameValue(item, option)))}
-          >
-            ×
-          </button>
-        </span>
-      ))}
-      <Input
-        aria-label={addInputAriaLabel}
-        className="h-7 w-28 text-2xs"
-        value={draft}
-        autoComplete="off"
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            add();
-          }
-        }}
-      />
-      <Button
-        type="button"
-        variant="outline"
-        size="2xs"
-        disabled={draft.trim() === ''}
-        aria-label={addButtonAriaLabel}
-        onClick={add}
-      >
-        添加
-      </Button>
-    </div>
-  );
-}
-
-/** 一小行字段标签（控件自身带 aria-label，可见文字只负责让界面读得懂）。 */
-function MiniLabel({ text }: { text: string }) {
-  return <span className="w-16 shrink-0 text-2xs text-muted-foreground">{text}</span>;
-}
-
-/** 行内即时提示（提交拦截与这里是同一份数据，见 collectOverrideIssues）。 */
-function IssueLine({ messages }: { messages: string[] }) {
-  if (messages.length === 0) return null;
-  return (
-    <>
-      {messages.map((message) => (
-        <p key={message} role="alert" className="text-2xs text-destructive">
-          {message}
-        </p>
-      ))}
-    </>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // 官方参数行
@@ -472,6 +418,10 @@ function OfficialParameterRow({
       </div>
       {enabled ? (
         <>
+          <div className="flex items-center gap-2">
+            <MiniLabel text="发送到" />
+            <span className="text-xs text-muted-foreground">{WIRE_LOCATION_LABELS[field.wire_location]}</span>
+          </div>
           <div className="flex items-center gap-2">
             <MiniLabel text="发送名称" />
             <CommitInput
@@ -602,8 +552,6 @@ const CUSTOM_TYPE_OPTIONS: { value: CustomParameterField['value_type']; label: s
   { value: 'enum', label: '下拉选择' },
 ];
 
-const NO_DEFAULT_OPTION = '__no_default__';
-
 function CustomParameterBlock({
   entry,
   issues,
@@ -724,6 +672,7 @@ function CustomParameterBlock({
             options={options}
             value={entry.default_value}
             ariaLabel={`「${displayName}」的默认值`}
+            noDefaultLabel="保持默认"
             onChange={setDefault}
           />
         ) : entry.value_type === 'number' ? (
@@ -761,46 +710,6 @@ function CustomParameterBlock({
   );
 }
 
-function EnumDefaultSelect({
-  options,
-  value,
-  ariaLabel,
-  onChange,
-}: {
-  options: ParameterOverridesValue[];
-  value: ParameterOverridesValue | undefined;
-  ariaLabel: string;
-  onChange: (next: ParameterOverridesValue | undefined) => void;
-}) {
-  const decode = new Map(options.map((option) => [valueKey(option), option]));
-  const inOptions = value !== undefined && options.some((option) => sameValue(option, value));
-  return (
-    <Select
-      value={inOptions && value !== undefined ? valueKey(value) : NO_DEFAULT_OPTION}
-      onValueChange={(next) => {
-        if (next === NO_DEFAULT_OPTION) {
-          onChange(undefined);
-          return;
-        }
-        const decoded = decode.get(next);
-        if (decoded !== undefined) onChange(decoded);
-      }}
-    >
-      <SelectTrigger size="sm" className="w-44" aria-label={ariaLabel}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={NO_DEFAULT_OPTION}>保持默认</SelectItem>
-        {options.map((option) => (
-          <SelectItem key={valueKey(option)} value={valueKey(option)}>
-            {String(option)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
 const parseType = (raw: string): CustomParameterField['value_type'] => {
   const hit = CUSTOM_TYPE_OPTIONS.find((option) => option.value === raw);
   return hit?.value ?? 'string';
@@ -814,32 +723,28 @@ export function ParameterOverridesEditor({
   descriptor,
   value,
   onChange,
+  liveMediaSlotIds,
 }: {
   descriptor: FamilyTemplateParameterDescriptor;
   /** 当前覆盖值（受控）：来自声明或本编辑器上一次的产出 */
   value: ParameterOverrides;
   onChange: (next: ParameterOverrides) => void;
+  /** 当前已勾选的素材位：未勾选位的行不渲染（描述符是族级事实，勾选归记录/表单） */
+  liveMediaSlotIds: readonly GenerationMediaSlotId[];
 }) {
+  const fields = useMemo(
+    () => visibleOfficialFields(descriptor, liveMediaSlotIds),
+    [descriptor, liveMediaSlotIds],
+  );
   const issuesByTarget = useMemo(() => {
     const map = new Map<string, string[]>();
-    for (const issue of collectOverrideIssues(descriptor, value)) {
+    for (const issue of collectOverrideIssues(descriptor, value, liveMediaSlotIds)) {
       const messages = map.get(issue.target) ?? [];
       messages.push(issue.message);
       map.set(issue.target, messages);
     }
     return map;
-  }, [descriptor, value]);
-
-  // 素材位字段完全不可覆盖（设计 §3.2：模态不是参数，归属由记录的素材位勾选管控），编辑器不渲染它
-  const skippedFieldKeys = useMemo(
-    () => descriptor.official_fields.filter((field) => field.component === 'imageUpload').map((field) => field.field_key),
-    [descriptor.official_fields],
-  );
-  useEffect(() => {
-    if (skippedFieldKeys.length > 0) {
-      console.debug('[parameter-overrides] 参考图字段不开放参数覆盖，编辑器跳过', skippedFieldKeys);
-    }
-  }, [skippedFieldKeys]);
+  }, [descriptor, value, liveMediaSlotIds]);
 
   const officialByFieldKey = useMemo(
     () => new Map(value.official.map((entry) => [entry.field_key, entry])),
@@ -865,17 +770,19 @@ export function ParameterOverridesEditor({
     [addDraft],
   );
 
-  // 新参数的占用表：保留键 + 官方生效发送名称 + 已有自定义参数（草稿自己还没占名）
+  // 新参数的占用表：自定义参数固定发到请求体，因此只算请求体命名空间
+  // （保留键 + 请求体官方参数的生效发送名称 + 已有自定义参数；草稿自己还没占名）。
   const takenNamesForAdd = useMemo(() => {
-    const names = new Set(descriptor.reserved_wire_names);
-    for (const field of descriptor.official_fields) {
+    const names = new Set<string>(descriptor.reserved_wire_names.body);
+    for (const field of fields) {
+      if (field.wire_location !== 'body') continue;
       const override = officialByFieldKey.get(field.field_key);
       if (override?.enabled === false) continue;
       names.add(effectiveOfficialWireName(field, override));
     }
     for (const entry of value.custom) names.add(entry.wire_name);
     return names;
-  }, [descriptor, officialByFieldKey, value.custom]);
+  }, [descriptor, fields, officialByFieldKey, value.custom]);
 
   const addIssues = useMemo(
     () => (addAttempted ? customFieldIssues(normalizedAddDraft, (name) => takenNamesForAdd.has(name)) : []),
@@ -907,17 +814,21 @@ export function ParameterOverridesEditor({
         <span className="text-2xs font-semibold tracking-wider text-muted-foreground">官方参数</span>
         <InfoHint text={OFFICIAL_SECTION_HINT} subject="官方参数" />
       </div>
-      {descriptor.official_fields
-        .filter((field) => field.component !== 'imageUpload')
-        .map((field) => (
-          <OfficialParameterRow
-            key={field.field_key}
-            field={field}
-            override={officialByFieldKey.get(field.field_key)}
-            issues={issuesByTarget.get(field.field_key) ?? []}
-            onChange={(mutate) => onChange(applyOfficialChange(value, field.field_key, mutate))}
-          />
-        ))}
+      {fields.map((field) => {
+        const shared = {
+          field,
+          override: officialByFieldKey.get(field.field_key),
+          issues: issuesByTarget.get(field.field_key) ?? [],
+          onChange: (mutate: (entry: OfficialParameterOverride) => OfficialParameterOverride) =>
+            onChange(applyOfficialChange(value, field.field_key, mutate)),
+        };
+        // 素材位行按位标识识别（不按组件名硬判）：可编辑维度与普通参数不同
+        return field.media_slot_id !== undefined ? (
+          <MediaSlotParameterRow key={field.field_key} {...shared} />
+        ) : (
+          <OfficialParameterRow key={field.field_key} {...shared} />
+        );
+      })}
 
       <div className="flex items-center gap-2">
         <span className="text-2xs font-semibold tracking-wider text-muted-foreground">自定义参数</span>

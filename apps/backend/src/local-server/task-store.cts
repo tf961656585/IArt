@@ -34,6 +34,10 @@ const TASK_METADATA_KEYS = [
   'modelId',
   'nodeGraphId',
   'projectPath',
+  // 重新查询留痕（failed → polling 受控出边）：首次发起时刻与累计次数。
+  // 未登记白名单的键会被静默丢弃（无报错无日志），下游读侧恒拿空值。
+  'requeryCount',
+  'requeryStartedAt',
   'remote_request_id',
   'remoteRequestId',
   'sourceNodeId',

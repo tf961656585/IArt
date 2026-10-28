@@ -22,6 +22,9 @@ const DEPLOYMENT_FAILURE_TEXT: Readonly<Record<ExecutableModelFailureCode, strin
   connection_retired: '这个模型关联的服务商已停用',
   credential_missing: '这个模型关联的服务商还没填密钥',
   adapter_missing: '这个模型声明的接口类型当前用不了，请到主窗口的「服务商与模型」重新配置。',
+  format_missing: '这个模型用的接口格式已被删除，请到主窗口的「服务商与模型」重新配置。',
+  format_not_ready: '这个模型用的接口格式还没完成，请到主窗口的「服务商与模型」重新配置。',
+  recipe_missing: '这个模型缺少接口配方，请到主窗口的「服务商与模型」重新选一个配方。',
   remote_model_id_empty: '这个模型还没填模型 ID',
   deployment_invalid: '这个模型现在用不了，请到主窗口重新配置。',
 };
@@ -47,6 +50,9 @@ export const deploymentFailureExit = (failureCode: ExecutableModelFailureCode): 
     case 'connection_retired':
     case 'credential_missing':
     case 'adapter_missing':
+    case 'format_missing':
+    case 'format_not_ready':
+    case 'recipe_missing':
     case 'remote_model_id_empty':
     case 'deployment_invalid':
       return 'hub-providers';

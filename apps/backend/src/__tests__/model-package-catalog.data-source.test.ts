@@ -102,9 +102,6 @@ const writeFixturePackage = (
       protocol: "http",
       endpoint: "/v1/test",
       method: "POST",
-      header_rules: [],
-      body_rules: [],
-      query_rules: [],
     },
     result_rule: {
       mode: "sync",

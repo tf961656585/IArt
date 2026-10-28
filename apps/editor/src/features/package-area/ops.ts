@@ -13,7 +13,7 @@ import { usePackageAreaStore } from './store/packageAreaStore';
  * 「添加到打包区」的候选判定、去重与反馈（spec：docs/editor/右侧工作区与打包区服务.md）
  * 在此收口，供两处消费：
  * - 画布对象右键菜单（资产/素材节点，单选与多选变体）；
- * - 资产节点选中态管理栏（AssetNodeChrome 底栏）。
+ * - 媒体节点选中态管理栏（MediaNodeChrome 底栏）。
  *
  * 媒体边界：图片、视频、音频三类媒体资产均可加入打包区（打包带走的目标就是全部媒体类型）。
  * 同一画布内同一资产在打包区只保留一个条目；重复加入反馈「已在打包区」，不静默重复。
@@ -94,7 +94,7 @@ export type AddToPackageAreaOutcome = {
 
 /**
  * store 接线：把一批画布节点加入当前画布打包区（去重 + 反馈）。
- * 供画布右键菜单与 AssetNodeChrome 底栏共用。
+ * 供画布右键菜单与 MediaNodeChrome 底栏共用。
  */
 export const addNodesToPackageArea = async (
   nodes: GraphNode[],

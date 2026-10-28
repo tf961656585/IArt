@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { guardPreparedModelInput } from "../model-input-preparation/model-input-final-guard.cts";
-import {
-  convertBodyToSerializedFormData,
-} from "../model-input-preparation/model-input-multipart-file.cts";
+import { convertBodyToSerializedFormData } from "../model-input-preparation/model-input-multipart-file.cts";
+import { prepareModelInputForRequest } from "../model-input-preparation/model-input-preparation.cts";
 import { buildFormDataFromSerialized } from "../task-engine-request.cts";
 
 // ---------------------------------------------------------------------------
@@ -309,6 +308,93 @@ void test("convertBodyToSerializedFormData: repeated naming only affects declare
 
   assert.deepEqual(imageNames.sort(), ["images[0]", "images[1]"]);
   assert.equal(refNames.length, 2);
+});
+
+// ---------------------------------------------------------------------------
+// Test 17d: 占位符身份 → 文件描述（出网值不变、审计值留痕）
+// 出网值 filename/contentType 必须保持 file / application/octet-stream（线上形态不变）；
+// 来源身份 assetId/slotId/sourceFilename/mimeType 只进文件描述，供档案溯源。
+// ---------------------------------------------------------------------------
+
+void test("multipart materialization: placeholder identity recorded without changing wire shape", async () => {
+  const buffer = Buffer.from("image-bytes");
+  const placeholder = {
+    __media_ref__: true as const,
+    source: {
+      kind: "inline_data" as const,
+      data: buffer.toString("base64"),
+      mimeType: "image/png",
+    },
+    mimeType: "image/png",
+    filename: "media.png",
+    fieldPath: "body.reference_image",
+    assetId: "asset-example-1",
+    slotId: "reference_image",
+    transport: "multipart_file" as const,
+  };
+  const modelId = "media-ref-multipart-identity";
+  // 走真实入口（prepareModelInputForRequest → materializeSubtree → 序列化）。
+  // 直接调用物化函数会绕过策略与序列化接线，测试绿而真机身份丢失。
+  const prepared = await prepareModelInputForRequest({
+    modelId,
+    projectPath: "/tmp/example-project",
+    projection: {
+      model_id: modelId,
+      runtime: {
+        payload_format: "multipart",
+        payload_rules: {
+          "body.reference_image": {
+            kind: "field",
+            field_key: "referenceImage",
+            transforms: ["allUploadFiles"],
+            media_target: "multipart_file",
+            multipart_array_naming: "repeated",
+          },
+        },
+      },
+    },
+    body: { reference_image: [placeholder, placeholder] },
+  });
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+
+  const body = prepared.body as {
+    __formData: {
+      fields: Array<{ name: string; value: string }>;
+      files: Array<{
+        name: string;
+        dataBase64: string;
+        contentType: string;
+        filename: string;
+        sourceFilename?: string;
+        mimeType?: string;
+        assetId?: string;
+        slotId?: string;
+      }>;
+    };
+  };
+  assert.equal(body.__formData.files.length, 2);
+  const file = body.__formData.files[0];
+  assert.ok(file);
+  // 出网值：与裸 Buffer 路径完全一致（wire 形态未变）。
+  assert.equal(file.name, "reference_image");
+  assert.equal(file.filename, "file");
+  assert.equal(file.contentType, "application/octet-stream");
+  assert.equal(file.dataBase64, buffer.toString("base64"));
+  // 审计值：来源身份与真实媒体类型。
+  assert.equal(file.sourceFilename, "media.png");
+  assert.equal(file.mimeType, "image/png");
+  assert.equal(file.assetId, "asset-example-1");
+  assert.equal(file.slotId, "reference_image");
+
+  // 真实发送链只读 filename/contentType：生成的 part 仍是 file / octet-stream。
+  const form = buildFormDataFromSerialized(body.__formData);
+  const entries = [...form.entries()];
+  assert.equal(entries.length, 2);
+  const part = entries[0]?.[1];
+  assert.ok(part instanceof Blob);
+  assert.equal((part as File).name, "file");
+  assert.equal((part as File).type, "application/octet-stream");
 });
 
 // ---------------------------------------------------------------------------

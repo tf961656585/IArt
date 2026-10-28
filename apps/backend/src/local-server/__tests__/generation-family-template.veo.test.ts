@@ -1,21 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ADAPTER_REGISTRY, ExecutionSnapshotSchema, type GenerationMediaSlotId } from '@iart/contracts';
 import {
-  VEO_V1_FAMILY_ADAPTER_ID,
-  VEO_V1_SUPPORTED_MEDIA_SLOTS,
-  buildVeoV1BaseTemplateSources,
-  buildVeoV1ParameterDescriptor,
-} from '../generation-family-templates.veo.cts';
+  ExecutionSnapshotSchema,
+  type FamilyTemplateParameterDescriptor,
+  type GenerationMediaSlotId,
+} from '@iart/contracts';
 import { buildProjectionFromPackageSources } from '../model-package-catalog.projection.cts';
 import { isObjectRecord } from '../model-package-catalog.shared.cts';
-import { declaredGenerationPackageId } from '../generation-family-templates.cts';
 import {
-  GENERATION_FAMILY_TEMPLATE_REGISTRY,
+  declaredGenerationPackageId,
+  type GenerationFamilyTemplateSources,
+} from '../generation-family-templates.cts';
+import {
+  requireFamilyTemplate,
   buildFamilyTemplateSources,
   checkFamilyMediaSlotSupport,
 } from '../generation-family-templates.registry.cts';
+import { buildFormatParameterDescriptor, getInterfaceFormat } from '../interface-format/registry.cts';
 import { validateParameterOverrides } from '../generation-parameter-overrides.cts';
 import { applyRemoteModelInjection } from '../provider-connection/remote-model-injection.cts';
 import { evaluateRule } from '../request-assembler-runtime.cts';
@@ -44,6 +46,31 @@ import { extractMappedTaskOutputs } from '../task-result-output-mapping.cts';
  */
 
 const MODEL_ID = 'declared-veo-video-test';
+
+/** 接口格式 id（值域由 contracts 的 `GENERATION_FAMILY_ADAPTER_IDS` 裁定）。 */
+const VEO_V1_FAMILY_ADAPTER_ID = 'veo-v1';
+
+/** 测试侧独立期望的素材位清单（不复用注册表，避免同错同过）。 */
+const VEO_V1_SUPPORTED_MEDIA_SLOTS: readonly GenerationMediaSlotId[] = ['first_frame', 'last_frame'];
+
+/** 经实体门面取本族基础模板 sources（与记录合成同一条链路）。 */
+const buildVeoV1BaseTemplateSources = (
+  modelId: string,
+  options: { acceptedMediaSlots: readonly GenerationMediaSlotId[] },
+): GenerationFamilyTemplateSources => {
+  const entry = requireFamilyTemplate(VEO_V1_FAMILY_ADAPTER_ID);
+  assert.equal(entry.status, 'ready', 'veo-v1 必须已就绪');
+  if (entry.status !== 'ready') throw new Error('unreachable: family template not ready');
+  return entry.buildBaseSources(modelId, options);
+};
+
+/** 经实体层取本族参数描述符（与 GET 端点同一份构建器）。 */
+const buildVeoV1ParameterDescriptor = (): FamilyTemplateParameterDescriptor => {
+  const result = buildFormatParameterDescriptor(VEO_V1_FAMILY_ADAPTER_ID);
+  assert.equal(result.kind, 'ready', 'veo-v1 描述符必须就绪');
+  if (result.kind !== 'ready') throw new Error('unreachable: descriptor not ready');
+  return result.descriptor;
+};
 
 /** 取模板 runtime 段（模板由本仓构建，形状受控；仍按 unknown 收窄不用断言）。 */
 const runtimeOf = (sources: { runtimeModel: { runtime: unknown } }): Record<string, unknown> => {
@@ -112,8 +139,6 @@ const expectedFieldKeyOfSlot = (slot: GenerationMediaSlotId): string => {
       return 'firstFrameImage';
     case 'last_frame':
       return 'lastFrameImage';
-    case 'reference_image':
-      return 'referenceImages';
     default:
       throw new Error(`本族模板不表达素材位 ${slot}（测试期望表未覆盖 = 模板越界扩位）`);
   }
@@ -176,7 +201,7 @@ const readMediaRef = (value: unknown): { transport: unknown; url: unknown } => {
 };
 
 void test('veo 族模板：注册条目已就绪，能力事实与适配器 endpoint 同源', () => {
-  const entry = GENERATION_FAMILY_TEMPLATE_REGISTRY['veo-v1'];
+  const entry = requireFamilyTemplate('veo-v1');
   assert.equal(entry.status, 'ready');
   assert.equal(entry.familyAdapterId, VEO_V1_FAMILY_ADAPTER_ID);
   assert.deepEqual([...entry.supportsMediaSlots], [...VEO_V1_SUPPORTED_MEDIA_SLOTS]);
@@ -191,10 +216,13 @@ void test('veo 族模板：注册条目已就绪，能力事实与适配器 endp
     '异步族用到提交（含 {model}）与轮询（含 {operation_name}）两个 endpoint 键',
   );
 
-  // 适配器侧路径是事实源，模板字面量必须逐字相同（一致性门禁会把两边对齐，这里给出显式期望）
-  const adapter = ADAPTER_REGISTRY['veo-v1'].relative_endpoints ?? {};
-  assert.equal(adapter['predictLongRunning'], '/v1beta/models/{model}:predictLongRunning');
-  assert.equal(adapter['operation'], '/v1beta/{operation_name}');
+  // 接口格式声明是 endpoint 的唯一事实源，这里给出显式期望值
+  const formatLookup = getInterfaceFormat('veo-v1');
+  assert.equal(formatLookup.kind, 'ready');
+  if (formatLookup.kind !== 'ready') return;
+  const declaredEndpoints = formatLookup.format.transport.endpoints;
+  assert.equal(declaredEndpoints['predictLongRunning'], '/v1beta/models/{model}:predictLongRunning');
+  assert.equal(declaredEndpoints['operation'], '/v1beta/{operation_name}');
 
   // 素材位守卫：首帧/尾帧放行，参考图与视频/音频位拒绝（族上限表达不了）
   assert.equal(checkFamilyMediaSlotSupport('veo-v1', ['first_frame', 'last_frame']).kind, 'ok');
@@ -234,16 +262,6 @@ void test('veo 族模板：三种素材位形态都构建出合法 sources 并�
       '不勾素材位时输入模态只有文本',
     );
   }
-
-  // 参考图形态：族上限不开放，但构建器写得出（协议定义了 instances[].referenceImages）
-  const referenceShape: readonly GenerationMediaSlotId[] = ['reference_image'];
-  const { projection: referenceProjection } = projectTemplate(referenceShape);
-  assert.deepEqual(
-    referenceProjection.ports.inputs.map((port) => [port.field_key, port.multiple, port.max_connections]),
-    [['referenceImages', true, 3]],
-    '参考图端口必须是多值、上限 3（官方 ≤ 3 张 asset）',
-  );
-  assert.equal(referenceProjection.capability.supports_multi_image, true);
 });
 
 void test('veo 族模板：异步轮询策略逐字段与实测包一致', () => {
@@ -257,7 +275,10 @@ void test('veo 族模板：异步轮询策略逐字段与实测包一致', () =>
       url_template: '/v1beta/{operation_name}',
       method: 'GET',
       headers: {},
+      query: [],
       body: null,
+      body_format: 'json',
+      content_type: null,
     }, `形态 ${JSON.stringify(shape)} 的轮询请求形态`);
 
     assert.deepEqual(strategy['polling'], {
@@ -443,23 +464,7 @@ void test('veo 族模板：instances 在真实求值器下按素材位组装（�
   });
   assert.deepEqual(Object.keys(lastFrameOnly).sort(), ['lastFrame', 'prompt']);
 
-  // ⑤ 参考图形态（构建器可表达）：每张展开成 { image, referenceType:'asset' }
-  const reference = await evaluateInstance(['reference_image'], {
-    __prompt: 'cat',
-    referenceImages: ['https://media.example.invalid/r1.png', 'https://media.example.invalid/r2.png'],
-  });
-  const referenceImages = reference['referenceImages'];
-  assert.ok(isUnknownArray(referenceImages), 'referenceImages 必须是数组');
-  assert.equal(referenceImages.length, 2, '参考图按张展开');
-  const firstReference = referenceImages[0];
-  assert.ok(isObjectRecord(firstReference) && !Array.isArray(firstReference));
-  assert.equal(firstReference['referenceType'], 'asset', '官方 ingredients 形态要求 referenceType=asset');
-  assert.deepEqual(readMediaRef(firstReference['image']), {
-    transport: 'inline_data',
-    url: 'https://media.example.invalid/r1.png',
-  });
-
-  // ⑥ parameters：枚举收敛 + personGeneration 派生 + seed 留空不发
+  // ⑤ parameters：枚举收敛 + personGeneration 派生 + seed 留空不发
   const textParameters = await evaluateParameters([], {
     aspectRatio: 'bogus',
     durationSeconds: 'bogus',
@@ -595,7 +600,7 @@ void test('veo 族模板：参数描述端点数据（素材位不进官方参�
   // 保留键必须覆盖协议键与全素材位形态的分支
   for (const reserved of ['instances', 'parameters', 'prompt', 'input', 'model']) {
     assert.ok(
-      descriptor.reserved_wire_names.includes(reserved),
+      descriptor.reserved_wire_names.body.includes(reserved),
       `保留键必须包含 ${reserved}`,
     );
   }

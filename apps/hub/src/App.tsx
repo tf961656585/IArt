@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { LayoutGrid, MessageSquare, Activity, Blocks, Package, Settings, LifeBuoy, Aperture, type LucideIcon } from 'lucide-react';
-import { Button, cn, OverlayEscapeDispatcher } from '@iart/ui';
+import { Button, cn, OverlayEscapeDispatcher, SELECTION_SOFT_COMPACT_CLASSES } from '@iart/ui';
 import { useHubRuntime } from './components/providers/HubAppProvider';
 import { useHubStore } from './client/store/hub-store';
 import { ProjectsTab } from './features/projects';
@@ -127,10 +127,14 @@ export function App() {
                   <Button
                     key={item.id}
                     variant="ghost"
-                    className={cn('justify-start gap-2', active && 'bg-accent text-accent-foreground')}
+                    aria-current={active ? 'page' : undefined}
+                    className={cn(
+                      'justify-start gap-2',
+                      active && SELECTION_SOFT_COMPACT_CLASSES,
+                    )}
                     onClick={() => setCurrentTab(item.id)}
                   >
-                    <Icon className={cn('h-4 w-4', active ? 'text-primary' : 'text-muted-foreground')} />
+                    <Icon className={cn('h-4 w-4', active ? 'text-[var(--selection-fg)]' : 'text-muted-foreground')} />
                     {item.label}
                   </Button>
                 );

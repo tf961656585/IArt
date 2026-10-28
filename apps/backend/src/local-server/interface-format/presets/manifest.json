@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "formats": [
+    {
+      "format_id": "openai-image-v1",
+      "order": 10,
+      "file": "openai-image-v1.json"
+    },
+    {
+      "format_id": "openai-video-v1",
+      "order": 20,
+      "file": "openai-video-v1.json"
+    },
+    {
+      "format_id": "gemini-image-interactions-v1",
+      "order": 30,
+      "file": "gemini-image-interactions-v1.json"
+    },
+    {
+      "format_id": "seedance-2-0-v1",
+      "order": 40,
+      "file": "seedance-2-0-v1.json"
+    },
+    {
+      "format_id": "veo-v1",
+      "order": 50,
+      "file": "veo-v1.json"
+    },
+    {
+      "format_id": "kling-text2video-v1",
+      "order": 60,
+      "file": "kling-text2video-v1.json"
+    },
+    {
+      "format_id": "kling-image2video-v1",
+      "order": 70,
+      "file": "kling-image2video-v1.json"
+    },
+    {
+      "format_id": "kling-omni-video-v1",
+      "order": 80,
+      "file": "kling-omni-video-v1.json"
+    }
+  ]
+}

@@ -25,6 +25,6 @@ export type AgentChromeState = {
 };
 
 export type AgentNodeChromeProps = {
-  /** 画布容器 ref（toolbar 绝对定位锚，与 AssetNodeChrome 同一定位口径） */
+  /** 画布容器 ref（toolbar 绝对定位锚，与 MediaNodeChrome 同一定位口径） */
   canvasRef: React.RefObject<HTMLDivElement | null>;
 };

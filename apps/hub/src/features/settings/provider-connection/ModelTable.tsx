@@ -10,9 +10,17 @@ import type {
   CustomChatModel,
   CustomGenerationModel,
   ExecutableModelDirectoryEntry,
+  InterfaceRecipe,
 } from '@iart/contracts';
 import { MoreHorizontal, Star } from 'lucide-react';
-import { MODEL_FAILURE_MESSAGE } from './invalidity';
+import {
+  MODEL_FAILURE_MESSAGE,
+  RECIPE_MISSING_BADGE_LABEL,
+  RECIPE_MISSING_HINT,
+  RECIPE_MISSING_HINT_READONLY,
+  resolveRecipeReferenceState,
+  type RecipeReferenceState,
+} from './invalidity';
 import { InfoHint } from './InfoHint';
 import { StatusDot } from './StatusDot';
 import type { BindingTone } from './ProviderNoticeBar';
@@ -46,6 +54,10 @@ export interface ModelTableProps {
   /** 连接是否可编辑（retired 连接的行塌缩为只读投影，不渲染任何入口） */
   editable: boolean;
   modelListUnavailable: boolean;
+  /** 接口配方公共库：判定记录的配方引用是否仍生效（行内「配方已失效」标记） */
+  interfaceRecipes: InterfaceRecipe[];
+  /** 配方库读取失败：未知不等于缺失，不据此标记任何记录 */
+  interfaceRecipesUnavailable: boolean;
   agentDefaultModelId: string | null;
   generationDefaultModelId: string | null;
   onToggleAgentDefault: (modelId: string) => void;
@@ -112,6 +124,8 @@ function ModelTableRow({
   catalog,
   chatCatalog,
   editable,
+  interfaceRecipes,
+  interfaceRecipesUnavailable,
   agentDefaultModelId,
   generationDefaultModelId,
   onToggleAgentDefault,
@@ -132,6 +146,19 @@ function ModelTableRow({
       ? { tone: 'ok', label: '可用' }
       : { tone: 'warn', label: MODEL_FAILURE_MESSAGE[entry.deployment.failure_code] || '配置不完整' };
 
+  /**
+   * 配方引用状态（`docs/custom-providers/接口配方-design.md` §8.5）：
+   * 只有生成族记录能引用配方；缺失时运行时已回落内置默认，行内必须可见。
+   */
+  const recipeState: RecipeReferenceState = row.kind === 'custom-generation'
+    ? resolveRecipeReferenceState({
+        recipeId: row.record.recipe_id,
+        familyAdapterId: row.record.family_adapter_id,
+        recipes: interfaceRecipes,
+        recipesUnavailable: interfaceRecipesUnavailable,
+      })
+    : 'none';
+
   const isAgentDefault = agentDefaultModelId === modelId;
   const isGenerationDefault = generationDefaultModelId === modelId;
   // 只有「这一行用得上」的默认位才出现在默认列：对话模型挂 Agent 默认，其余行挂生成默认
@@ -145,6 +172,19 @@ function ModelTableRow({
       <td className="h-13 px-3">
         <div className="flex min-w-0 items-center gap-2">
           <span className="min-w-0 truncate text-xs font-medium" title={modelId}>{modelId}</span>
+          {/* 配方失效标记：非交互徽章 + 同行「?」说明（不新增按钮）。
+              只在「已成功读到配方库、且这条引用解析不到」时出现；配方库读不到不标。 */}
+          {recipeState === 'missing' ? (
+            <span className="flex shrink-0 items-center gap-1">
+              <span className="whitespace-nowrap rounded-sm border border-warning/40 px-1 text-2xs text-warning">
+                {RECIPE_MISSING_BADGE_LABEL}
+              </span>
+              <InfoHint
+                text={editable ? RECIPE_MISSING_HINT : RECIPE_MISSING_HINT_READONLY}
+                subject={`「${modelId}」的接口配方`}
+              />
+            </span>
+          ) : null}
           {isDefault ? (
             <span className="flex shrink-0 items-center gap-1">
               <span className="rounded-sm bg-muted px-1 text-2xs text-muted-foreground">

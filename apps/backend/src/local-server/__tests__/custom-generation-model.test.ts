@@ -33,7 +33,7 @@ import {
   clearCacheForTest as clearCustomGenerationModelCache,
   getCustomGenerationModel,
 } from '../provider-connection/custom-generation-model-store.cts';
-import { GENERATION_FAMILY_TEMPLATE_REGISTRY } from '../generation-family-templates.registry.cts';
+import { requireFamilyTemplate } from '../generation-family-templates.registry.cts';
 import { setCredentialForConnection } from '../provider-connection/credential-store.cts';
 
 /**
@@ -512,7 +512,7 @@ void test('参数覆盖：POST 携带、落盘 round-trip、PUT 缺省不变/出
   assert.match(await readErrorBody(illegalPost), /nope/);
 });
 
-void test('接口类型值域 7 个全部可写入记录：素材位按该族模板能力收口（不再人人可勾满）', async (t) => {
+void test('接口类型值域 8 个全部可写入记录：素材位按该族模板能力收口（不再人人可勾满）', async (t) => {
   withIsolatedEnv(t);
   const baseUrl = await startServer(t);
   const connectionId = await seedConnection(OPENAI_IMAGE_ADAPTER);
@@ -520,6 +520,7 @@ void test('接口类型值域 7 个全部可写入记录：素材位按该族模
   // 契约值域即界面下拉顺序（顺序变化是界面行为变化，故逐值断言）
   assert.deepEqual([...GENERATION_FAMILY_ADAPTER_IDS], [
     'openai-image-v1',
+    'openai-video-v1',
     'gemini-image-interactions-v1',
     'seedance-2-0-v1',
     'veo-v1',
@@ -545,7 +546,7 @@ void test('接口类型值域 7 个全部可写入记录：素材位按该族模
     //    （含未就绪族的任何非空清单）一律拒绝——批次 2 曾放行任意词表内组合，正是本批要堵的洞。
     //    期望值从注册表派生，不手写「哪族支持哪几位」：逐族实现批次让支持面持续变化。
     const requestedSlots: GenerationMediaSlotId[] = ['reference_image', 'first_frame'];
-    const supportedSlots = GENERATION_FAMILY_TEMPLATE_REGISTRY[familyAdapterId].supportsMediaSlots;
+    const supportedSlots = requireFamilyTemplate(familyAdapterId).supportsMediaSlots;
     const allRequestedSupported = requestedSlots.every((slot) => supportedSlots.includes(slot));
     const withSlots = await addGenerationModel(baseUrl, {
       model_id: `${modelId}-slots`,
@@ -653,13 +654,17 @@ void test('族模板参数描述端点：openai-image-v1 返回官方参数与�
   assert.equal(descriptor.family_adapter_id, OPENAI_IMAGE_ADAPTER);
   assert.deepEqual(
     descriptor.official_fields.map((field) => field.field_key),
-    ['size', 'quality', 'format', 'moderation'],
-    'descriptor must exclude the image system-modality field',
+    ['image', 'size', 'quality', 'format', 'moderation'],
+    '素材位行（image）排在官方参数区最前，且随描述符下发以便编辑器开放改名与张数',
   );
+  const mediaField = descriptor.official_fields.find((field) => field.field_key === 'image');
+  assert.ok(mediaField, 'media slot row must be described');
+  assert.equal(mediaField.media_slot_id, 'reference_image');
+  assert.equal(mediaField.media_max_files, 16);
   const format = descriptor.official_fields.find((field) => field.field_key === 'format');
   assert.ok(format, 'format field must be described');
   assert.equal(format.wire_name, 'output_format');
-  assert.ok(descriptor.reserved_wire_names.includes('output_format'));
+  assert.ok(descriptor.reserved_wire_names.body.includes('output_format'));
 
   // 素材位能力随描述符下发给 Hub（界面据此逐项渲染勾选框；0 位族给空数组而不是缺键）
   assert.deepEqual(
@@ -673,10 +678,10 @@ void test('族模板参数描述端点：openai-image-v1 返回官方参数与�
 
   // 未就绪族与未知族必须可区分：合法的接口类型但模板尚未实现 → 501（不是 404「没有这类模型」）。
   // pending 清单从注册表派生（逐族实现批次逐个转 ready，测试不手写「只有 openai 就绪」）。
-  // 全部 7 族转 ready 后 pending 清单为空：此时逐个断言描述符端点可用（501 分支的覆盖由
+  // 全部 8 族转 ready 后 pending 清单为空：此时逐个断言描述符端点可用（501 分支的覆盖由
   // 「将来新增接口类型仍先登记 pending」保证，测试不写死某族必须 pending）。
   const pendingFamilyAdapterIds = GENERATION_FAMILY_ADAPTER_IDS.filter(
-    (id) => GENERATION_FAMILY_TEMPLATE_REGISTRY[id].status === 'pending',
+    (id) => requireFamilyTemplate(id).status === 'pending',
   );
   for (const pendingFamilyAdapterId of pendingFamilyAdapterIds) {
     const pending = await fetch(
@@ -689,7 +694,7 @@ void test('族模板参数描述端点：openai-image-v1 返回官方参数与�
     );
   }
   const readyFamilyAdapterIds = GENERATION_FAMILY_ADAPTER_IDS.filter(
-    (id) => GENERATION_FAMILY_TEMPLATE_REGISTRY[id].status === 'ready',
+    (id) => requireFamilyTemplate(id).status === 'ready',
   );
   assert.ok(readyFamilyAdapterIds.length > 0, '至少有一个族必须已就绪');
   for (const readyFamilyAdapterId of readyFamilyAdapterIds) {
@@ -701,7 +706,7 @@ void test('族模板参数描述端点：openai-image-v1 返回官方参数与�
     // 描述符的素材位必须与注册表条目的能力逐位一致（单源：注册表是唯一能力事实）
     assert.deepEqual(
       readyDescriptor.supports_media_slots,
-      [...GENERATION_FAMILY_TEMPLATE_REGISTRY[readyFamilyAdapterId].supportsMediaSlots],
+      [...requireFamilyTemplate(readyFamilyAdapterId).supportsMediaSlots],
       `${readyFamilyAdapterId} 描述符的素材位必须等于注册表条目声明的能力`,
     );
   }

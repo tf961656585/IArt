@@ -9,8 +9,9 @@ import * as taskArchiveReadModelModule from "../task-archive-read-model.cts";
 import * as taskEngineModule from "../task-engine.cts";
 import * as taskExecutorModule from "../task-executor.cts";
 import * as taskCancelServiceModule from "../task-cancel-service.cts";
+import * as taskRequeryModule from "../task-requery.cts";
 import * as utilsModule from "../utils.cts";
-import { TaskCancelAcceptedResponseSchema, type RuntimeTaskView } from "@iart/contracts";
+import { TaskCancelAcceptedResponseSchema, TaskRequeryAcceptedSchema, type RuntimeTaskView } from "@iart/contracts";
 
 type TaskResultFileLike = { contentType: unknown | undefined; path: unknown | undefined };
 type TaskResultResponseLike = {
@@ -292,6 +293,46 @@ const handleTaskCancel = async (
   });
 };
 
+const handleTaskRequery = async (
+  taskId: string,
+  projectPath: string,
+  corsHeaders: HeadersRecord,
+  res: Parameters<RouteDefinition["handle"]>[0]["res"],
+) => {
+  let record: unknown = null;
+  try {
+    const result = await sendReadTaskByIdSafe({ projectPath, taskId });
+    record = result !== null && result !== undefined && result.success ? result.data : null;
+  } catch {
+    record = null;
+  }
+  if (!isJsonObject(record)) {
+    sendError(res, 404, ERROR_CODES.TASK_NOT_FOUND, "Task not found", corsHeaders);
+    return;
+  }
+  let outcome: Awaited<ReturnType<typeof taskRequeryModule.requeryFailedTask>>;
+  try {
+    outcome = await taskRequeryModule.requeryFailedTask(record);
+  } catch {
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Failed to requery task result", corsHeaders);
+    return;
+  }
+  if (!outcome.ok) {
+    // 资格 / 预检拒绝统一 409：命令本身合法，但当前任务状态不接受重新查询。
+    // 错误码保留具体拒绝原因（连接不可用 / 凭证失效 / 在途等），供 Editor 映射用户文案；
+    // 不得统一压成 invalid_task，否则前端只能拿内部措辞直接展示。
+    sendError(res, 409, outcome.code, outcome.message, corsHeaders);
+    return;
+  }
+  const acceptedPayload = TaskRequeryAcceptedSchema.parse({
+    accepted: true,
+    taskId: outcome.taskId,
+    status: "polling",
+    requestedAt: outcome.requestedAt,
+  });
+  sendJson(res, 200, acceptedPayload, corsHeaders);
+};
+
 const handleTaskByIdRoute = async ({ req, res, url, pathname, corsHeaders }: Parameters<RouteDefinition["handle"]>[0]) => {
   const segments = pathname.replace("/api/tasks/", "").split("/").filter(Boolean);
   const [first, second] = segments;
@@ -330,6 +371,10 @@ const handleTaskByIdRoute = async ({ req, res, url, pathname, corsHeaders }: Par
   }
   if (second === "cancel" && req.method === "POST") {
     await handleTaskCancel(taskId, projectPath, corsHeaders, res);
+    return;
+  }
+  if (second === "requery" && req.method === "POST") {
+    await handleTaskRequery(taskId, projectPath, corsHeaders, res);
     return;
   }
   if (second === "resume" && req.method === "POST") {

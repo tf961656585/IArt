@@ -8,9 +8,12 @@ import {
 import { ensureStorageDirs } from '../storage.cts';
 import * as loggingModule from '../logging.cts';
 import { isPlainObject } from '../utils.cts';
-import { checkFamilyMediaSlotSupport } from '../generation-family-templates.registry.cts';
+import { checkFamilyMediaSlotSupport, getFamilyTemplate } from '../generation-family-templates.registry.cts';
+import { getInterfaceFormat } from '../interface-format/registry.cts';
 import { getCustomChatModel } from './custom-chat-model-store.cts';
 import { generateRecordId } from './record-id.cts';
+import { getInterfaceRecipe } from './interface-recipe-store.cts';
+import { validateRecipeReference } from '../interface-recipe-validation.cts';
 import {
   listLegacyDeployments,
   removeLegacyDeploymentsByIds,
@@ -479,7 +482,54 @@ export type AddCustomGenerationModelResult =
       reason: 'duplicate_chat_record' | 'already_exists';
     }
   /** 素材位超出该族模板能表达的范围（`message` 是可读原因，调用方原样透给用户）。 */
-  | { ok: false; reason: 'media_slot_not_supported_by_family'; message: string };
+  | { ok: false; reason: 'media_slot_not_supported_by_family'; message: string }
+  /**
+   * `family_adapter_id` 在接口格式实体注册表里不存在或未就绪（`message` 是可读原因）。
+   *
+   * 2026-10-26 起契约只约束 id 形状，「这个 id 是不是一个可用格式」由实体注册表裁定；
+   * 此失败与「素材位越界」必须分开：前者用户要换接口类型，后者只需取消勾选素材。
+   */
+  | { ok: false; reason: 'family_adapter_not_ready'; message: string }
+  /** 引用的接口配方不存在或族不一致（`message` 是可读原因，调用方原样透给用户）。 */
+  | { ok: false; reason: 'recipe_reference_invalid'; message: string };
+
+/**
+ * 接口格式可用性守卫（写入侧唯一实现）。
+ *
+ * 记录里的 `family_adapter_id` 必须是实体注册表里**已就绪**的格式：
+ * - 未登记 = 非法输入（拼写错误 / 已随版本移除的旧 id）；
+ * - pending = 合法格式但运行时规则尚未就绪，写入等于让必然失败的配置进运行时。
+ *
+ * 放在 store 而不只在路由：store 是写入的唯一落盘入口，只在路由挡会留下绕过路径。
+ * 返回 null = 通过；否则返回可读原因。
+ */
+const describeFamilyReadiness = (familyAdapterId: CustomGenerationModel['family_adapter_id']): string | null => {
+  const entry = getFamilyTemplate(familyAdapterId);
+  if (entry === null) {
+    loggingModule.logDebug('[custom-generation-model-store] unknown interface format id', { familyAdapterId });
+    return '这个接口类型不能用于生成模型';
+  }
+  if (entry.status !== 'ready') {
+    loggingModule.logDebug('[custom-generation-model-store] interface format pending, record refused', {
+      familyAdapterId,
+      pendingReason: entry.pendingReason,
+    });
+    return '这个接口类型还在支持中，暂时不能添加这类模型';
+  }
+  return null;
+};
+
+/**
+ * 记录引用的格式是否为**用户自建**（`origin = 'user'`）。
+ *
+ * 用户自建格式不携带内置行为（`builtin_behavior` 缺省），判定与结果形态只能由配方提供：
+ * 没有配方的自定义格式在运行期无法判定成功，等于一条永远不完成的任务。因此写入侧对这类
+ * 格式要求 `recipe_id` 必填（预设格式仍可选——它们有内置默认判定）。
+ */
+const isUserInterfaceFormat = (familyAdapterId: CustomGenerationModel['family_adapter_id']): boolean => {
+  const lookup = getInterfaceFormat(familyAdapterId);
+  return lookup.kind === 'ready' && lookup.format.origin === 'user';
+};
 
 /**
  * 素材位 × 族能力守卫（写入侧唯一实现，2026-10-19 批次 1 收口批次 2 遗留风险）。
@@ -536,6 +586,8 @@ const addCustomGenerationModel = (input: {
   accepted_media_slots?: GenerationMediaSlotId[];
   /** 省略即空覆盖（与契约 schema 缺省同口径）；携带时随记录整体落库。 */
   parameter_overrides?: ParameterOverrides;
+  /** 省略即使用该族内置默认判定（配方引用，设计 §4）。 */
+  recipe_id?: string;
 }): AddCustomGenerationModelResult => {
   const modelId = normalizeModelId(input.model_id);
   if (!modelId) {
@@ -551,10 +603,43 @@ const addCustomGenerationModel = (input: {
     loggingModule.logDebug('[custom-generation-model-store] add: collision with chat record', { modelId });
     return { ok: false, reason: 'duplicate_chat_record' };
   }
+  // 接口格式必须已登记且已就绪（2026-10-26 起契约只约束 id 形状，值域归实体注册表）
+  const familyNotReady = describeFamilyReadiness(input.family_adapter_id);
+  if (familyNotReady !== null) {
+    return { ok: false, reason: 'family_adapter_not_ready', message: familyNotReady };
+  }
   // 素材位必须是该族模板能表达的范围（批次 2 遗留风险：契约不拦族能力，写入侧必须拦）
   const mediaSlotMismatch = describeMediaSlotMismatch(input.family_adapter_id, input.accepted_media_slots ?? []);
   if (mediaSlotMismatch !== null) {
     return { ok: false, reason: 'media_slot_not_supported_by_family', message: mediaSlotMismatch };
+  }
+  // 配方引用：存在且族一致（写入侧唯一实现，路由侧同一份提示由 store 返回）
+  if (input.recipe_id === undefined) {
+    // 用户自建格式没有内置判定，必须配一份配方（预设格式保持可选）。
+    if (isUserInterfaceFormat(input.family_adapter_id)) {
+      loggingModule.logDebug('[custom-generation-model-store] add: user interface format requires recipe', {
+        modelId,
+        familyAdapterId: input.family_adapter_id,
+      });
+      return {
+        ok: false,
+        reason: 'recipe_reference_invalid',
+        message: '这个接口格式是本机自定义的，添加模型时必须选择一份判定配方',
+      };
+    }
+  } else {
+    const referenceError = validateRecipeReference(
+      input.family_adapter_id,
+      getInterfaceRecipe(input.recipe_id),
+    );
+    if (referenceError !== null) {
+      loggingModule.logDebug('[custom-generation-model-store] add: invalid interface recipe reference', {
+        modelId,
+        recipeId: input.recipe_id,
+        familyAdapterId: input.family_adapter_id,
+      });
+      return { ok: false, reason: 'recipe_reference_invalid', message: referenceError };
+    }
   }
   const remoteModelId = normalizeModelId(input.remote_model_id) || modelId;
   const candidate = {
@@ -567,6 +652,7 @@ const addCustomGenerationModel = (input: {
     ...(input.parameter_overrides === undefined
       ? {}
       : { parameter_overrides: input.parameter_overrides }),
+    ...(input.recipe_id === undefined ? {} : { recipe_id: input.recipe_id }),
     created_at: new Date().toISOString(),
   };
   const parsed = CustomGenerationModelSchema.safeParse(candidate);
@@ -599,7 +685,9 @@ export type UpdateCustomGenerationModelResult =
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'media_slot_not_supported_by_family'; message: string }
   /** 记录形状在整体替换后不合法（理论不可达：族与归属都不变，只换素材位与覆盖）。 */
-  | { ok: false; reason: 'invalid_record' };
+  | { ok: false; reason: 'invalid_record' }
+  /** 引用的接口配方不存在或族不一致（`message` 是可读原因，调用方原样透给用户）。 */
+  | { ok: false; reason: 'recipe_reference_invalid'; message: string };
 
 const updateCustomGenerationModel = (
   modelId: string,
@@ -607,6 +695,11 @@ const updateCustomGenerationModel = (
     accepted_media_slots: GenerationMediaSlotId[];
     /** 缺省 = 保持现有覆盖不变；出现 = 整体替换。 */
     parameter_overrides?: ParameterOverrides;
+    /**
+     * 配方引用三态（与 `CustomGenerationModelUpdateBodySchema` 同口径）：
+     * 缺省 = 保持现有引用；`null` = 清除引用（回到族内置默认）；字符串 = 改为引用该配方。
+     */
+    recipe_id?: string | null;
   },
 ): UpdateCustomGenerationModelResult => {
   const id = normalizeModelId(modelId);
@@ -624,6 +717,33 @@ const updateCustomGenerationModel = (
   if (mediaSlotMismatch !== null) {
     return { ok: false, reason: 'media_slot_not_supported_by_family', message: mediaSlotMismatch };
   }
+  // 配方引用：仅当本次改为引用某份配方时校验（清除与保持不变都不需要）
+  if (input.recipe_id === null && isUserInterfaceFormat(existing.family_adapter_id)) {
+    // 用户自建格式没有内置判定：清空配方会让这条记录永远无法判定成功。
+    loggingModule.logDebug('[custom-generation-model-store] update: user interface format recipe cannot be cleared', {
+      modelId: id,
+      familyAdapterId: existing.family_adapter_id,
+    });
+    return {
+      ok: false,
+      reason: 'recipe_reference_invalid',
+      message: '这个接口格式是本机自定义的，不能清除判定配方；请改选另一份配方',
+    };
+  }
+  if (input.recipe_id !== undefined && input.recipe_id !== null) {
+    const referenceError = validateRecipeReference(
+      existing.family_adapter_id,
+      getInterfaceRecipe(input.recipe_id),
+    );
+    if (referenceError !== null) {
+      loggingModule.logDebug('[custom-generation-model-store] update: invalid interface recipe reference', {
+        modelId: id,
+        recipeId: input.recipe_id,
+        familyAdapterId: existing.family_adapter_id,
+      });
+      return { ok: false, reason: 'recipe_reference_invalid', message: referenceError };
+    }
+  }
   const candidate = {
     ...existing,
     accepted_media_slots: input.accepted_media_slots,
@@ -631,6 +751,13 @@ const updateCustomGenerationModel = (
       ? {}
       : { parameter_overrides: input.parameter_overrides }),
   };
+  // 三态语义：缺省保持、null 清除、字符串设置。清除用 delete 而不是置 undefined，
+  // 让落盘文件里不残留 `recipe_id: undefined`（JSON.stringify 会丢键，但内存态语义更干净）。
+  if (input.recipe_id === null) {
+    delete candidate.recipe_id;
+  } else if (input.recipe_id !== undefined) {
+    candidate.recipe_id = input.recipe_id;
+  }
   const parsed = CustomGenerationModelSchema.safeParse(candidate);
   if (!parsed.success) {
     loggingModule.logDebug('[custom-generation-model-store] update: invalid record value', {

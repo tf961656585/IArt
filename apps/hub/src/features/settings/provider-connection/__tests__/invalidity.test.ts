@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { EXECUTABLE_MODEL_FAILURE_CODES } from '@iart/contracts';
-import { MODEL_FAILURE_MESSAGE, countModelsByConnection } from '../invalidity';
+import { EXECUTABLE_MODEL_FAILURE_CODES, type InterfaceRecipe } from '@iart/contracts';
+import {
+  MODEL_FAILURE_MESSAGE,
+  countModelsByConnection,
+  resolveRecipeReferenceState,
+} from '../invalidity';
 
 /**
  * 原因码 → 界面文案的完整性守卫。
@@ -34,6 +38,53 @@ describe('MODEL_FAILURE_MESSAGE 完整性', () => {
     for (const code of EXECUTABLE_MODEL_FAILURE_CODES) {
       expect(MODEL_FAILURE_MESSAGE[code], `文案含退役措辞：${code}`).not.toContain('退役');
     }
+  });
+});
+
+describe('resolveRecipeReferenceState', () => {
+  const recipe: InterfaceRecipe = {
+    recipe_id: 'recipe-openai',
+    name: 'OpenAI 完成判定',
+    family_adapter_id: 'openai-image-v1',
+    success_when: { op: 'eq', path: 'status', value: 'succeeded' },
+    result: { kind: 'direct_url', media_field_paths: ['data.url'], media_type: 'image' },
+    requires_auth: false,
+    created_at: '2026-10-24T00:00:00.000Z',
+    updated_at: '2026-10-24T00:00:00.000Z',
+  };
+
+  const stateOf = (input: {
+    recipeId?: string | undefined;
+    recipes?: readonly InterfaceRecipe[];
+    recipesUnavailable?: boolean;
+  }) =>
+    resolveRecipeReferenceState({
+      recipeId: input.recipeId,
+      familyAdapterId: 'openai-image-v1',
+      recipes: input.recipes ?? [recipe],
+      recipesUnavailable: input.recipesUnavailable ?? false,
+    });
+
+  it('没有引用 → none（按内置默认运行，不标失效）', () => {
+    expect(stateOf({ recipeId: undefined })).toBe('none');
+  });
+
+  it('引用命中同族配方 → effective', () => {
+    expect(stateOf({ recipeId: 'recipe-openai' })).toBe('effective');
+  });
+
+  it('配方库已加载但引用不在库里 → missing', () => {
+    expect(stateOf({ recipeId: 'recipe-deleted' })).toBe('missing');
+    expect(stateOf({ recipeId: 'recipe-openai', recipes: [] })).toBe('missing');
+  });
+
+  it('引用属于另一个接口格式 → missing（与运行时一致：族不匹配同样回落内置默认）', () => {
+    expect(stateOf({ recipeId: 'recipe-openai', recipes: [{ ...recipe, family_adapter_id: 'seedance-2-0-v1' }] }))
+      .toBe('missing');
+  });
+
+  it('配方库不可用 → unknown（未知不等于缺失，不得据此标失效）', () => {
+    expect(stateOf({ recipeId: 'recipe-openai', recipes: [], recipesUnavailable: true })).toBe('unknown');
   });
 });
 

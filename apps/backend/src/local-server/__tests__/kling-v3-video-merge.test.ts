@@ -17,16 +17,7 @@ import { evaluateRule } from "../request-assembler-runtime.cts";
 import type { EvaluateState } from "../request-assembler-shared.cts";
 import { resetBackendConfigForTest } from "../config-store.cts";
 import {
-  KLING_IMAGE2VIDEO_V1_FAMILY_ADAPTER_ID,
-} from "../generation-family-templates.kling-image2video.cts";
-import {
-  KLING_OMNI_VIDEO_V1_FAMILY_ADAPTER_ID,
-} from "../generation-family-templates.kling-omni-video.cts";
-import {
-  KLING_TEXT2VIDEO_V1_FAMILY_ADAPTER_ID,
-} from "../generation-family-templates.kling-text2video.cts";
-import {
-  GENERATION_FAMILY_TEMPLATE_REGISTRY,
+  requireFamilyTemplate,
   getFamilyTemplate,
 } from "../generation-family-templates.registry.cts";
 import { projectFamilyTemplate } from "./family-template-projection-test-helpers";
@@ -335,9 +326,9 @@ void describe("可灵族现状：text2video / image2video / omni-video 三族独
   // 显式标注类型：注册表是 `Record<GenerationFamilyAdapterId, ...>`，用 string[] 索引会
   // 隐式退化到 any（TS7053）。类型来源仍是 contracts 的值域，不在测试里放宽。
   const KLING_ADAPTER_IDS: readonly GenerationFamilyAdapterId[] = [
-    KLING_TEXT2VIDEO_V1_FAMILY_ADAPTER_ID,
-    KLING_IMAGE2VIDEO_V1_FAMILY_ADAPTER_ID,
-    KLING_OMNI_VIDEO_V1_FAMILY_ADAPTER_ID,
+    'kling-text2video-v1',
+    'kling-image2video-v1',
+    'kling-omni-video-v1',
   ];
 
   void it("没有 kling-v3-video 合并族（接口类型值域里不存在）", () => {
@@ -357,7 +348,7 @@ void describe("可灵族现状：text2video / image2video / omni-video 三族独
     const seenModelIds = new Set<string>();
     const seenPackageIds = new Set<string>();
     for (const familyAdapterId of KLING_ADAPTER_IDS) {
-      const entry = GENERATION_FAMILY_TEMPLATE_REGISTRY[familyAdapterId];
+      const entry = requireFamilyTemplate(familyAdapterId);
       assert.equal(entry.status, "ready", `${familyAdapterId} 必须已就绪`);
       if (entry.status !== "ready") continue;
 
@@ -377,7 +368,7 @@ void describe("可灵族现状：text2video / image2video / omni-video 三族独
 
   void it("三族投影都产出 video 输出端口（同一族系的结果形态）", () => {
     for (const familyAdapterId of KLING_ADAPTER_IDS) {
-      const entry = GENERATION_FAMILY_TEMPLATE_REGISTRY[familyAdapterId];
+      const entry = requireFamilyTemplate(familyAdapterId);
       if (entry.status !== "ready") continue;
       const projected = projectFamilyTemplate({
         familyAdapterId,

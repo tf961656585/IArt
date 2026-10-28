@@ -130,3 +130,52 @@ void test("resolvePollingSuccessValue: body 无 status 且未传响应头时不�
   const result = resolvePollingSuccessValue(headerStatusPolling as never, completedBody);
   assert.equal(result, undefined);
 });
+
+// 无产物路径的异步接口（/v1/videos 形态）：完成态响应本就没有产物地址，
+// 只要有成功状态约束且状态命中，就应判定成功——返回命中的状态值作为成功证据。
+const statusOnlyPolling = {
+  successStatuses: ["completed"],
+  statusFieldPaths: ["status"],
+};
+
+void test("resolvePollingSuccessValue: 只有成功状态、无产物路径时状态命中即成功并返回命中状态", () => {
+  const result = resolvePollingSuccessValue(statusOnlyPolling as never, {
+    id: "video-1",
+    status: "completed",
+  });
+  assert.equal(result, "completed");
+});
+
+void test("resolvePollingSuccessValue: 只有成功状态、无产物路径时状态未命中仍不判定成功", () => {
+  const result = resolvePollingSuccessValue(statusOnlyPolling as never, {
+    id: "video-1",
+    status: "processing",
+  });
+  assert.equal(result, undefined);
+});
+
+void test("resolvePollingSuccessValue: 无产物路径且状态在响应头时返回响应头状态值", () => {
+  const polling = {
+    successStatuses: ["COMPLETED"],
+    statusFieldPaths: ["x-task-status"],
+  };
+  const headers = new Headers({ "x-task-status": "COMPLETED" });
+  const result = resolvePollingSuccessValue(
+    polling as never,
+    { id: "video-1" },
+    headers,
+  );
+  assert.equal(result, "COMPLETED");
+});
+
+// 回归：声明了产物路径的既有族行为不变——返回值仍是产物值，不是状态值。
+void test("resolvePollingSuccessValue: 有产物路径时行为不变（返回产物值而非状态）", () => {
+  const result = resolvePollingSuccessValue(
+    asyncVideoPolling as never,
+    {
+      video: { url: "https://cdn.example.com/regression.mp4" },
+      status: "done",
+    },
+  );
+  assert.equal(result, "https://cdn.example.com/regression.mp4");
+});

@@ -499,8 +499,9 @@ export const PromptPresetTokenEditor = forwardRef<
       {placeholder && !value && !composingActive ? (
         <div
           className={cn(
-            "pointer-events-none absolute inset-0 select-none px-3 py-2 text-base text-muted-foreground md:text-sm",
+            "pointer-events-none absolute inset-0 select-none px-3 py-2 text-base md:text-sm",
             className,
+            "text-muted-foreground",
           )}
         >
           {placeholder}
@@ -536,6 +537,7 @@ export const PromptPresetTokenEditor = forwardRef<
           "whitespace-pre-wrap break-words",
           readOnly && "cursor-not-allowed opacity-50",
           className,
+          "text-foreground",
         )}
         onFocus={handleFocus}
         onBlur={handleBlur}

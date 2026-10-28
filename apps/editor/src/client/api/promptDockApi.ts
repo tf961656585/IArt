@@ -7,6 +7,7 @@ import {
   PromptDockBatchSubmitRequestSchema,
   PromptDockBatchSubmitResponseSchema,
   TaskCancelAcceptedResponseSchema,
+  TaskRequeryAcceptedSchema,
 } from '@iart/contracts';
 import type {
   BatchIntentSnapshot,
@@ -14,6 +15,7 @@ import type {
   ExecutableModelDirectoryEntry,
   PromptDockBatchSubmitRequest,
   PromptDockBatchSubmitResponse,
+  TaskRequeryAccepted,
 } from '@iart/contracts';
 import { request } from './transport';
 import { getRuntimeProjectPath } from '@/client/store/runtimeStore';
@@ -29,6 +31,7 @@ import { getRuntimeProjectPath } from '@/client/store/runtimeStore';
  * - GET  /api/generation-batches/:batchId
  * - GET  /api/executable-model-catalog
  * - POST /api/tasks/:id/cancel
+ * - POST /api/tasks/:id/requery
  */
 
 // ---------------------------------------------------------------------------
@@ -211,4 +214,29 @@ export const cancelTask = async (taskId: string): Promise<CancelTaskCommandResul
     responseType: 'json',
   });
   return cancelTaskResponseSchema.parse(response);
+};
+
+// ---------------------------------------------------------------------------
+// 失败任务重新查询命令（requery）
+// ---------------------------------------------------------------------------
+
+/**
+ * 对失败任务发起「重新查询结果」（POST /api/tasks/:id/requery?projectPath=）。
+ *
+ * 同一 taskId / remoteRequestId 从 failed 回到 polling；不新建 batch / task。受理响应经共享
+ * 契约 TaskRequeryAcceptedSchema.parse 校验（accepted/taskId/status/requestedAt，唯一 owner
+ * 为 packages/contracts task-requery-contract.ts）。非 2xx 由 transport 抛 ApiError（body 承载
+ * {code, message}），本函数不吞错——调用方按 body.code 映射内联文案。
+ */
+export const requeryTask = async (taskId: string): Promise<TaskRequeryAccepted> => {
+  const normalized = taskId.trim();
+  if (!normalized) throw new Error('requeryTask requires taskId');
+  const projectPath = getRuntimeProjectPath();
+  if (!projectPath) throw new Error('requeryTask requires projectPath');
+  const response = await request<unknown>({
+    method: 'POST',
+    endpoint: `/api/tasks/${encodeURIComponent(normalized)}/requery?projectPath=${encodeURIComponent(projectPath)}`,
+    responseType: 'json',
+  });
+  return TaskRequeryAcceptedSchema.parse(response);
 };

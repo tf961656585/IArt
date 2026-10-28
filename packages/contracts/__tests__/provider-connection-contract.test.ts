@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ADAPTER_AUTH_KINDS,
   ADAPTER_REGISTRY,
+  AdapterAuthSchema,
   CHAT_PROTOCOL_ADAPTER_IDS,
   PROTOCOL_ADAPTER_IDS,
   ProviderConnectionSchema,
+  buildAdapterAuthInjection,
   isChatProtocolAdapterId,
   resolveChatAdapterIdFromProtocolAdapter,
 } from '../src/provider-connection-contract';
@@ -52,33 +55,20 @@ describe('协议适配器族分流', () => {
     }
   });
 
-  it('可灵三个适配器各自只声明自己的提交端点，共用同一组任务查询端点', () => {
-    // 可灵按官方三个提交端点拆成三个接口类型：端点即模型身份，不得把三个提交端点混在一个
-    // 适配器里（三者的请求体字段并不通用）。
-    expect(ADAPTER_REGISTRY['kling-text2video-v1'].relative_endpoints).toEqual({
-      textToVideo: '/text-to-video/kling-3.0',
-      taskById: '/tasks?task_ids={id}',
-      taskByExternalId: '/tasks?external_task_ids={id}',
-    });
-    expect(ADAPTER_REGISTRY['kling-image2video-v1'].relative_endpoints).toEqual({
-      imageToVideo: '/image-to-video/kling-3.0',
-      taskById: '/tasks?task_ids={id}',
-      taskByExternalId: '/tasks?external_task_ids={id}',
-    });
-    expect(ADAPTER_REGISTRY['kling-omni-video-v1'].relative_endpoints).toEqual({
-      omniVideo: '/omni-video/kling-3.0-omni',
-      taskById: '/tasks?task_ids={id}',
-      taskByExternalId: '/tasks?external_task_ids={id}',
-    });
-    for (const adapterId of ['kling-text2video-v1', 'kling-image2video-v1', 'kling-omni-video-v1'] as const) {
-      expect(ADAPTER_REGISTRY[adapterId].adapter_id).toBe(adapterId);
-      expect(ADAPTER_REGISTRY[adapterId].family).toBe('generation');
-      expect(ADAPTER_REGISTRY[adapterId].auth.kind).toBe('bearer');
+  it('生成侧不再有代码适配器：注册表只剩对话族（2026-10-27 退场守卫）', () => {
+    // 生成族的传输定义由接口格式实体承载；本表若再出现生成条目，说明双份事实源回潮。
+    expect(Object.keys(ADAPTER_REGISTRY).sort()).toEqual([...CHAT_PROTOCOL_ADAPTER_IDS].sort());
+    for (const entry of Object.values(ADAPTER_REGISTRY)) {
+      expect(entry.family).toBe('chat');
     }
   });
 
-  it('ADAPTER_REGISTRY 的键集与 PROTOCOL_ADAPTER_IDS 完全一致（新增/删除适配器两边同步）', () => {
-    expect(Object.keys(ADAPTER_REGISTRY).sort()).toEqual([...PROTOCOL_ADAPTER_IDS].sort());
+  it('历史数据仍可解析：PROTOCOL_ADAPTER_IDS 保留 8 个生成预设 id', () => {
+    // 连接遗留字段与已落库任务快照带这些值，缩小值域会让整条记录解析失败。
+    for (const legacyId of ['openai-image-v1', 'veo-v1', 'kling-omni-video-v1'] as const) {
+      expect(PROTOCOL_ADAPTER_IDS).toContain(legacyId);
+      expect(isChatProtocolAdapterId(legacyId)).toBe(false);
+    }
   });
 
   it('CHAT_PROTOCOL_ADAPTER_IDS 与 CHAT_PROTOCOL_TO_CHAT_ADAPTER 键集一致：映射不收录清单外的协议', () => {
@@ -91,6 +81,49 @@ describe('协议适配器族分流', () => {
       }
     }
   });
+});
+
+describe('鉴权形态与凭证注入（唯一实现）', () => {
+  it('三种鉴权形态：bearer / header_api_key / query_api_key', () => {
+    expect([...ADAPTER_AUTH_KINDS]).toEqual(['bearer', 'header_api_key', 'query_api_key']);
+    expect(AdapterAuthSchema.parse({ kind: 'bearer', header_name: 'Authorization' })).toEqual({
+      kind: 'bearer',
+      header_name: 'Authorization',
+    });
+    expect(AdapterAuthSchema.parse({ kind: 'header_api_key', header_name: 'x-api-key' })).toEqual({
+      kind: 'header_api_key',
+      header_name: 'x-api-key',
+    });
+    expect(AdapterAuthSchema.parse({ kind: 'query_api_key', query_name: 'key' })).toEqual({
+      kind: 'query_api_key',
+      query_name: 'key',
+    });
+    // 判别联合：查询参数形态不接受 header_name，请求头形态不接受 query_name。
+    expect(() =>
+      AdapterAuthSchema.parse({ kind: 'query_api_key', query_name: 'key', header_name: 'Authorization' }),
+    ).toThrow();
+    expect(() =>
+      AdapterAuthSchema.parse({ kind: 'header_api_key', header_name: 'x-api-key', query_name: 'key' }),
+    ).toThrow();
+  });
+
+  it('buildAdapterAuthInjection 把凭证渲染成注入位置（请求头或查询参数）', () => {
+    expect(
+      buildAdapterAuthInjection({ kind: 'bearer', header_name: 'Authorization' }, 'sk-1'),
+    ).toEqual({ kind: 'header', name: 'Authorization', value: 'Bearer sk-1' });
+    expect(
+      buildAdapterAuthInjection({ kind: 'bearer', header_name: 'Authorization', prefix: 'Token' }, 'sk-1'),
+    ).toEqual({ kind: 'header', name: 'Authorization', value: 'Token sk-1' });
+    expect(
+      buildAdapterAuthInjection({ kind: 'header_api_key', header_name: 'x-goog-api-key' }, 'sk-2'),
+    ).toEqual({ kind: 'header', name: 'x-goog-api-key', value: 'sk-2' });
+    expect(buildAdapterAuthInjection({ kind: 'query_api_key', query_name: 'key' }, 'sk-3')).toEqual({
+      kind: 'query',
+      name: 'key',
+      value: 'sk-3',
+    });
+  });
+
 });
 
 describe('连接级 protocol_adapter_id 为迁移兼容遗留字段（2026-09-29 起退役）', () => {

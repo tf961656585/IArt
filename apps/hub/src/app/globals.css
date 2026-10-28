@@ -17,7 +17,7 @@
    default variant 渲染成透明底，品牌色锚点消失。
    深度核算：本文件在 apps/hub/src/app/，回退 4 层到仓库根（与 editor
    globals.css 里 streamdown 那条 @source 同深度）。 */
-@source "../../../../packages/ui/src/**/*.tsx";
+@source "../../../../packages/ui/src/**/*.{ts,tsx}";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -50,6 +50,13 @@
   --muted-foreground: oklch(0.50 0.02 277); /* 次级文字边界值，on card 6.02 / on elevated 5.55，勿动（spec §5.4.5） */
   --accent: oklch(0.95 0.03 277); /* indigo 淡染底，选中态 */
   --accent-foreground: oklch(0.30 0.13 277); /* 深 indigo 文字，on accent 12.20 */
+  /* 选中态配方（docs/ui-selection-standard.md §5.1 L3）：底色沿用 accent，
+     靠「顶部暗影 + 底部亮边」的内凹陷表现选中。页面不得直接消费这四个键，
+     统一经 @iart/ui 的选中类串消费；depth/edge 的 alpha 是质检口径的一部分。 */
+  --selection-bg: var(--accent);
+  --selection-fg: var(--accent-foreground);
+  --selection-depth: color-mix(in srgb, var(--accent-foreground) 66%, transparent);
+  --selection-edge: oklch(1 0 0 / 0.82);
   --destructive: oklch(0.555 0.23 27.3); /* 语义色翻转：比深色(0.704)更深，on card 5.29（spec §5.4.2） */
   --success: oklch(0.50 0.15 162); /* on card 5.30 */
   --warning: oklch(0.56 0.15 75); /* 深棕橙，色相 h=75 与深色一致，on card 4.75 */
@@ -110,6 +117,12 @@
   --muted-foreground: oklch(0.68 0.015 277); /* 冷调次级文字，对比度边界值，勿动 */
   --accent: oklch(0.30 0.06 277); /* primary 低饱和暗版，选中态底色，chroma 上调让品牌色感可辨 */
   --accent-foreground: oklch(0.85 0.04 277);
+  /* 选中态配方（见浅色块同名键说明）：深色底更深，同样的内阴影 alpha 更容易看见，
+     depth 70% 的凹边峰值只有 1.41:1，实际靠底部亮边 40% 达到 2.65:1（38% 只有 2.53，余量太薄）。 */
+  --selection-bg: var(--accent);
+  --selection-fg: var(--accent-foreground);
+  --selection-depth: oklch(0 0 0 / 0.7);
+  --selection-edge: color-mix(in srgb, var(--accent-foreground) 40%, transparent);
   --destructive: oklch(0.704 0.191 22.216);
   --success: oklch(0.70 0.17 162);
   --warning: oklch(0.78 0.16 75);

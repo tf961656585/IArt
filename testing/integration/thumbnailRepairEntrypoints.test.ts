@@ -55,7 +55,6 @@ describe('thumbnail repair backend entrypoints', () => {
         resumeIncompletePollingTasks: params.resumeIncompletePollingTasks,
         isTaskFinalStatus: vi.fn(() => true),
         normalizeTaskStatus: vi.fn((status: unknown) => String(status ?? '')),
-        cancelTaskExecution: vi.fn(),
       },
       './local-server/backend-ipc-sender.cjs': {
         sendTaskStateSnapshot: vi.fn(),

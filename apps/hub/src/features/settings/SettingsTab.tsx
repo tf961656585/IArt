@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppearanceSection } from './AppearanceSection';
 import { CliSection } from './CliSection';
+import { InterfaceFormatPage } from './interface-format/InterfaceFormatPage';
 import { NetworkProxySection } from './NetworkProxySection';
 import { PublicRelaySection } from './PublicRelaySection';
 import { ProviderDataProvider } from './provider-connection/ProviderDataContext';
@@ -45,6 +46,7 @@ const PAGE_LABEL_BY_ID: Readonly<Record<string, string>> = {
   update: '检查更新',
   cli: '命令行工具',
   providers: PROVIDERS_PAGE_LABEL,
+  'interface-formats': '接口格式',
 };
 
 /**
@@ -57,9 +59,29 @@ export const PENDING_SETTINGS_SECTION_KEY = 'hub:pending-settings-section';
 
 export function SettingsTab() {
   const [sectionId, setSectionId] = useState<string>(DEFAULT_SETTINGS_SECTION_ID);
+  /** 当前分区 id 的同步镜像：`selectSection` 用它判断「同分区直接返回」，不依赖 state。 */
+  const sectionIdRef = useRef<string>(DEFAULT_SETTINGS_SECTION_ID);
+  /** 当前页面的离开守卫（接口格式编辑器在有未保存改动期间注册）。 */
+  const leaveGuardRef = useRef<(() => Promise<boolean>) | null>(null);
 
-  /** 切换分区：更新激活态 + 更新 hash（支持深链分享，不走 URL 路由跳转） */
-  const selectSection = useCallback((id: string): void => {
+  const registerLeaveGuard = useCallback((guard: (() => Promise<boolean>) | null): void => {
+    leaveGuardRef.current = guard;
+  }, []);
+
+  /**
+   * 切换分区：更新激活态 + 更新 hash（支持深链分享，不走 URL 路由跳转）。
+   *
+   * 页面切换即卸载当前页，所以先问当前页的离开守卫（如接口格式编辑器的未保存确认）：
+   * 守卫返回 false 就留在原页，被拦下时把 hash 恢复成当前分区，避免地址栏与屏幕不一致。
+   */
+  const selectSection = useCallback(async (id: string): Promise<void> => {
+    if (sectionIdRef.current === id) return;
+    const guard = leaveGuardRef.current;
+    if (guard !== null && !(await guard())) {
+      window.history.replaceState(null, '', '#' + sectionIdRef.current);
+      return;
+    }
+    sectionIdRef.current = id;
     setSectionId(id);
     window.history.replaceState(null, '', '#' + id);
   }, []);
@@ -67,31 +89,35 @@ export function SettingsTab() {
   /** 挂载时的落地分区：待处理锚点（首次指引跨窗口引导）优先于 hash，hash 优先于默认值。
       待处理锚点来自 main 的通知，比 URL 里可能残留的旧 hash 更晚、更可信。 */
   useEffect(() => {
+    const land = (id: string): void => {
+      sectionIdRef.current = id;
+      setSectionId(id);
+    };
     const pending = window.sessionStorage.getItem(PENDING_SETTINGS_SECTION_KEY);
     if (pending !== null) {
       window.sessionStorage.removeItem(PENDING_SETTINGS_SECTION_KEY);
       if (SETTINGS_SECTION_IDS.includes(pending)) {
-        setSectionId(pending);
+        land(pending);
         window.history.replaceState(null, '', '#' + pending);
         return;
       }
     }
     const hash = window.location.hash.slice(1);
     if (hash !== '' && SETTINGS_SECTION_IDS.includes(hash)) {
-      setSectionId(hash);
+      land(hash);
     }
   }, []);
 
   /** 外部改 hash（同一窗口再次深链）时同步切换：hashchange 是浏览器已提供的事件源，
-      不为此引入路由库。 */
+      不为此引入路由库。走 `selectSection` 以便同样受离开守卫约束。 */
   useEffect(() => {
     const onHashChange = (): void => {
       const hash = window.location.hash.slice(1);
-      if (hash !== '' && SETTINGS_SECTION_IDS.includes(hash)) setSectionId(hash);
+      if (hash !== '' && SETTINGS_SECTION_IDS.includes(hash)) void selectSection(hash);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
-  }, []);
+  }, [selectSection]);
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -103,7 +129,11 @@ export function SettingsTab() {
       <div className="flex min-h-0 flex-1">
         <SettingsNav activeId={sectionId} onSelect={selectSection} />
         <div className="flex min-w-0 flex-1 flex-col overflow-y-auto p-4">
-          <SettingsPage id={sectionId} />
+          <SettingsPage
+            id={sectionId}
+            onSelectSection={selectSection}
+            registerLeaveGuard={registerLeaveGuard}
+          />
         </div>
       </div>
     </div>
@@ -116,13 +146,31 @@ export function SettingsTab() {
  * 列宽在这里统一施加：表单类 768 居中，数据类铺满——「768 只管表单字段轨」的落点，
  * 避免每个子单元各写一次列宽。
  */
-function SettingsPage({ id }: { id: string }) {
+function SettingsPage({
+  id,
+  onSelectSection,
+  registerLeaveGuard,
+}: {
+  id: string;
+  onSelectSection: (id: string) => void;
+  registerLeaveGuard: (guard: (() => Promise<boolean>) | null) => void;
+}) {
   if (id === 'providers') {
     return (
       <div id="providers" className="flex min-w-0 flex-col gap-4">
         <ProviderDataProvider>
           <ProviderSection />
         </ProviderDataProvider>
+      </div>
+    );
+  }
+
+  // 接口格式：三栏工作台（列表 / 定义 / 验证面板），数据类页面按可用宽度铺满，
+  // 三栏各自滚动，外层不再承担滚动（docs/hub/visual-design.md §8.5）。
+  if (id === 'interface-formats') {
+    return (
+      <div id="interface-formats" className="flex min-h-0 flex-1 flex-col">
+        <InterfaceFormatPage onSelectSection={onSelectSection} registerLeaveGuard={registerLeaveGuard} />
       </div>
     );
   }

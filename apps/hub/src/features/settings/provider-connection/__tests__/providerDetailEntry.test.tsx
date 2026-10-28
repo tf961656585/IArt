@@ -15,9 +15,9 @@ import type { ModelRow } from '../ModelTable';
  * 服务商详情入口与模型清单（spec 03 §6.1「记录即接入」、provider-config-ui-design §4.3）。
  *
  * 2026-09-26 界面收敛后每条可编辑的连接只有一个「添加模型」入口；2026-09-29 起连接级
- * 预选摘除（接口类型只在添加模型时配置），入口恒先出二级选择（生成模型 / 对话模型），
+ * 预选摘除（接口格式只在添加模型时配置），入口恒先出二级选择（生成模型 / 对话模型），
  * 选完交给容器开对应表单——不再有「有预选直接开弹窗」的分流。
- * 详情也不再显示「默认接口类型」只读行。
+ * 详情也不再显示「默认接口格式」只读行。
  * retired 连接不给任何入口（不提供必然失败的入口，也不解释为什么没有，spec §7.5）。
  *
  * 2026-10-19 形态变更（设置页迭代 B2）：模型清单由两行卡改为 52px 单行表格，行内动作收进
@@ -43,7 +43,7 @@ const connectionWith = (protocolAdapterId: ProtocolAdapterId): ProviderConnectio
   updated_at: '2026-09-24T00:00:00.000Z',
 });
 
-/** 没有接口类型字段的连接（连接级预选摘除后的常态形状）。 */
+/** 没有接口格式字段的连接（连接级预选摘除后的常态形状）。 */
 const connectionWithoutDefault: ProviderConnection = {
   connection_id: 'up_conn_plain',
   display_name: '我的服务商',
@@ -112,6 +112,8 @@ const renderDetail = (
         chatCatalog,
         editable: withLifecycle.lifecycle !== 'retired',
         modelListUnavailable,
+        interfaceRecipes: [],
+        interfaceRecipesUnavailable: false,
         agentDefaultModelId: null,
         generationDefaultModelId: null,
         onToggleAgentDefault: noop,
@@ -135,7 +137,7 @@ describe('服务商详情「添加模型」入口', () => {
     expect(onAddModelByKind).toHaveBeenCalledWith('generation');
   });
 
-  it('没有接口类型字段的连接：「添加模型」同样先出二级选择，选「对话模型」交回容器', () => {
+  it('没有接口格式字段的连接：「添加模型」同样先出二级选择，选「对话模型」交回容器', () => {
     const onAddModelByKind = vi.fn();
     renderDetail(connectionWithoutDefault, { onAddModelByKind });
 
@@ -146,9 +148,9 @@ describe('服务商详情「添加模型」入口', () => {
 });
 
 describe('服务商详情只读信息', () => {
-  it('详情不再显示「默认接口类型」行：接口类型只属于模型，添加模型时再配置', () => {
+  it('详情不再显示「默认接口格式」行：接口格式只属于模型，添加模型时再配置', () => {
     renderDetail(connectionWith('openai-image-v1'));
-    expect(screen.queryByText('默认接口类型')).not.toBeInTheDocument();
+    expect(screen.queryByText('默认接口格式')).not.toBeInTheDocument();
     // 详情头第二行 = 地址 · 密钥状态（2026-10-19 起不再用 label/value 双行字段表，
     // 且**不复读模型数**——模型清单就在正下方逐行可见）
     expect(screen.getByText('https://api.example.com')).toBeInTheDocument();

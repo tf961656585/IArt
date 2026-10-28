@@ -1,5 +1,9 @@
 import type { ModelAssetRuntimeRecord } from "@iart/model-asset-runtime";
 import { MODEL_ASSET_PROMPT_RESERVED_FIELD_KEY } from "@iart/contracts/model-asset-contract/protocol-constants";
+import {
+  defaultCustomInterfaceFormatContentType,
+  type CustomInterfaceFormatPayloadFormat,
+} from "@iart/contracts";
 import * as loggingModule from "./logging.cts";
 import { getFetchDispatcher } from "./fetch-dispatcher.cts";
 import { findProjectionByModelIdOrAlias, type FindProjectionResult } from "./model-package-catalog.cts";
@@ -32,13 +36,22 @@ import {
   writeOpenField,
   type AssemblerContext,
   type EvaluateState,
-  type HeaderMap,
   type PlainObject,
+  type ProjectionRuntimeRaw,
 } from "./request-assembler-shared.cts";
 import { materializeSubtree } from "./model-input-preparation/model-input-materializer.cts";
 import { readValueByPath } from "./task-engine-polling-utils.cts";
 import { normalizeTaskPollingStrategy } from "./model-package-catalog.task-plan.cts";
 import { executePreRequestPolling } from "./request-assembler-pre-request-polling.cts";
+import {
+  appendQueryEntries,
+  normalizeFixedHeaders,
+  normalizeQueryEntries,
+  readStaticQueryParamNames,
+  replaceJsonPlaceholders,
+  replaceUrlTemplatePlaceholders,
+} from "./request-wire-utils.cts";
+import type { UnknownRecord } from "./utils.cts";
 
 type FetchInitWithDispatcher = RequestInit & { dispatcher: unknown | undefined };
 
@@ -121,39 +134,39 @@ const buildPollingStrategyFromProjection = (
   ) {
     return null;
   }
-  type PollingRequestDynamic = {
-    url_template: string | undefined;
-    urlTemplate: string | undefined;
-  };
-  type PayloadMetaDynamic = {
-    taskType: string | undefined;
-  };
-  type PayloadDynamic = {
-    meta: PayloadMetaDynamic | undefined;
-  };
-  type ClonedPollingStrategyDynamic = {
-    request: PollingRequestDynamic | undefined;
-  };
-  const cloned = cloneValue(formalPlan.polling_strategy) as ClonedPollingStrategyDynamic;
-  const pollingRequest = cloned.request;
-  if (pollingRequest === undefined) {
-    return cloned;
-  }
-  const template =
-    normalizeString(pollingRequest.url_template) ||
-    normalizeString(pollingRequest.urlTemplate);
-  if (template && payload) {
-    const payloadRaw = isPlainObject(payload) ? payload as PayloadDynamic : ({} as PayloadDynamic);
-    const payloadMeta = payloadRaw.meta;
-    const taskType = normalizeString(payloadMeta === undefined ? undefined : payloadMeta.taskType);
-    if (taskType) {
-      const replaced = template.replace(/\{taskType\}/g, taskType);
-      if (replaced !== template) {
-        pollingRequest.url_template = replaced;
-      }
-    }
+  const cloned = cloneValue(formalPlan.polling_strategy);
+  const payloadMeta = isPlainObject(payload) ? readOpenField(payload, "meta") : undefined;
+  const taskType = isPlainObject(payloadMeta) ? normalizeString(readOpenField(payloadMeta, "taskType")) : "";
+  if (taskType) {
+    applyPollingTaskTypePlaceholders(cloned, taskType);
   }
   return cloned;
+};
+
+/**
+ * 轮询请求里的 `{taskType}` 占位在组装期就有值（来自 `meta.taskType`），先替换掉。
+ *
+ * 地址模板按「路径保留原文、查询串编码」替换；请求头 / 查询参数 / 请求体里的字符串
+ * 按原文替换。任务标识类占位（`{id}` / `{operation_name}` 等）在派发期才有值，
+ * 由 `buildPollingRequestFromPlan` 处理。
+ */
+const applyPollingTaskTypePlaceholders = (strategy: unknown, taskType: string): void => {
+  if (!isPlainObject(strategy)) return;
+  const request = readOpenField(strategy, "request");
+  if (!isPlainObject(request)) return;
+  const values = { taskType };
+  const template =
+    normalizeString(readOpenField(request, "url_template")) ||
+    normalizeString(readOpenField(request, "urlTemplate"));
+  if (template) {
+    writeOpenField(request, "url_template", replaceUrlTemplatePlaceholders(template, values));
+  }
+  for (const key of ["headers", "query", "body"]) {
+    const value = readOpenField(request, key);
+    if (value !== undefined && value !== null) {
+      writeOpenField(request, key, replaceJsonPlaceholders(value, values));
+    }
+  }
 };
 
 /**
@@ -176,10 +189,107 @@ const resolveAbsoluteEndpoint = (endpoint: unknown) => {
   return normalizedEndpoint.startsWith("/") ? normalizedEndpoint : `/${normalizedEndpoint}`;
 };
 
+/**
+ * 运行期请求体形态归一：历史 `stream` 等未知声明按 JSON 处理（与改造前一致）。
+ *
+ * 动态 `payload_format_rule` 的求值结果由调用方经 `resolvedPayloadFormat` 传入；组装期
+ * 拿不到时回落投影的静态声明，再回落 `json`。
+ */
+const normalizePayloadFormat = (value: unknown): CustomInterfaceFormatPayloadFormat => {
+  const normalized = normalizeString(value).toLowerCase();
+  if (normalized === "multipart" || normalized === "form" || normalized === "text") {
+    return normalized;
+  }
+  return "json";
+};
+
+/**
+ * 提交请求的 Content-Type。
+ *
+ * 优先级（与改造前同序，只把「没有声明」时的兜底从固定 JSON 改为按请求体形态取默认）：
+ * 1. 用户显式 `api.contentType`（含显式 `null` = 该分支没有固定 Content-Type，multipart 用）；
+ * 2. 投影 `api_defaults.contentType`；
+ * 3. `defaultCustomInterfaceFormatContentType(payload_format)`（multipart → 不写）。
+ */
+const resolveSubmitContentType = (
+  payloadApi: PayloadApiRaw,
+  runtimeDefaults: PayloadApiRaw,
+  payloadFormat: CustomInterfaceFormatPayloadFormat,
+): unknown => {
+  if (Object.prototype.hasOwnProperty.call(payloadApi, "contentType")) {
+    return payloadApi.contentType;
+  }
+  if (Object.prototype.hasOwnProperty.call(runtimeDefaults, "contentType")) {
+    return runtimeDefaults.contentType;
+  }
+  return defaultCustomInterfaceFormatContentType(payloadFormat);
+};
+
+/**
+ * 纯文本正文（`payload_format = 'text'`）的形状守卫：整个请求体**就是**提示词原文。
+ *
+ * 两类错误都必须在这里显式失败，不能静默降级：
+ * - 投影里出现 `body.<path>` 请求体参数规则：文本格式没有可命名的字段，规则求值会让
+ *   正文变成对象（或按规则顺序被最后一条覆盖），发出去的内容与用户声明不符；
+ * - 求值后的正文不是字符串（空提示词 / 参数规则覆盖了正文）：发送期再猜类型只会把
+ *   错误推到上游。
+ */
+const assertTextPayloadBodyShape = (
+  runtime: ProjectionRuntimeRaw | null | undefined,
+  modelId: string,
+  requestBody: unknown,
+): void => {
+  const payloadRules = runtime !== null && runtime !== undefined && isPlainObject(runtime.payload_rules)
+    ? runtime.payload_rules
+    : null;
+  const bodyFieldTargets = payloadRules === null
+    ? []
+    : Object.keys(payloadRules).filter((target) => target.startsWith("body."));
+  if (bodyFieldTargets.length > 0) {
+    throw invalidArguments(
+      `model ${modelId}: payload_format "text" forbids request body fields, but payload_rules declares ${bodyFieldTargets.join(", ")}. The whole request body must be the prompt text.`,
+    );
+  }
+  if (typeof requestBody !== "string") {
+    throw invalidArguments(
+      `model ${modelId}: payload_format "text" requires the prompt as the plain request body, got ${requestBody === undefined || requestBody === null ? "no body" : typeof requestBody}.`,
+    );
+  }
+};
+
+/**
+ * 提交地址 = 相对 endpoint + `api.query` 合并。
+ *
+ * - 查询参数名与路径里的静态查询串（`?task_ids=...`）重名时直接报错：同一个参数出现两次，
+ *   后写会覆盖先写或拼出重复键，用户看不到任何提示；
+ * - 值按重复键展开（数组 → `a=1&a=2`），`undefined` / `null` 跳过，空字符串保留。
+ */
+const buildSubmitUrl = (
+  endpointUrl: string,
+  queryDeclaration: unknown,
+  modelId: string,
+): string => {
+  const entries = normalizeQueryEntries(
+    queryDeclaration,
+    `model ${modelId} submit request`,
+  );
+  if (entries.length === 0) return endpointUrl;
+  const staticNames = new Set(readStaticQueryParamNames(endpointUrl));
+  for (const entry of entries) {
+    if (staticNames.has(entry.name)) {
+      throw invalidArguments(
+        `model ${modelId} submit request: query parameter "${entry.name}" is already declared in the endpoint path`,
+      );
+    }
+  }
+  return appendQueryEntries(endpointUrl, entries);
+};
+
 const buildExecutionPlanFromPayload = (
   projection: PlainObject,
   modelId: string,
   payload: PlainObject,
+  resolvedPayloadFormat?: string,
 ) => {
   const projectionRaw = asProjectionRaw(projection);
   const runtime = asProjectionRuntimeRaw((projectionRaw !== null && projectionRaw !== undefined ? projectionRaw.runtime : undefined));
@@ -191,35 +301,29 @@ const buildExecutionPlanFromPayload = (
   );
   const method =
     normalizeString(payloadApi.method || runtimeDefaults.method) || "POST";
-  const contentType =
-    payloadApi.contentType !== undefined
-      ? payloadApi.contentType
-      : Object.prototype.hasOwnProperty.call(runtimeDefaults, "contentType")
-        ? runtimeDefaults.contentType
-        : "application/json";
-  const headers = {} as { "content-type": unknown | undefined; "Content-Type": unknown | undefined };
-  if (isPlainObject(payloadApi.headers)) {
-    for (const [key, value] of Object.entries(payloadApi.headers as Record<string, unknown>)) {
-      writeOpenField(headers, key, value);
-    }
-  }
-  const headerMap: HeaderMap = {
-    contentTypeLower: readOpenField(headers, "content-type"),
-    contentTypeCanonical: readOpenField(headers, "Content-Type"),
-  };
-  if (
-    typeof contentType === "string" &&
-    contentType.trim() &&
-    !headerMap.contentTypeLower &&
-    !headerMap.contentTypeCanonical
-  ) {
-    writeOpenField(headers, "content-type", contentType.trim());
+  const payloadFormat = normalizePayloadFormat(
+    normalizeString(resolvedPayloadFormat) ||
+      (runtime !== null && runtime !== undefined ? runtime.payload_format : undefined),
+  );
+  const formFieldStyle = normalizeString(runtime !== null && runtime !== undefined ? runtime.form_field_style : undefined) || undefined;
+  const formArrayStyle = normalizeString(runtime !== null && runtime !== undefined ? runtime.form_array_style : undefined) || undefined;
+  const contentType = resolveSubmitContentType(payloadApi, runtimeDefaults, payloadFormat);
+  const headers = normalizeFixedHeaders(
+    payloadApi.headers,
+    `model ${modelId} submit request`,
+  );
+  if (typeof contentType === "string" && contentType.trim()) {
+    headers["content-type"] = contentType.trim();
   }
   const requestBody = Object.prototype.hasOwnProperty.call(payload, "body")
     ? cloneValue(payloadRaw.body)
     : undefined;
+  if (payloadFormat === "text") {
+    assertTextPayloadBodyShape(runtime, modelId, requestBody);
+  }
   // 相对 endpoint 透传；origin 由任务派发前 ExecutionSnapshot.base_url 决算（spec 03 §8）。
   const resolvedEndpoint = resolveAbsoluteEndpoint(endpoint);
+  const submitUrl = buildSubmitUrl(resolvedEndpoint, payloadApi.query, modelId);
   const formalPlan = asTaskExecutionPlanRaw((projectionRaw !== null && projectionRaw !== undefined ? projectionRaw.task_execution_plan : undefined));
   if (!formalPlan || !isPlainObject(formalPlan.result_rule)) {
     throw invalidArguments(
@@ -247,10 +351,15 @@ const buildExecutionPlanFromPayload = (
     executionPlan: {
       model_id: modelId,
       submit_request: {
-        url: resolvedEndpoint,
+        url: submitUrl,
         method,
         headers,
         body: requestBody,
+        // 请求体形态随请求下发：发送期据此序列化（multipart / 表单 / 纯文本）。
+        // 表单正文保持对象原样——模型 ID 注入发生在发送前，先编码会让注入落到字符串上。
+        payload_format: payloadFormat,
+        form_field_style: formFieldStyle,
+        form_array_style: formArrayStyle,
       },
       polling_strategy: pollingStrategy,
       result_rule: resultRule,
@@ -294,6 +403,7 @@ const buildRuntimePayloadFromRules = async (
   projection: PlainObject,
   projectPath: string | null,
   preRequestOutputs: PreRequestOutputMap | undefined,
+  resolvedFormatOut?: { payloadFormat?: string },
 ) => {
   const inputRecord = isPlainObject(input) ? input : {};
   const projectionRaw = asProjectionRaw(projection);
@@ -340,7 +450,7 @@ const buildRuntimePayloadFromRules = async (
     }
   }
   const fields = mergeFieldMaps(
-    readOpenField(inputRecord, "arguments"),
+    argumentsWithoutReservedPrompt(readOpenField(inputRecord, "arguments")),
     mediaInputFields,
     readOpenField(inputRecord, "input_assets"),
     promptFields(inputRecord),
@@ -368,6 +478,11 @@ const buildRuntimePayloadFromRules = async (
   }
   // 写入 state.runtime 供下游 resolveUploadUrlOptionsFromContext 读取（per-request 求值结果）
   writeOpenField(state.runtime, "payloadFormat", dynamicPayloadFormat || undefined);
+  // 动态形态的求值结果同时回传给组装入口：`submit_request.payload_format` 需要它来
+  // 决定发送期序列化（multipart / 表单 / 纯文本），组装层不能只拿到静态声明。
+  if (resolvedFormatOut !== undefined && dynamicPayloadFormat) {
+    resolvedFormatOut.payloadFormat = dynamicPayloadFormat;
+  }
   loggingModule.logDebug("[request-assembler] buildRuntimePayloadFromRules: resolved payloadFormat", { staticPayloadFormat, hasRule: payloadFormatRule !== undefined, dynamicPayloadFormat });
   const pending: Array<[string, Promise<unknown>]> = [];
   for (const [targetPath, rule] of Object.entries(payloadRules)) {
@@ -560,6 +675,23 @@ const promptFields = (inputRecord: PlainObject): PlainObject => {
     : {};
 };
 
+/**
+ * 提示词只从草稿顶层 prompt（或旧媒体加工链的 arguments.prompt）进入合并层。
+ * 历史草稿可能把保留键 `__prompt` 当普通参数存下来；这里剥掉它，避免文字区清空后
+ * 旧参数值被当成提示词发出去。
+ */
+const argumentsWithoutReservedPrompt = (argumentsValue: unknown): unknown => {
+  if (!isPlainObject(argumentsValue)) return argumentsValue;
+  const record = argumentsValue as UnknownRecord;
+  if (!(MODEL_ASSET_PROMPT_RESERVED_FIELD_KEY in record)) return argumentsValue;
+  const next: UnknownRecord = { ...record };
+  delete next[MODEL_ASSET_PROMPT_RESERVED_FIELD_KEY];
+  loggingModule.logDebug("[request-assembler] ignored reserved __prompt in arguments", {
+    key: MODEL_ASSET_PROMPT_RESERVED_FIELD_KEY,
+  });
+  return next;
+};
+
 const executePreRequests = async (
   preRequests: CatalogPreRequestDefinition[],
   fields: ModelAssetRuntimeRecord,
@@ -602,14 +734,19 @@ const assembleGenerationTaskRequest = async (
     preRequestOutputs = await executePreRequests(preRequests, fields, projection, projectPath);
   }
 
-  const payload = await buildRuntimePayloadFromRules(inputRecord, projection, projectPath, preRequestOutputs);
+  const resolvedFormat: { payloadFormat?: string } = {};
+  const payload = await buildRuntimePayloadFromRules(inputRecord, projection, projectPath, preRequestOutputs, resolvedFormat);
   applyPayloadOverrides(payload, payload_overrides);
-  return buildExecutionPlanFromPayload(projection, modelId, payload);
+  return buildExecutionPlanFromPayload(projection, modelId, payload, resolvedFormat.payloadFormat);
 };
 
 export {
   assembleExecutionPlanFromPrebuiltPayload,
   assembleGenerationTaskRequest,
+  buildExecutionPlanFromPayload,
+  // 任务重新查询（failed → polling）需要按「当前接口格式与配方」重建轮询策略：
+  // 与提交组装共用同一份实现，禁止在 requery 侧另写一份 polling_strategy 组装。
+  buildPollingStrategyFromProjection,
   buildRuntimePayloadFromRules,
   resolveAbsoluteEndpoint,
   resolveProjectionByModelId,

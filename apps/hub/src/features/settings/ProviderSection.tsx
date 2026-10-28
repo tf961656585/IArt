@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button } from '@iart/ui';
+import { Button, cn, SELECTION_SOFT_CLASSES } from '@iart/ui';
 import {
   CUSTOM_THINKING_TIER_LIMIT,
   type CustomChatModel,
@@ -18,6 +18,7 @@ import {
 import { ProviderDetail, StateCard } from './provider-connection/ProviderDetail';
 import type { ModelRow } from './provider-connection/ModelTable';
 import { ProviderNoticeBar, StatusPill, type BindingTone } from './provider-connection/ProviderNoticeBar';
+import { INTERFACE_FORMAT_CREATE_INTENT_KEY, PROVIDER_ADD_MODEL_HINT_KEY } from './provider-connection/providerHints';
 import { ProviderFormDialog, type ProviderFormPayload } from './provider-connection/ProviderFormDialog';
 import {
   confirmMessage,
@@ -27,13 +28,14 @@ import {
 import { useProviderData } from './provider-connection/ProviderDataContext';
 import { describeError, isConflictError } from './provider-connection/useProviderConnectionData';
 import { useGenerationModelManagement } from './provider-connection/useGenerationModelManagement';
+import { useInterfaceFormatOptions } from './provider-connection/useInterfaceFormatOptions';
 
 /**
  * 设置页「服务商」区域：一个服务商列表 + 详情同页。
  *
  * 口径：用户要做的两件事都在这一页完成——① 添加一个服务商（名称 + 地址 + 密钥）；
  * ② 把模型加进来：每条连接只有一个「添加模型」入口（2026-09-26 界面收敛），
- * 恒先出二级选择（生成模型 / 对话模型；2026-09-29 起连接级预选摘除，接口类型只在
+ * 恒先出二级选择（生成模型 / 对话模型；2026-09-29 起连接级预选摘除，接口格式只在
  * 添加模型时配置）。生成侧与对话侧各是一个**单一表单**（2026-10-19：软件不内置任何具体模型，
  * 内置模型的勾选区块与来源分段切换随部署载体一并退场）。
  * 因此不再有并列的第二个页面，也不再需要在两页之间来回跳。
@@ -61,7 +63,7 @@ type CustomModelTarget =
 /**
  * 弹层的思考档位上下文：入口都落在一个连接上——`create` 是即将添加到的连接，
  * `edit` 是记录归属的连接。档位随模型记录走（记录归属一条连接，模型不复用到另一条连接），
- * 所以它随连接上下文传入，不在表单 mode 里。档位的可表达性按记录/表单当前的接口类型判定
+ * 所以它随连接上下文传入，不在表单 mode 里。档位的可表达性按记录/表单当前的接口格式判定
  * （CustomModelDialog 内按契约注册表取），这里不再随连接传适配器。
  */
 function thinkingContextFor(
@@ -152,6 +154,8 @@ export function ProviderSection() {
     customChatModels,
     customChatModelsUnavailable,
     customGenerationModels,
+    interfaceRecipes,
+    interfaceRecipesUnavailable,
     agentDefaultModelId,
     saveAgentDefaultModel,
     generationDefaultModelId,
@@ -182,6 +186,31 @@ export function ProviderSection() {
   const selected = selectedId === null ? null : connections.find((item) => item.connection_id === selectedId) ?? null;
 
   /**
+   * 「接口格式」页的「用此格式添加模型」跳过来时带的一句提示：设置页一个导航项一个页面，
+   * 切页会卸载来源页，提示只能经 sessionStorage 跨页传递一次（读完即清除）。
+   * 本批只提示「添加模型时选它」，不就地打开弹层（B5 再接入预选）。
+   */
+  useEffect(() => {
+    const hint = window.sessionStorage.getItem(PROVIDER_ADD_MODEL_HINT_KEY);
+    if (hint === null) return;
+    window.sessionStorage.removeItem(PROVIDER_ADD_MODEL_HINT_KEY);
+    setNotice({ tone: 'success', text: hint });
+  }, [setNotice]);
+
+  /**
+   * 接口格式下拉：预设 + 用户自建（2026-10-26）。装载实现统一在 useInterfaceFormatOptions：
+   * 生成侧内置适配器退场后，展示名只能来自接口格式实体，不允许页面各自维护第二份清单。
+   */
+  const formatOptions = useInterfaceFormatOptions(api);
+
+  /** 从「添加模型」跳去新建接口格式：关弹层、带去程意图，保存后回到本页。 */
+  const createInterfaceFormatFromAddModel = (): void => {
+    setAddModelTo(null);
+    window.sessionStorage.setItem(INTERFACE_FORMAT_CREATE_INTENT_KEY, 'providers');
+    window.location.hash = 'interface-formats';
+  };
+
+  /**
    * 选中态兜底：**有数据即选中首条**（2026-10-19）。
    *
    * 此前只在「选中的那条被删掉」时回落，首次进入设置页右侧是一片空白 + 一句「左边选一个」。
@@ -195,7 +224,7 @@ export function ProviderSection() {
   }, [connections, selected]);
 
   // 详情行状态共用可执行目录（用户生成模型记录 × 族模板的合成投影）。
-  // 连接级接口类型已摘除（2026-09-29）：不再按连接协议在两个目录间选源——
+  // 连接级接口格式已摘除（2026-09-29）：不再按连接协议在两个目录间选源——
   // 表格行状态按行类型选目录（见 ModelTable），对话目录只服务对话行。
   // 旧的全局进度行（内置模型数 / 当前可用数）已退役（2026-10-19）：全局口径贴在单个服务商
   // 详情上方会被读成局部状态，且软件不再内置模型、没有区分来源的必要。
@@ -254,6 +283,9 @@ export function ProviderSection() {
   } = useGenerationModelManagement({
     api,
     customGenerationModels,
+    interfaceRecipes,
+    interfaceRecipesUnavailable,
+    formatOptions,
     dialogFailure,
     reload,
     setNotice,
@@ -320,8 +352,8 @@ export function ProviderSection() {
 
   /**
    * 添加对话模型（spec 03 §6.1「记录即接入」）：一次写入创建自建对话模型记录——
-   * 接口类型、能力值、思考档位与接入归属（`connection_id`）同一次落库，active 接入由后端
-   * 在创建内完成。接口类型随表单选择落库（2026-09-26 起协议归属模型级），不从连接继承。
+   * 接口格式、能力值、思考档位与接入归属（`connection_id`）同一次落库，active 接入由后端
+   * 在创建内完成。接口格式随表单选择落库（2026-09-26 起协议归属模型级），不从连接继承。
    *
    * `model_id` 全局唯一：最常见的重名（已经添加到这个服务商）在提交前按本连接记录查重拦下；
    * 其余重名（已装模型、另一条连接下的记录、生成族命名空间）由后端 409 兜底，
@@ -348,10 +380,10 @@ export function ProviderSection() {
       setDialogFailure(text);
       return false;
     }
-    // 接口类型在创建表单里必选（空态起步，选了才能提交）；null 只出现在修改入口，
+    // 接口格式在创建表单里必选（空态起步，选了才能提交）；null 只出现在修改入口，
     // 那里不走本函数。真为 null 说明装配断了，留痕后放弃——不发没有协议声明的创建请求。
     if (payload.protocolAdapterId === null) {
-      console.debug('[provider-connection] 创建对话模型缺少接口类型，放弃提交', payload.modelId);
+      console.debug('[provider-connection] 创建对话模型缺少接口格式，放弃提交', payload.modelId);
       const text = '没能添加模型，请重试';
       setNotice({ tone: 'error', text });
       setDialogFailure(text);
@@ -624,12 +656,14 @@ export function ProviderSection() {
 
   if (connections.length === 0) {
     return (
-      <StateCard
-        icon={<Server className="h-10 w-10" aria-hidden="true" />}
-        title="还没有服务商"
-        description="先添加一个服务商，再把要用的模型加进来。模型只有添加到服务商之后才能用于生成。"
-        action={<Button size="sm" onClick={openAddProvider}>添加服务商</Button>}
-      />
+      <div className="flex flex-col gap-4">
+        <StateCard
+          icon={<Server className="h-10 w-10" aria-hidden="true" />}
+          title="还没有服务商"
+          description="先添加一个服务商，再把要用的模型加进来。模型只有添加到服务商之后才能用于生成。"
+          action={<Button size="sm" onClick={openAddProvider}>添加服务商</Button>}
+        />
+      </div>
     );
   }
 
@@ -702,6 +736,9 @@ export function ProviderSection() {
                 chatCatalog,
                 editable: selected.lifecycle !== 'retired',
                 modelListUnavailable: catalogUnavailable || customChatModelsUnavailable,
+                // 配方库与「读不到」状态同源装载：行内标记与弹层里的单点提示用同一份判定
+                interfaceRecipes,
+                interfaceRecipesUnavailable,
                 agentDefaultModelId,
                 generationDefaultModelId,
                 onToggleAgentDefault: (modelId) => void toggleAgentDefaultModel(modelId),
@@ -736,6 +773,9 @@ export function ProviderSection() {
           )}
         </div>
       </div>
+
+      {/* 接口配方已迁到「接口格式」页的第二标签（2026-10-26）：配方是全局公共库，
+          与接口格式的定义工作台同一页看待，不再留在服务商页底部。 */}
 
       <ConfirmDialog
         open={confirm !== null}
@@ -797,10 +837,14 @@ export function ProviderSection() {
       {addModelTo !== null ? (
         <AddModelDialog
           providerName={addModelTo.display_name}
-          // 生成侧单一表单随每条连接的生成侧入口装配（协议归属模型级，记录自带接口类型声明，
+          // 生成侧单一表单随每条连接的生成侧入口装配（协议归属模型级，记录自带接口格式声明，
           // 不再按连接协议设限，见 useGenerationModelManagement）
           customForm={generationCustomFormFor(addModelTo)}
+          recipes={interfaceRecipes}
+          recipesUnavailable={interfaceRecipesUnavailable}
           failureText={dialogFailure}
+          {...(formatOptions.length === 0 ? {} : { formatOptions })}
+          onCreateInterfaceFormat={createInterfaceFormatFromAddModel}
           onClose={() => {
             // 关掉弹层即清掉它自己的失败提示，下一次打开是干净的一次交互
             setDialogFailure(null);
@@ -876,12 +920,18 @@ function ProviderCard({
         }
       }}
       className={
-        'flex cursor-pointer flex-col gap-1 rounded-md bg-elevated px-3 py-2 transition-colors '
-        + (selected ? 'ring-1 ring-primary' : 'hover:bg-primary/5')
+        'flex cursor-pointer flex-col gap-1 rounded-md px-3 py-2 transition-colors '
+        + 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring '
+        + 'focus-visible:ring-offset-2 focus-visible:ring-offset-background '
+        + (selected
+          // 多行信息卡用 L3 软凹陷（docs/ui-selection-standard.md §5.1）：保留 accent 底，
+          // 内凹陷阴影 + 600 字重承担识别，不再用左侧条或 ring。
+          ? SELECTION_SOFT_CLASSES
+          : 'bg-elevated hover:bg-foreground/5')
       }
     >
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">{connection.display_name}</span>
+        <span className={cn('min-w-0 flex-1 truncate text-sm', selected ? 'font-semibold' : 'font-medium')}>{connection.display_name}</span>
         {/* StatusPill 不收 className（归 ProviderNoticeBar.tsx），shrink-0 由外层包裹承担；
             leading-none 压掉包裹 span 自身继承的 16px/24px 行盒（否则行 1 被空行盒撑到 ~24.5px，
             徽章本体只有 ~20px），行高回落到徽章本体 */}

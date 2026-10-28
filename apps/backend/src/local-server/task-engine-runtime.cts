@@ -32,24 +32,14 @@ import {
 const { sendReadTasks } = backendIpcSenderModule;
 const STALE_TASK_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
-type InFlightTaskEntry = {
-  controller: AbortController;
-  promise: Promise<unknown>;
-};
-
-const inFlightTasks = new Map<string, InFlightTaskEntry>();
-
-const cancelTaskExecution = (taskId: unknown) => {
-  const resolvedTaskId = normalizeString(taskId);
-  if (!resolvedTaskId) return false;
-  const entry = inFlightTasks.get(resolvedTaskId);
-  if (entry !== undefined && entry !== null && entry.controller) {
-    entry.controller.abort();
-    return true;
-  }
-  return false;
-};
-
+/**
+ * 恢复链（后端启动扫描）专用。
+ *
+ * 在途任务注册表与取消命令的**唯一实现**在 `task-executor.cts`（所有派发都经它登记，
+ * 取消路由与 agent 工具循环都消费那一份）。本模块曾另有一份从未被填充的 Map 与
+ * 同名 `cancelTaskExecution`，任何调用都会恒返回 false；已删除，不要在恢复链重新引入
+ * 第二份在途登记。
+ */
 const resumeIncompletePollingTasks = async (options: unknown = {}) => {
   const optionsValue = toRecord(options);
   const resolvedProjectPath =
@@ -65,7 +55,7 @@ const resumeIncompletePollingTasks = async (options: unknown = {}) => {
     await patchTaskRecord(record, {
       status: TASK_STATUS.FAILED,
       finishedAt: Date.now(),
-      error: { code, message },
+      error: { code, message, stage: "recovery" },
       progress: mergeTaskProgressPatch(toRecord(record).progress, {
         phase: null,
       } as TaskProgressPatch),
@@ -223,6 +213,5 @@ const resumeIncompletePollingTasks = async (options: unknown = {}) => {
 
 export {
   executeHttpTask,
-  cancelTaskExecution,
   resumeIncompletePollingTasks,
 };

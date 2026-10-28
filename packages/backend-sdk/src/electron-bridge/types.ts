@@ -180,6 +180,7 @@ export type ElectronBridge = {
   ) => Promise<ClipboardWriteImageResponse> | undefined;
   checkForUpdates: (manual: boolean) => Promise<AppUpdateCommandResult> | undefined;
   startUpdateDownload: () => Promise<AppUpdateCommandResult> | undefined;
+  cancelUpdateDownload: () => Promise<AppUpdateCommandResult> | undefined;
   installUpdate: () =>
     | Promise<AppUpdateCommandResult>
     | AppUpdateCommandResult | undefined;

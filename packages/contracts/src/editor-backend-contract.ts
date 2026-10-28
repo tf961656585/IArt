@@ -326,6 +326,10 @@ export const MediaRefPlaceholderSchema = z.object({
   mimeType: z.string().optional(),
   filename: z.string().optional(),
   fieldPath: z.string().optional(),
+  /** 媒体来源资产身份（提交面给出时随占位符一路带到序列化文件描述，供档案溯源）。 */
+  assetId: z.string().optional(),
+  /** 媒体来源素材位标识（产品级用途 id，提交面给出时同上）。 */
+  slotId: z.string().optional(),
   transport: z.enum([
     MEDIA_REF_TRANSPORT.PUBLIC_URL,
     MEDIA_REF_TRANSPORT.MULTIPART_FILE,
@@ -354,11 +358,23 @@ export const SerializedFormDataFieldSchema = z.object({
   value: z.unknown(),
 });
 
+/**
+ * 序列化 multipart 文件条目。
+ *
+ * - `filename` / `contentType` 是**出网值**（multipart part 上的两个标签），发送链只读这两个字段；
+ * - `sourceFilename` / `mimeType` / `assetId` / `slotId` 是**审计值**，由素材位占位符物化时带上，
+ *   不参与发送。二者的存在意义：出网值历史上被统一成 `file` / `application/octet-stream`，
+ *   档案若只看出网值就无法回答「发出去的是哪张资产、什么媒体类型」。
+ */
 export const SerializedFormDataFileSchema = z.object({
   name: z.string(),
   dataBase64: z.string().nullable(),
   contentType: z.string().nullable(),
   filename: z.string().nullable(),
+  sourceFilename: z.string().optional(),
+  mimeType: z.string().optional(),
+  assetId: z.string().optional(),
+  slotId: z.string().optional(),
 });
 
 export const SerializedFormDataSchema = z.object({

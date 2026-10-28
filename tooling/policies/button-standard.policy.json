@@ -104,9 +104,9 @@
         "note": "手风琴头 ×2（折叠控件触发器组成件）"
       },
       {
-        "file": "apps/hub/src/features/settings/provider-connection/ParameterOverridesEditor.tsx",
+        "file": "apps/hub/src/features/settings/components/ParameterValueControls.tsx",
         "condition": "②",
-        "note": "参数芯片移除 ×钮（芯片宿主场景完整定义 hover/focus/disabled）"
+        "note": "可选值芯片移除 ×钮（芯片宿主自行定义 hover 与 focus-visible ring；28px 最小档会撑破芯片行高）"
       },
       {
         "file": "apps/hub/src/features/settings/provider-connection/InfoHint.tsx",
@@ -122,6 +122,11 @@
         "file": "apps/hub/src/features/settings/provider-connection/ModelTable.tsx",
         "condition": "①",
         "note": "表格行内「服务商模型 ID」只读触发器（单元格的组成件：点击进入该单元格的行内编辑，视觉语义由行与单元格承载；hover/focus 由行宿主定义）"
+      },
+      {
+        "file": "apps/hub/src/features/settings/provider-connection/InterfaceRecipeFields.tsx",
+        "condition": "①+②",
+        "note": "路径发现结果列表行 ×N：整行可点以填入路径，视觉语义由列表面板承载；hover 由行自身定义，focus 由宿主列表定义；共享 Button 的 text-2xs 被 BTN-001 禁止，替换会撑高列表行"
       },
       {
         "file": "apps/editor/src/features/canvas/components/nodes/AgentNode.tsx",
@@ -147,6 +152,16 @@
         "file": "apps/editor/src/features/canvas/components/nodes/AssetNode.tsx",
         "condition": "②",
         "note": "媒体面 24/32px 圆钮群（节点宿主样式体系完整定义）"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/nodes/shared/VideoNodeSurface.tsx",
+        "condition": "②",
+        "note": "媒体面 34px 原地播放钮：hover/focus-visible 由组件类名完整定义（docs/editor/画布资产节点媒体播放-design.md §3.7），共享 Button 几何档位放不下媒体面圆钮形态"
+      },
+      {
+        "file": "apps/editor/src/features/canvas/components/nodes/shared/AudioAssetSurface.tsx",
+        "condition": "②",
+        "note": "音频卡片 30px 播放/暂停钮：hover/focus-visible 由组件类名完整定义（docs/editor/画布资产节点媒体播放-design.md §3.6/§3.7），卡片行内密度放不下共享 Button 最小档"
       },
       {
         "file": "apps/editor/src/features/canvas/components/nodes/ImageInputNode.tsx",
@@ -284,7 +299,7 @@
         "note": "HUD 触发器（预览面宿主场景完整定义，避免按钮嵌按钮）"
       },
       {
-        "file": "apps/editor/src/features/canvas/components/chrome/AssetNodeChrome.tsx",
+        "file": "apps/editor/src/features/canvas/components/chrome/MediaNodeChrome.tsx",
         "condition": "§10 登记例外",
         "note": "删除确认填充钮（实底红 #b91c1c + 白字、两主题固定，docs/ui-button-standard.md §10 登记例外，仅限画布删除确认场景）"
       }
@@ -371,7 +386,7 @@
       {
         "names": ["usage-btn", "confirm-fill"],
         "files": [
-          "apps/editor/src/features/canvas/components/chrome/AssetNodeChrome.tsx",
+          "apps/editor/src/features/canvas/components/chrome/MediaNodeChrome.tsx",
           "apps/editor/src/app/globals.css"
         ],
         "note": "§10 登记例外：画布删除确认填充（.usage-btn.confirm-fill 复合选择器与组件侧复合类名原样保留，实底红两主题固定）"

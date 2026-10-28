@@ -39,6 +39,13 @@ const MEDIA_TYPE_USER_LABEL: Record<'image' | 'video' | 'audio', string> = {
   audio: '音频',
 };
 
+/** 张数文案的量词（图片论张、音视频论段）。 */
+const SLOT_COUNT_UNIT: Record<'image' | 'video' | 'audio', string> = {
+  image: '张',
+  video: '段',
+  audio: '段',
+};
+
 const isMediaTypeSupportedByModel = (
   entry: PromptDockCatalogEntry,
   mediaType: 'image' | 'video' | 'audio',
@@ -154,8 +161,9 @@ export const runPromptDockPreflight = (
   }
 
   // 5. 必需参数缺失或非法（仅生成式：agent 形态不承载参数）
-  // prompt 已从模型能力包 parameter_schema 中剥离（保留键 `__prompt` 只存在于参数合并空间），
-  // required_fields / fields 不再出现 prompt，无需排除。提示词空值由第 1 步统一校验。
+  // prompt 不是模型参数：接口格式只经 `prompt_field`（保留键 `__prompt`）+ 请求规则承载；
+  // 用户自建格式的历史残留伪字段在 interface-format-store 读取时剥离（接口格式实体 §1.1.1）。
+  // 因此 required_fields / fields 不出现 prompt，无需排除；空值由第 1 步统一校验。
   if (!isAgentForm && entry) {
     for (const requiredKey of entry.parameter_schema.required_fields) {
       const value = draft.arguments[requiredKey];
@@ -210,6 +218,20 @@ export const runPromptDockPreflight = (
           field: problem.refId,
           exit: null,
           slot: { slotId: problem.slotId, mediaType: problem.mediaType },
+        });
+      } else if (problem.kind === 'slot-over-capacity') {
+        const unit = SLOT_COUNT_UNIT[problem.mediaType];
+        const overflow = problem.count - problem.maxFiles;
+        issues.push({
+          code: 'slot-capacity-exceeded',
+          message: `「${problem.label}」最多 ${problem.maxFiles} ${unit}，现在有 ${problem.count} ${unit}，请先移除 ${overflow} ${unit}。`,
+          field: problem.fieldKey,
+          exit: null,
+          slot: {
+            slotId: problem.slotId,
+            mediaType: problem.mediaType,
+            capacity: { count: problem.count, maxFiles: problem.maxFiles },
+          },
         });
       } else {
         issues.push({

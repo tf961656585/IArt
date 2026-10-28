@@ -25,7 +25,10 @@ import {
 } from "./model-package-catalog.shared.cts";
 import { normalizeTaskPollingStrategy } from "./model-package-catalog.task-plan.cts";
 
-const SUPPORTED_PAYLOAD_FORMATS = new Set(["json", "multipart", "stream"]);
+// `form` / `text` 是 2026-10-27 起自定义接口格式的请求体形态；`stream` 为历史声明保留读取。
+const SUPPORTED_PAYLOAD_FORMATS = new Set(["json", "multipart", "form", "text", "stream"]);
+const SUPPORTED_FORM_FIELD_STYLES = new Set(["dotted", "bracket"]);
+const SUPPORTED_FORM_ARRAY_STYLES = new Set(["repeat", "bracket", "index"]);
 const SUPPORTED_URL_INPUT_UPLOAD_MODES: Set<string> = new Set(
   Object.values(MODEL_ASSET_URL_INPUT_UPLOAD_MODE),
 );
@@ -365,6 +368,30 @@ export const normalizeRuntimeMeta = (
   ) {
     throw new Error(`runtime.payload_format_unknown:${payloadFormat}`);
   }
+  // 表单编码形态（`payload_format = 'form'` 时生效）。缺省留空：编码器按 dotted + repeat
+  // 兜底，与草稿契约的默认值同值。
+  const normalizeFormStyle = (
+    rawValue: unknown,
+    allowed: Set<string>,
+    errorCode: string,
+  ): string | undefined => {
+    const normalized = normalizeString(rawValue);
+    if (!normalized) return undefined;
+    if (!allowed.has(normalized)) {
+      throw new Error(`${errorCode}:${normalized}`);
+    }
+    return normalized;
+  };
+  const formFieldStyle = normalizeFormStyle(
+    runtime.form_field_style,
+    SUPPORTED_FORM_FIELD_STYLES,
+    "runtime.form_field_style_unknown",
+  );
+  const formArrayStyle = normalizeFormStyle(
+    runtime.form_array_style,
+    SUPPORTED_FORM_ARRAY_STYLES,
+    "runtime.form_array_style_unknown",
+  );
   // payload_format_rule: 运行时条件求值的 payload_format（与 payload_format 互斥）。
   // 用于单节点承载多种远端接口语义的场景（如文生图 + 图生图合并节点）。
   const payloadFormatRule = runtime.payload_format_rule;
@@ -435,6 +462,8 @@ export const normalizeRuntimeMeta = (
     workspace,
     payload_format: payloadFormat,
     payload_format_rule: normalizedPayloadFormatRule,
+    form_field_style: formFieldStyle,
+    form_array_style: formArrayStyle,
     url_input_upload_mode: urlInputUploadMode,
     url_input_upload_target_type: urlInputUploadTargetType,
     api_defaults: apiDefaults,

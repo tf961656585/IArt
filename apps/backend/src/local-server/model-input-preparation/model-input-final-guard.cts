@@ -1,4 +1,5 @@
 import { isMediaRefPlaceholder } from "@iart/contracts";
+import { isMultipartFileValue } from "./model-input-multipart-file.cts";
 import {
   isPlainObject,
   looksLikeBareBase64,
@@ -111,6 +112,7 @@ const guardMultipartResidual = (
     return { ok: true };
   }
   if (Buffer.isBuffer(value)) return { ok: true };
+  if (isMultipartFileValue(value)) return { ok: true };
   if (isMediaRefPlaceholder(value)) {
     return {
       ok: false,
@@ -150,6 +152,7 @@ const guardUnresolvedPlaceholder = (
     return { ok: true };
   }
   if (Buffer.isBuffer(value)) return { ok: true };
+  if (isMultipartFileValue(value)) return { ok: true };
   if (isMediaRefPlaceholder(value)) {
     return {
       ok: false,

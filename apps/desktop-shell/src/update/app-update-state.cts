@@ -74,9 +74,8 @@ export function downloadingState(latestVersion: string, progress: AppUpdateProgr
 }
 
 export function downloadedState(latestVersion: string, downloadPath: string | null, files: AppUpdateFile[]): AppUpdateState {
-  const installActions = resolveUpdatePlatform() === "darwin"
-    ? ["open-installer", "show-in-folder", "later"]
-    : ["quit-and-install", "open-installer", "later"];
+  // 引导式安装：安装动作按下载文件类型由 Hub / installUpdate 派生，投影不再产出 quit-and-install。
+  const installActions = ["open-installer", "show-in-folder", "later"];
   return AppUpdateStateSchema.parse({
     ...baseFields(Date.now()),
     status: "downloaded",

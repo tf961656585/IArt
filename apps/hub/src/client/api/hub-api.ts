@@ -23,8 +23,19 @@ import {
   CustomGenerationModelRemovalResponseSchema,
   FamilyTemplateParameterDescriptorSchema,
   OnboardingStateResponseSchema,
+  InterfaceRecipeDryRunResponseSchema,
+  InterfaceRecipeListResponseSchema,
+  InterfaceRecipePathDiscoveryResponseSchema,
+  InterfaceRecipeRemovalResponseSchema,
+  InterfaceRecipeResponseSchema,
+  InterfaceFormatDetailSchema,
+  InterfaceFormatListResponseSchema,
+  CustomInterfaceFormatCopyResponseSchema,
+  CustomInterfaceFormatRemovalResponseSchema,
+  CustomInterfaceFormatWriteResponseSchema,
 } from '@iart/contracts';
 import type {
+  CustomInterfaceFormatDraft,
   OnboardingStateUpdateBody,
 } from '@iart/contracts';
 import type {
@@ -50,6 +61,10 @@ export const HUB_API_ROUTES = Object.freeze({
   customGenerationModels: '/api/custom-generation-models',
   customGenerationModelById: '/api/custom-generation-models/',
   generationFamilyTemplateById: '/api/generation-family-templates/',
+  interfaceRecipes: '/api/interface-recipes',
+  interfaceRecipeById: '/api/interface-recipes/',
+  interfaceFormats: '/api/interface-formats',
+  interfaceFormatById: '/api/interface-formats/',
   onboardingState: '/api/onboarding-state',
 } as const);
 
@@ -402,6 +417,152 @@ export const createHubApiClient = (http: HubHttpClient): HubApiClient => {
         requestOptions(CustomGenerationModelResponseSchema, {
           method: 'PUT',
           body: payload,
+          headers: undefined,
+          cache: undefined,
+          signal: undefined,
+        }),
+      );
+    },
+    // ========== 接口配方（docs/custom-providers/接口配方-design.md） ==========
+    listInterfaceRecipes(signal) {
+      return http.requestJson(HUB_API_ROUTES.interfaceRecipes, requestOptions(InterfaceRecipeListResponseSchema, {
+        method: undefined,
+        body: undefined,
+        headers: undefined,
+        cache: 'no-store',
+        signal,
+      }));
+    },
+    createInterfaceRecipe(payload) {
+      return http.requestJson(HUB_API_ROUTES.interfaceRecipes, requestOptions(InterfaceRecipeResponseSchema, {
+        method: 'POST',
+        body: payload,
+        headers: undefined,
+        cache: undefined,
+        signal: undefined,
+      }));
+    },
+    updateInterfaceRecipe(recipeId, payload) {
+      return http.requestJson(
+        `${HUB_API_ROUTES.interfaceRecipeById}${encodeURIComponent(recipeId)}`,
+        requestOptions(InterfaceRecipeResponseSchema, {
+          method: 'PUT',
+          body: payload,
+          headers: undefined,
+          cache: undefined,
+          signal: undefined,
+        }),
+      );
+    },
+    deleteInterfaceRecipe(recipeId) {
+      return http.requestJson(
+        `${HUB_API_ROUTES.interfaceRecipeById}${encodeURIComponent(recipeId)}`,
+        requestOptions(InterfaceRecipeRemovalResponseSchema, {
+          method: 'DELETE',
+          body: undefined,
+          headers: undefined,
+          cache: undefined,
+          signal: undefined,
+        }),
+      );
+    },
+    dryRunInterfaceRecipe(payload) {
+      return http.requestJson(
+        `${HUB_API_ROUTES.interfaceRecipes}/dry-run`,
+        requestOptions(InterfaceRecipeDryRunResponseSchema, {
+          method: 'POST',
+          body: payload,
+          headers: undefined,
+          cache: undefined,
+          signal: undefined,
+        }),
+      );
+    },
+    discoverInterfaceRecipePaths(sample) {
+      return http.requestJson(
+        `${HUB_API_ROUTES.interfaceRecipes}/path-discovery`,
+        requestOptions(InterfaceRecipePathDiscoveryResponseSchema, {
+          method: 'POST',
+          body: { sample },
+          headers: undefined,
+          cache: undefined,
+          signal: undefined,
+        }),
+      );
+    },
+    // ========== 接口格式（docs/custom-providers/接口格式旅程-design.md） ==========
+    listInterfaceFormats(signal) {
+      return http.requestJson(HUB_API_ROUTES.interfaceFormats, requestOptions(InterfaceFormatListResponseSchema, {
+        method: undefined,
+        body: undefined,
+        headers: undefined,
+        cache: 'no-store',
+        signal,
+      }));
+    },
+    getInterfaceFormat(formatId, signal) {
+      return http.requestJson(
+        `${HUB_API_ROUTES.interfaceFormatById}${encodeURIComponent(formatId)}`,
+        requestOptions(InterfaceFormatDetailSchema, {
+          method: undefined,
+          body: undefined,
+          headers: undefined,
+          cache: 'no-store',
+          signal,
+        }),
+      );
+    },
+    discoverInterfaceFormatPaths(formatId, body) {
+      return http.requestJson(
+        `${HUB_API_ROUTES.interfaceFormatById}${encodeURIComponent(formatId)}/path-discovery`,
+        requestOptions(InterfaceRecipePathDiscoveryResponseSchema, {
+          method: 'POST',
+          body,
+          headers: undefined,
+          cache: undefined,
+          signal: undefined,
+        }),
+      );
+    },
+    createInterfaceFormat(body: CustomInterfaceFormatDraft) {
+      return http.requestJson(HUB_API_ROUTES.interfaceFormats, requestOptions(CustomInterfaceFormatWriteResponseSchema, {
+        method: 'POST',
+        body,
+        headers: undefined,
+        cache: undefined,
+        signal: undefined,
+      }));
+    },
+    updateInterfaceFormat(formatId: string, body: CustomInterfaceFormatDraft) {
+      return http.requestJson(
+        `${HUB_API_ROUTES.interfaceFormatById}${encodeURIComponent(formatId)}`,
+        requestOptions(CustomInterfaceFormatWriteResponseSchema, {
+          method: 'PUT',
+          body,
+          headers: undefined,
+          cache: undefined,
+          signal: undefined,
+        }),
+      );
+    },
+    deleteInterfaceFormat(formatId: string) {
+      return http.requestJson(
+        `${HUB_API_ROUTES.interfaceFormatById}${encodeURIComponent(formatId)}`,
+        requestOptions(CustomInterfaceFormatRemovalResponseSchema, {
+          method: 'DELETE',
+          body: undefined,
+          headers: undefined,
+          cache: undefined,
+          signal: undefined,
+        }),
+      );
+    },
+    copyInterfaceFormat(formatId: string) {
+      return http.requestJson(
+        `${HUB_API_ROUTES.interfaceFormatById}${encodeURIComponent(formatId)}/copy`,
+        requestOptions(CustomInterfaceFormatCopyResponseSchema, {
+          method: 'POST',
+          body: undefined,
           headers: undefined,
           cache: undefined,
           signal: undefined,

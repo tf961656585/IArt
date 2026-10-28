@@ -118,10 +118,6 @@ export type ImageDerivedOp =
   // 视频截帧弹窗产出血缘标签（媒体工具加工弹窗形态，非节点类型）
   | { type: 'videoFrameCapture'; timeSec: number; sourceAssetId: string | undefined; sourceSlotId: string | undefined };
 
-/** 视频派生操作血缘（写入产出 videoInput 素材节点 data） */
-export type VideoDerivedOp =
-  | { type: 'videoTrim'; startTime: number; endTime: number; withAudio: boolean; sourceAssetId: string | undefined; sourceSlotId: string | undefined };
-
 /** 节点任务信息 */
 export interface NodeTaskInfo {
   /** 后端正式任务ID（ack 后写入，正式任务链路唯一标识） */

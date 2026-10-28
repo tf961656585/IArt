@@ -150,9 +150,6 @@ const writeGenerationPackage = (packageRoot: string): void => {
       protocol: 'http',
       endpoint: '/v1/test',
       method: 'POST',
-      header_rules: [],
-      body_rules: [],
-      query_rules: [],
     },
     result_rule: { mode: 'sync', submit_response_id_path: '/id' },
     result_output_mapping: {

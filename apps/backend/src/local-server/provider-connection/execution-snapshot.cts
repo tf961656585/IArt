@@ -1,6 +1,7 @@
 import * as crypto from 'node:crypto';
 import {
   ExecutionSnapshotSchema,
+  type ExecutionProtocol,
   type ExecutionSnapshot,
   type BatchIntentSnapshot,
 } from '@iart/contracts';
@@ -11,6 +12,10 @@ import {
   type ActiveRouteTarget,
 } from './active-route-store.cts';
 import { getAdapter } from '../protocol-adapter/adapter-registry.cts';
+import { getInterfaceFormat } from '../interface-format/registry.cts';
+import { getCustomGenerationModelByRecordId } from './custom-generation-model-store.cts';
+import { resolveReferencedRecipe } from '../generation-declaration-projection.cts';
+import { toProtocolAuth } from './snapshot-protocol.cts';
 import { getCredentialVersion } from './credential-store.cts';
 import * as loggingModule from '../logging.cts';
 
@@ -55,6 +60,9 @@ const ERROR_CODES_MAP = {
   CONNECTION_NOT_ENABLED: 'connection_not_enabled',
   CREDENTIAL_MISSING: 'credential_missing',
   ADAPTER_NOT_FOUND: 'adapter_not_found',
+  FORMAT_NOT_FOUND: 'format_missing',
+  FORMAT_NOT_READY: 'format_not_ready',
+  RECIPE_MISSING: 'recipe_missing',
   REMOTE_MODEL_MISSING: 'remote_model_missing',
 } as const;
 
@@ -101,8 +109,8 @@ const buildExecutionSnapshot = (params: {
   // 两族记录的 schema 都要求协议字段必填，active route 投影因此恒有值。下面这次判空是执行边界的
   // 兜底（记录被外部改坏时不静默放行），不是「未命中原生正则」的分支——那类解析已随部署载体
   // 退场消失（spec 03 §8：不存在按 model_id 名称或正则推断协议）。
-  const modelProtocolAdapterId = access.protocol_adapter_id;
-  if (!modelProtocolAdapterId) {
+  const modelProtocolId = access.protocol_adapter_id;
+  if (!modelProtocolId) {
     loggingModule.logDebug('[execution-snapshot] model protocol unresolved (record has no protocol adapter)', {
       modelId,
       source: access.source,
@@ -114,38 +122,95 @@ const buildExecutionSnapshot = (params: {
       message: `model ${modelId} has no protocol adapter`,
     };
   }
-  const adapter = getAdapter(modelProtocolAdapterId);
-  if (!adapter) {
-    loggingModule.logDebug('[execution-snapshot] adapter not found', { adapterId: modelProtocolAdapterId });
-    return { ok: false, code: ERROR_CODES_MAP.ADAPTER_NOT_FOUND, message: `adapter not found: ${modelProtocolAdapterId}` };
+  // 生成侧协议由接口格式实体声明（2026-10-27 起无代码适配器）；对话侧仍是内置适配器。
+  // 快照同时冻结鉴权形状，之后编辑/删除格式不影响在跑任务。
+  let protocol: ExecutionProtocol;
+  let formatSubmitEndpoint: string | null = null;
+  let chatRelativeEndpoints: Readonly<Record<string, string>> = {};
+  if (access.source === 'custom_generation') {
+    const formatLookup = getInterfaceFormat(modelProtocolId);
+    if (formatLookup.kind === 'unknown') {
+      loggingModule.logDebug('[execution-snapshot] interface format not found', {
+        modelId,
+        formatId: modelProtocolId,
+      });
+      return {
+        ok: false,
+        code: ERROR_CODES_MAP.FORMAT_NOT_FOUND,
+        message: `interface format not found: ${modelProtocolId}`,
+      };
+    }
+    if (formatLookup.kind === 'pending') {
+      loggingModule.logDebug('[execution-snapshot] interface format not ready', {
+        modelId,
+        formatId: modelProtocolId,
+      });
+      return {
+        ok: false,
+        code: ERROR_CODES_MAP.FORMAT_NOT_READY,
+        message: `interface format not ready: ${modelProtocolId}`,
+      };
+    }
+    const format = formatLookup.format;
+    if (format.origin === 'user') {
+      const record = getCustomGenerationModelByRecordId(access.target_id);
+      // 用户自建格式没有内置行为默认：缺配方或配方解析不到时不可提交（接口配方-design §8.4）。
+      if (record === null || resolveReferencedRecipe(record) === null) {
+        loggingModule.logDebug('[execution-snapshot] user interface format requires a resolvable recipe', {
+          modelId,
+          recordId: access.target_id,
+          formatId: format.format_id,
+        });
+        return {
+          ok: false,
+          code: ERROR_CODES_MAP.RECIPE_MISSING,
+          message: `user interface format ${format.format_id} requires a resolvable recipe`,
+        };
+      }
+    }
+    protocol = {
+      kind: 'generation_format',
+      format_id: format.format_id,
+      format_version: format.version,
+      auth: toProtocolAuth(format),
+    };
+    const declared = format.transport.endpoints[format.transport.submit.endpoint_key];
+    formatSubmitEndpoint = typeof declared === 'string' && declared.trim() ? declared : null;
+  } else {
+    const adapter = getAdapter(modelProtocolId);
+    if (!adapter) {
+      loggingModule.logDebug('[execution-snapshot] adapter not found', { adapterId: modelProtocolId });
+      return { ok: false, code: ERROR_CODES_MAP.ADAPTER_NOT_FOUND, message: `adapter not found: ${modelProtocolId}` };
+    }
+    protocol = {
+      kind: 'chat_adapter',
+      adapter_id: adapter.adapter_id,
+      adapter_version: adapter.version,
+      auth: adapter.auth,
+    };
+    chatRelativeEndpoints = adapter.relative_endpoints ?? {};
   }
   const remoteModelId = access.remote_model_id.trim();
   if (!remoteModelId) {
     loggingModule.logDebug('[execution-snapshot] remote_model_id missing', { recordId: access.target_id });
     return { ok: false, code: ERROR_CODES_MAP.REMOTE_MODEL_MISSING, message: 'access record remote_model_id missing' };
   }
-  // 解析 endpoint：base_url + adapter relative endpoint（冻结版本与连接，前瞻占位）
-  // 各适配器 payload 形态不同（openai: generations/edits、gemini: interactions、seedance: tasks、veo: predictLongRunning），
-  // 快照的 resolved_endpoint 仅为"连接+适配器版本"冻结锚点，真实请求 endpoint 由 request-assembler 按 payloadFormat/mode 再决算；
-  // 此处按适配器选择最常用相对路径作为占位，避免跨适配器硬编码 generations 造成快照可读性偏差（后续阶段3由 request-assembler 回填精确 endpoint）。
+  // 解析 endpoint：base_url + 协议声明的提交相对路径（冻结版本与连接，前瞻占位）。
+  // 快照的 resolved_endpoint 只是「连接 + 协议版本」的冻结锚点，真实请求 endpoint 由
+  // request-assembler 按 payloadFormat/mode 再决算：生成侧取格式实体的提交端点，
+  // 对话侧取适配器 `relative_endpoints` 的首个可用值。
   const baseUrl = connection.base_url;
-  const adapterVersion = adapter.version;
-  const pickDefaultRelative = (): string => {
-    const rel = adapter.relative_endpoints ?? {};
-    if (adapter.adapter_id === 'openai-image-v1') return rel.generations ?? '/v1/images/generations';
-    if (adapter.adapter_id === 'gemini-image-interactions-v1') return rel.interactions ?? '/v1beta/interactions';
-    if (adapter.adapter_id === 'seedance-2-0-v1') return rel.tasks ?? '/api/v3/contents/generations/tasks';
-    if (adapter.adapter_id === 'veo-v1') return rel.predictLongRunning ?? '/v1beta/models/{model}:predictLongRunning';
-    // 可灵三个提交端点各是一个适配器（2026-10-19 拆分）：各自取自己的提交端点作占位，
-    // 不落到「首个可用相对路径」——三条目都带查询端点，靠顺序取到的值不可读。
-    if (adapter.adapter_id === 'kling-text2video-v1') return rel.textToVideo ?? '/text-to-video/kling-3.0';
-    if (adapter.adapter_id === 'kling-image2video-v1') return rel.imageToVideo ?? '/image-to-video/kling-3.0';
-    if (adapter.adapter_id === 'kling-omni-video-v1') return rel.omniVideo ?? '/omni-video/kling-3.0-omni';
-    // fallback：取首个可用相对路径
-    const first = Object.values(rel).find((v): v is string => typeof v === 'string' && Boolean(v.trim()));
-    return first ?? '/v1/images/generations';
+  const pickDefaultRelative = (): string | null => {
+    if (formatSubmitEndpoint !== null) return formatSubmitEndpoint;
+    const first = Object.values(chatRelativeEndpoints).find(
+      (value): value is string => typeof value === 'string' && Boolean(value.trim()),
+    );
+    return first ?? null;
   };
-  const resolvedEndpoint = `${baseUrl.replace(/\/+$/, '')}${pickDefaultRelative()}`;
+  const defaultRelative = pickDefaultRelative();
+  const resolvedEndpoint = defaultRelative === null
+    ? baseUrl
+    : `${baseUrl.replace(/\/+$/, '')}${defaultRelative}`;
   const credentialVersion = getCredentialVersion(connection.credential_ref) ?? connection.credential_version ?? 0;
   // model_version 取自 batchIntent 或固定占位
   const modelVersion = params.batchIntent?.model_version ?? '1.0.0';
@@ -158,8 +223,7 @@ const buildExecutionSnapshot = (params: {
     deployment_id: access.target_id,
     connection_id: connection.connection_id,
     connection_revision: connection.revision,
-    adapter_id: adapter.adapter_id,
-    adapter_version: adapterVersion,
+    protocol,
     base_url: baseUrl,
     remote_model_id: remoteModelId,
     credential_ref: connection.credential_ref,

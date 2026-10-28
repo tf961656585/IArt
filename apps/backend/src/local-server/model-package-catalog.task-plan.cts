@@ -3,6 +3,7 @@ import type {
   CatalogPreRequestDefinition,
   CatalogRawObject,
   CatalogTaskOutputMappingRule,
+  CatalogTaskPollingHttpQueryEntry,
   CatalogTaskPollingHttpRequest,
   CatalogTaskPollingStrategy,
   CatalogTaskRequestStrategy,
@@ -17,7 +18,6 @@ import type {
 } from "./model-package-catalog.types.cts";
 import * as loggingModule from './logging.cts';
 import {
-  isJsonValue,
   isObjectRecord,
   normalizePositiveInteger,
   normalizeString,
@@ -34,22 +34,57 @@ const normalizeTaskRequestStrategy = (
     value,
     "runtime_model.task_execution_plan_request_strategy_invalid",
   );
+  // 请求头 / 查询参数 / 请求体的取值只有一棵规则树（`runtime.payload_rules`）；
+  // 历史 `header_rules` / `body_rules` / `query_rules` 数组已从运行时形状删除，
+  // 旧记录里的残留键在此按缺省忽略（不报错、不复制）。
   const strategy: CatalogTaskRequestStrategy = {
     request_stage: normalizeString(record.request_stage),
     protocol: normalizeString(record.protocol),
     endpoint: normalizeString(record.endpoint),
     method: normalizeString(record.method),
-    header_rules: Array.isArray(record.header_rules)
-      ? record.header_rules.filter(isJsonValue)
-      : [],
-    body_rules: Array.isArray(record.body_rules)
-      ? record.body_rules.filter(isJsonValue)
-      : [],
-    query_rules: Array.isArray(record.query_rules)
-      ? record.query_rules.filter(isJsonValue)
-      : [],
   };
   return strategy;
+};
+
+/** 固定请求头归一：对象与 `[{name,value}]` 两种声明形态都接受（实体 → 运行时的接缝）。 */
+const normalizeFixedHeaderRecord = (value: unknown): Record<string, string> => {
+  const result: Record<string, string> = {};
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (!isObjectRecord(item)) continue;
+      const name = normalizeString(item.name);
+      if (!name) continue;
+      const rawValue = item.value;
+      result[name] = typeof rawValue === "string" ? rawValue : normalizeString(rawValue);
+    }
+    return result;
+  }
+  if (!isObjectRecord(value)) return result;
+  for (const [name, rawValue] of Object.entries(value)) {
+    if (!name) continue;
+    if (rawValue === undefined || rawValue === null) continue;
+    result[name] = typeof rawValue === "string" ? rawValue : String(rawValue);
+  }
+  return result;
+};
+
+const normalizePollingQuery = (value: unknown): CatalogTaskPollingHttpQueryEntry[] => {
+  if (!Array.isArray(value)) return [];
+  const entries: CatalogTaskPollingHttpQueryEntry[] = [];
+  for (const item of value) {
+    if (!isObjectRecord(item)) continue;
+    const name = normalizeString(item.name);
+    if (!name) {
+      loggingModule.logDebug("[catalog.task-plan] polling query entry missing name, skipped", undefined);
+      continue;
+    }
+    const rawValue = item.value;
+    entries.push({
+      name,
+      value: typeof rawValue === "string" ? rawValue : rawValue === undefined || rawValue === null ? "" : String(rawValue),
+    });
+  }
+  return entries;
 };
 export const normalizeTaskPollingStrategy = (
   value: unknown,
@@ -69,8 +104,11 @@ export const normalizeTaskPollingStrategy = (
   const normalizedRequest = {} as CatalogTaskPollingHttpRequest;
   normalizedRequest.url_template = normalizeString(request.url_template);
   normalizedRequest.method = normalizeString(request.method);
-  setJsonValue(normalizedRequest, "headers", request.headers);
+  normalizedRequest.headers = normalizeFixedHeaderRecord(request.headers);
+  normalizedRequest.query = normalizePollingQuery(request.query);
   setJsonValue(normalizedRequest, "body", request.body);
+  normalizedRequest.body_format = normalizeString(request.body_format) === "form" ? "form" : "json";
+  normalizedRequest.content_type = normalizeString(request.content_type) || null;
   return {
     request: normalizedRequest,
     polling: {
@@ -114,6 +152,8 @@ const normalizeTaskResultRule = (value: unknown): CatalogTaskResultRule => {
     record.failure_condition,
   );
   if (failureCondition !== undefined) rule.failure_condition = failureCondition;
+  const failureReason = normalizeString(record.failure_reason);
+  if (failureReason) rule.failure_reason = failureReason;
   const note = normalizeString(record.note);
   if (note) rule.note = note;
   return rule;
@@ -205,6 +245,10 @@ const normalizeTaskResultAcquisitionStrategy = (
   strategy.identity_source = normalizeString(record.identity_source);
   const identityPath = normalizeTaskResultIdentityPath(record.identity_path);
   if (identityPath !== undefined) strategy.identity_path = identityPath;
+  strategy.accept = normalizeString(record.accept) || undefined;
+  strategy.media_type = normalizeString(record.media_type) || undefined;
+  // 结果获取请求的固定请求头（由格式 `api.headers.*` 字面量派生并随策略冻结）。
+  strategy.request_headers = normalizeFixedHeaderRecord(record.request_headers);
   if (record.request_strategy === null) {
     strategy.request_strategy = null;
   } else if (record.request_strategy !== undefined) {
@@ -222,6 +266,8 @@ const normalizeTaskResultAcquisitionStrategy = (
   );
   if (failureCondition !== undefined)
     strategy.failure_condition = failureCondition;
+  strategy.requires_auth =
+    typeof record.requires_auth === "boolean" ? record.requires_auth : false;
   const note = normalizeString(record.note);
   if (note) strategy.note = note;
   return strategy;
@@ -240,6 +286,8 @@ const normalizeTaskResultOutputMapping = (
           .map((rule) => normalizeTaskOutputMappingRule(rule))
           .filter(notNullish)
       : [];
+  mapping.requires_auth =
+    typeof record.requires_auth === "boolean" ? record.requires_auth : false;
   const downloadRequiredCondition = normalizeTaskResultCondition(
     record.download_required_condition,
   );

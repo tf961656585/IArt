@@ -115,6 +115,48 @@ const trimLongInlineSummary = (value: string): string => {
   return `${value.slice(0, 137).trim()}...`;
 };
 
+/**
+ * 失败阶段的兜底摘要（设计文档 §7.2）。
+ *
+ * 只在服务商没有给出用户可读原因、且 HTTP 状态查表无结果时使用；优先顺序仍是
+ * knownSummary → userMessage → stage 兜底 → message 原文。阶段文案不得拼错误码、
+ * HTTP 状态码、路径或异常原文。
+ */
+const resolveStageSummary = (failure: RuntimeTaskFailure | null): string | null => {
+  const stage = failure?.stage;
+  if (!stage) return null;
+  switch (stage) {
+    case "polling_request": {
+      const httpStatus = readHttpStatusFromDetails(failure);
+      if (httpStatus !== null && (httpStatus === 429 || httpStatus >= 500)) {
+        return "查询结果时，服务暂时不可用。";
+      }
+      if (httpStatus !== null && httpStatus >= 400) {
+        return "查询结果时，服务那边没能处理这次请求。";
+      }
+      return "查询结果时没能连上服务。";
+    }
+    case "polling_timeout":
+      return "等待结果超时，服务一直没有返回完成状态。";
+    case "result_mapping":
+      return "服务返回了结果，但没能识别出可用的内容。";
+    case "submit":
+      return "提交失败。";
+    case "remote_failure":
+      return "服务商判定这次生成失败。";
+    case "download":
+      return "结果下载失败。";
+    case "result_acquisition":
+      return "没能拿到结果地址。";
+    case "recovery":
+      return "任务收尾时出错了。";
+    case "unknown":
+      return "这次生成失败了。";
+    default:
+      return null;
+  }
+};
+
 export function resolveTaskFailurePresentation({
   taskInfo,
   backendMessage,
@@ -135,6 +177,7 @@ export function resolveTaskFailurePresentation({
   const summarySource =
     knownSummary ??
     normalizeString((failure !== null && failure !== undefined ? failure.userMessage : undefined)) ??
+    resolveStageSummary(failure) ??
     normalizeString((failure !== null && failure !== undefined ? failure.message : undefined)) ??
     legacyError ??
     fallback;

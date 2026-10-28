@@ -23,6 +23,7 @@ import {
 } from '@iart/contracts';
 import { resolveChatAdapterIdFromProtocolAdapter } from '@iart/contracts';
 import { buildExecutionSnapshot } from './provider-connection/execution-snapshot.cjs';
+import { resolveSnapshotProtocol } from './provider-connection/snapshot-protocol.cjs';
 import { acquireLease, releaseLease } from './provider-connection/credential-store.cjs';
 import { getCustomChatModel } from './provider-connection/custom-chat-model-store.cts';
 import * as loggingModule from './logging.cjs';
@@ -186,6 +187,11 @@ async function resolveApiConfig(
   if (!credentialRef) {
     throw new Error(`chat model connection carries no credential: ${modelAssetId}`);
   }
+  // 对话模型只能解析出对话适配器；生成格式出现在这里说明记录与目录口径错位，显式失败。
+  const protocol = resolveSnapshotProtocol(snapshot);
+  if (protocol === null || protocol.kind !== 'chat_adapter') {
+    throw new Error(`chat model protocol unresolved: ${modelAssetId}`);
+  }
   const leaseResult = await acquireLease({
     connectionId: snapshot.connection_id,
     credentialRef,
@@ -198,7 +204,7 @@ async function resolveApiConfig(
   return {
     apiKey: leaseResult.value,
     baseUrl: snapshot.base_url,
-    protocolAdapterId: snapshot.adapter_id,
+    protocolAdapterId: protocol.adapter_id,
     remoteModelId: snapshot.remote_model_id,
     leaseId: leaseResult.lease.leaseId,
   };

@@ -51,7 +51,6 @@ interface TaskEngineModule {
   resumeIncompletePollingTasks: (options: { projectPath: string | undefined; limit: number | undefined }) => Promise<void>;
   isTaskFinalStatus: (status: string) => boolean;
   normalizeTaskStatus: (status: unknown) => string;
-  cancelTaskExecution: () => void;
 }
 
 interface BackendIpcSenderModule {
@@ -340,11 +339,8 @@ const handleProjectScopeMessage = (rawMessage: unknown): boolean => {
 
 const shutdown = () => {
   try {
-    const { cancelTaskExecution } = typedTaskEngine;
-    if (typeof cancelTaskExecution === 'function') {
-      // Shutdown 只需要取消已知的 in-flight tasks，
-      // 不再通过 listTaskRecords 扫描文件系统
-    }
+    // 在途任务的取消只有 `task-executor.cts` 一份实现；进程退出不在这里另发取消命令
+    // （旧分支只解构了 task-engine 的重复导出且从不调用，已随该重复导出一起删除）。
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1500).unref();
   } catch {

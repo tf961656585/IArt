@@ -1,7 +1,7 @@
 {
   "name": "iartstudio-frontend",
   "private": true,
-  "version": "0.6.7",
+  "version": "0.6.8",
   "engines": {
     "node": ">=22.0.0"
   },
@@ -34,7 +34,7 @@
     "validate:models": "tsx tooling/scripts/validate-model-index.ts",
     "typecheck": "pnpm typecheck:workspaces",
     "typecheck:workspaces": "tsc -p packages/contracts/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/contracts.tsbuildinfo && tsc -p packages/model-asset-runtime/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/model-asset-runtime.tsbuildinfo && tsc -p packages/domain/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/domain.tsbuildinfo && tsc -p packages/backend-sdk/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/backend-sdk.tsbuildinfo && tsc -p packages/utils/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/utils.tsbuildinfo && tsc -p apps/backend/tsconfig.typecheck.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/backend-typecheck.tsbuildinfo && tsc -p apps/desktop-shell/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/desktop-shell.tsbuildinfo && tsc -p apps/editor/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/editor.tsbuildinfo && tsc -p apps/hub/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/hub.tsbuildinfo && tsc -p tooling/tsconfig.json --pretty --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/tooling.tsbuildinfo",
-    "check:types-and-boundaries": "pnpm build:typecheck-deps && pnpm typecheck:workspaces && pnpm lint && pnpm guard:stable-business-types && pnpm guard:canvas-selection-ownership && pnpm guard:dialog-sizing && pnpm guard:media-fit-contain && pnpm guard:elevation-z && pnpm guard:escape-stack && pnpm guard:css-undefined-vars && pnpm guard:css-size-tokens && pnpm guard:button-standard && pnpm guard:spec-test-linkage",
+    "check:types-and-boundaries": "pnpm build:typecheck-deps && pnpm typecheck:workspaces && pnpm lint && pnpm guard:stable-business-types && pnpm guard:canvas-selection-ownership && pnpm guard:dialog-sizing && pnpm guard:media-fit-contain && pnpm guard:elevation-z && pnpm guard:escape-stack && pnpm guard:css-undefined-vars && pnpm guard:css-size-tokens && pnpm guard:button-standard && pnpm guard:form-control-colors && pnpm guard:spec-test-linkage",
     "test": "node ./tooling/scripts/validate-filenames.mjs && pnpm abi:node -- --verify && pnpm build && vitest run",
     "test:integration": "pnpm abi:node -- --verify && pnpm build && vitest run testing/integration",
     "test:watch": "vitest",
@@ -82,6 +82,7 @@
     "guard:css-undefined-vars": "node ./tooling/scripts/guard-css-undefined-vars.mjs",
     "guard:css-size-tokens": "node ./tooling/scripts/guard-css-size-tokens.mjs",
     "guard:button-standard": "node ./tooling/scripts/guard-button-standard.mjs",
+    "guard:form-control-colors": "node ./tooling/scripts/guard-form-control-colors.mjs",
     "guard:spec-test-linkage": "node ./tooling/scripts/guard-spec-test-linkage.mjs",
     "guard:media-input-source-kind-coverage": "node ./tooling/scripts/guard-media-input-source-kind-coverage.mjs",
     "guard:no-media-input-downgrade": "node ./tooling/scripts/guard-no-media-input-downgrade.mjs",
@@ -91,6 +92,7 @@
     "guard:local-media-url-resolution": "node ./tooling/scripts/guard-local-media-url-resolution.mjs",
     "check:preflight": "pnpm check:types-and-boundaries && pnpm test:scripts && pnpm guard:no-internal-timeout && pnpm guard:ipc-contract-parse && pnpm guard:contract-ownership && pnpm guard:media-input-source-kind-coverage && pnpm guard:no-media-input-downgrade && pnpm guard:model-input-modalities && pnpm guard:no-structural-fields-in-normalized-arguments && pnpm guard:nested-formdata-body-handled && pnpm guard:no-runtime-json-leak && pnpm guard:no-json-clone && pnpm guard:local-media-url-resolution && pnpm guard:desktop-runtime-deps && pnpm ensure:desktop-deps && pnpm build:desktop-runtime && pnpm guard:public-relay-capabilities && pnpm verify:desktop-smoke",
     "diagnose:preflight": "node ./tooling/scripts/diagnose-preflight.mjs",
+    "verify:selection-contrast": "node ./tooling/scripts/selection-contrast.mjs --bg \"0.95 0.03 277\" --fg \"0.30 0.13 277\" --depth-alpha 0.66 --edge white:0.82 --floor 2.5 && node ./tooling/scripts/selection-contrast.mjs --bg \"0.30 0.06 277\" --fg \"0.85 0.04 277\" --depth-alpha 0.70 --depth-color black --edge fg:0.40 --floor 2.5",
     "desktop:run-built": "pnpm ensure:desktop-deps && electron ./apps/desktop-shell/dist/main.cjs",
     "desktop:dev:fast": "pnpm build:desktop-runtime && pnpm desktop:run-built"
   },

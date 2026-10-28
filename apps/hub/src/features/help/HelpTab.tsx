@@ -12,7 +12,7 @@ const QUICK_LINKS: { tab: string; label: string }[] = [
 ];
 
 const FAQ_ITEMS: { question: string; answer: string }[] = [
-  { question: '怎么切换要用的模型？', answer: '打开项目后，在生成入口的模型列表里选择。要加别的模型，去设置页的服务商详情里点「添加模型」，填上模型 ID 和接口类型就行。' },
+  { question: '怎么切换要用的模型？', answer: '打开项目后，在生成入口的模型列表里选择。要加别的模型，去设置页的服务商详情里点「添加模型」，填上模型 ID 和接口格式就行。' },
   { question: '生成记录在哪里看？', answer: '在「任务监控」里选择项目，就能看到这个项目的全部生成任务和进展。' },
 ];
 

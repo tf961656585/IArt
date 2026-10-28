@@ -21,7 +21,7 @@ import { DEFAULT_SNAP_GRID } from "../../types";
 import type { ContainerGapGeometry } from "../../utils/containerGapHitTest";
 import { CharacterDock } from "../character/CharacterDock";
 import { CanvasContextMenu } from "./CanvasContextMenu";
-import { AgentDeleteConfirmHost, AgentNodeChrome, AssetNodeChrome } from "../chrome";
+import { AgentDeleteConfirmHost, AgentNodeChrome, MediaNodeChrome, MediaToolDialogHost } from "../chrome";
 import { NodeCanvasBundleProgressOverlays } from "./NodeCanvasBundleProgressOverlays";
 import { NodeCanvasFlowLayer } from "./NodeCanvasFlowLayer";
 import {
@@ -506,7 +506,8 @@ export function NodeCanvas({
       />
       <MarqueeSelectionOverlay marqueeState={marqueeState} />
       {/* 资产节点选中态双层 chrome（设计层 node-chrome：顶栏加工工具 / 底栏路由动作） */}
-      <AssetNodeChrome canvasRef={canvasRootRef} />
+      <MediaNodeChrome canvasRef={canvasRootRef} />
+      <MediaToolDialogHost />
       {/* Agent 节点选中态工具栏（使用 agent｜解散｜删除；会话视图随选中驱动进入打开，spec docs/agent/02） */}
       <AgentNodeChrome canvasRef={canvasRootRef} />
       {/* Agent 删除确认框宿主（AG-CT-011：所有删除入口经确认请求通道汇聚于此，禁旁路） */}

@@ -145,6 +145,18 @@ export const registerDesktopIpcHandlers = ({
     }
   });
 
+  ipcMain.handle("cancel-update-download", async () => {
+    try {
+      return AppUpdateCommandResultSchema.parse(await updater.cancelDownload());
+    } catch (error) {
+      return AppUpdateCommandResultSchema.parse({
+        status: "failed",
+        error: { message: toErrorMessage(error) },
+        state: updater.buildUpdateStateSnapshot(),
+      });
+    }
+  });
+
   ipcMain.handle("install-update", () => {
     return AppUpdateCommandResultSchema.parse(updater.installUpdate());
   });

@@ -414,7 +414,7 @@ export function AnnotationOverlay({ onOpenContextMenu }: AnnotationOverlayProps)
                     className={cn(
                       'w-full h-full resize-none bg-transparent',
                       'outline-none text-sm leading-5',
-                      'placeholder:text-muted-foreground/70'
+                      'placeholder:text-muted-foreground'
                     )}
                     style={{
                       fontSize,

@@ -7,7 +7,10 @@ import { Paperclip } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
 import { usePromptDockStore } from '../promptDockStore';
-import { addNodesToReferences, resolveReferenceCandidate } from '../referenceOps';
+import {
+  addNodesToReferences,
+  resolveReferenceAdmission,
+} from '../referenceOps';
 import { reassignSlot } from '../referenceSlotModel';
 import type { PromptDockCatalogEntry } from '@/client/api/promptDockApi';
 import { PromptDockReferenceAreaChip } from './PromptDockReferenceAreaChip';
@@ -18,21 +21,17 @@ import { PromptDockReferenceSlotBadge } from './PromptDockReferenceSlotBadge';
  * chip 形态对齐原型（prototypes/shared/promptdock-refs.js）：真实媒体缩略图 +
  * 资产标签 + hover 放大预览（详见 PromptDockReferenceAreaChip）。
  * 支持：识别资产、移除参考、调整顺序（本 MVP 提供移除，顺序按加入顺序）。
- * 「加入选中」走共享操作层 referenceOps（去重 + 仅图片资产/媒体类型判定，
- * 与画布资产节点选中态底栏「用作参考」同一实现，spec PD-MR-003/004）；
+ * 「加入选中」走共享操作层 referenceOps（去重 + 当前模型媒体能力/参考位余量准入，
+ * 与画布素材选中态底栏「用作参考」同一实现，spec PD-MR-003/004）；
  * 反馈在本面收敛为按钮行内短文案，不弹 toast。
  */
 
 /** 行内反馈自动消失时长 */
 const INLINE_NOTICE_TTL_MS = 2500;
 
-/** 行内反馈种类：duplicate = 全部命中已有引用；unsupported = 选中项不符参考要求 */
-type InlineNoticeKind = 'duplicate' | 'unsupported';
-
-const INLINE_NOTICE_COPY: Record<InlineNoticeKind, string> = {
-  duplicate: '已在参考里',
-  unsupported: '当前选中不能作参考',
-};
+/** 固定的行内反馈文案（容量类文案随结果携带，不走这两个常量）。 */
+const NOTICE_DUPLICATE = '已在参考里';
+const NOTICE_UNSUPPORTED = '当前选中不能作参考';
 
 export function PromptDockReferenceArea({
   entry = null,
@@ -46,7 +45,7 @@ export function PromptDockReferenceArea({
   const nodeGraph = useCanvasStore((s) => s.nodeGraph);
   const mediaAssets = useCanvasStore((s) => s.mediaAssets);
 
-  const [notice, setNotice] = useState<InlineNoticeKind | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const selectedNodes = useMemo(
@@ -54,12 +53,30 @@ export function PromptDockReferenceArea({
     [nodeGraph, selectedNodeIds],
   );
 
-  // 候选数 = 选中且符合参考要求（复用操作层准入判定，重复引用也计入）
-  const eligibleCount = useMemo(
+  // 逐项准入预判（与「加入选中」共用同一判定）：当前模型接受该媒体类型 + 该类型参考位有余量。
+  // 重复引用直接放行（由合并层记「已在参考里」）。
+  const admissions = useMemo(
     () =>
-      selectedNodes.filter((n) => resolveReferenceCandidate(n, mediaAssets).ok).length,
-    [selectedNodes, mediaAssets],
+      selectedNodes.map((node) => ({
+        node,
+        admission: resolveReferenceAdmission({ node, mediaAssets, entry, references }),
+      })),
+    [selectedNodes, mediaAssets, entry, references],
   );
+
+  const eligibleCount = useMemo(
+    () => admissions.filter(({ admission }) => admission.ok).length,
+    [admissions],
+  );
+
+  // 有选中但一项都加不进去时，把第一项被拒原因挂在禁用按钮上（否则用户只看到一个灰按钮）。
+  const blockedReason = useMemo(() => {
+    if (eligibleCount > 0) return undefined;
+    for (const { admission } of admissions) {
+      if (!admission.ok) return admission.reason;
+    }
+    return undefined;
+  }, [admissions, eligibleCount]);
 
   const clearNotice = useCallback(() => {
     setNotice(null);
@@ -69,8 +86,8 @@ export function PromptDockReferenceArea({
     }
   }, []);
 
-  const showNotice = useCallback((kind: InlineNoticeKind) => {
-    setNotice(kind);
+  const showNotice = useCallback((text: string) => {
+    setNotice(text);
     if (noticeTimerRef.current !== null) clearTimeout(noticeTimerRef.current);
     noticeTimerRef.current = setTimeout(() => {
       noticeTimerRef.current = null;
@@ -99,16 +116,28 @@ export function PromptDockReferenceArea({
     }
     if (result.kind === 'added') {
       // 部分有效同批只加有效项：chip 数量变化即反馈，不再提示。
+      // 例外是容量不足——用户会以为整批都加进去了，必须说明超量的那几张没加入。
+      const capacityRejection = result.rejected.find(
+        (rejected) => rejected.kind === 'slot-capacity-exceeded',
+      );
+      if (capacityRejection !== undefined) {
+        showNotice(capacityRejection.reason);
+        return;
+      }
       clearNotice();
       return;
     }
     if (result.kind === 'duplicate') {
-      showNotice('duplicate');
+      showNotice(NOTICE_DUPLICATE);
       return;
     }
-    // 全部不符且无新增：存在真实类型不符才提示；纯不可访问已留痕静默。
-    if (result.rejected.some((rejected) => rejected.kind === 'media-unsupported')) {
-      showNotice('unsupported');
+    // 全部不符且无新增：存在媒体不支持才提示（文案由准入层按模型能力给出，
+    // 如「当前模型不支持视频参考」）；纯不可访问已留痕静默。
+    const unsupported = result.rejected.find(
+      (rejected) => rejected.kind === 'media-unsupported',
+    );
+    if (unsupported !== undefined) {
+      showNotice(unsupported.reason.length > 0 ? unsupported.reason : NOTICE_UNSUPPORTED);
     } else {
       clearNotice();
     }
@@ -154,14 +183,18 @@ export function PromptDockReferenceArea({
         className="gap-1"
         onClick={addSelectedAssets}
         disabled={eligibleCount === 0}
-        title={eligibleCount === 0 ? '在画布选中素材后可加入' : undefined}
+        title={
+          eligibleCount === 0
+            ? (blockedReason ?? '在画布选中素材后可加入')
+            : undefined
+        }
         data-testid="promptdock-add-references"
       >
         <IconPlus size={14} />
         {eligibleCount > 0 ? `加入选中 (${eligibleCount})` : '加入选中'}
       </Button>
       <span aria-live="polite" className="text-[11px] whitespace-nowrap text-(--st-failed-text)">
-        {notice !== null ? INLINE_NOTICE_COPY[notice] : ''}
+        {notice ?? ''}
       </span>
     </div>
   );

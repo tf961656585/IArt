@@ -64,6 +64,21 @@ import type {
   CustomGenerationModelRemovalResponse,
   FamilyTemplateParameterDescriptor,
   OnboardingStateResponse,
+  InterfaceRecipeCreateBody,
+  InterfaceRecipeDryRunBody,
+  InterfaceRecipeDryRunResponse,
+  InterfaceRecipeListResponse,
+  InterfaceRecipePathDiscoveryResponse,
+  InterfaceRecipeRemovalResponse,
+  InterfaceRecipeResponse,
+  InterfaceRecipeUpdateBody,
+  InterfaceFormatDetail,
+  InterfaceFormatListResponse,
+  InterfaceFormatPathDiscoveryBody,
+  CustomInterfaceFormatCopyResponse,
+  CustomInterfaceFormatDraft,
+  CustomInterfaceFormatRemovalResponse,
+  CustomInterfaceFormatWriteResponse,
 } from '@iart/contracts';
 import type {
   OpenEditorWindowRequest,
@@ -86,6 +101,8 @@ export interface HubPlatformBridge {
   getAppVersion(): Promise<string | null>;
   checkForUpdates(manual: boolean): Promise<AppUpdateCommandResult>;
   startUpdateDownload(): Promise<AppUpdateCommandResult>;
+  /** 取消进行中的下载：桥接回到 available（不算失败），非下载态返回 skipped。 */
+  cancelUpdateDownload(): Promise<AppUpdateCommandResult>;
   installUpdate(): Promise<AppUpdateCommandResult>;
   revealDownloadedUpdate(): Promise<AppUpdateCommandResult>;
   getUpdateState(): Promise<AppUpdateState | null>;
@@ -188,7 +205,7 @@ export interface HubApiClient {
   loadTasks(params: { projectPath: string; status: HubTaskSummaryItem['status'] | undefined; limit: number | undefined; offset: number | undefined }, signal: AbortSignal | undefined): Promise<HubTaskListResponse>;
   listProviderConnections(signal: AbortSignal | undefined): Promise<ProviderConnectionListResponse>;
   /**
-   * 创建服务商。接口类型不在连接上配置（2026-09-29 起摘除连接级预选）——
+   * 创建服务商。接口格式不在连接上配置（2026-09-29 起摘除连接级预选）——
    * 它是模型记录的属性，添加模型时再选。
    */
   createProviderConnection(payload: {
@@ -241,6 +258,38 @@ export interface HubApiClient {
    * 参数编辑器官方区的数据源；响应由 contracts schema 在客户端 parse。
    */
   getGenerationFamilyTemplate(familyAdapterId: string, signal: AbortSignal | undefined): Promise<FamilyTemplateParameterDescriptor>;
+  /**
+   * 接口配方（docs/custom-providers/接口配方-design.md）：全局公共库，跨连接共享。
+   * 六个端点的响应都在客户端用 contracts schema parse，不用 `as` 断言。
+   */
+  listInterfaceRecipes(signal: AbortSignal | undefined): Promise<InterfaceRecipeListResponse>;
+  createInterfaceRecipe(payload: InterfaceRecipeCreateBody): Promise<InterfaceRecipeResponse>;
+  updateInterfaceRecipe(recipeId: string, payload: InterfaceRecipeUpdateBody): Promise<InterfaceRecipeResponse>;
+  deleteInterfaceRecipe(recipeId: string): Promise<InterfaceRecipeRemovalResponse>;
+  /** 样本试跑（纯本地计算，不发网络请求）：判定结论、命中路径、抽取到的产物。 */
+  dryRunInterfaceRecipe(payload: InterfaceRecipeDryRunBody): Promise<InterfaceRecipeDryRunResponse>;
+  /** 响应样本路径发现：展开样本里全部可用字段路径与取值。 */
+  discoverInterfaceRecipePaths(sample: unknown): Promise<InterfaceRecipePathDiscoveryResponse>;
+  /**
+   * 接口格式（docs/custom-providers/接口格式旅程-design.md §1.2）：
+   * 只读列表 / 详情 / 样本路径发现。三个端点的响应都在客户端用 contracts schema parse。
+   */
+  listInterfaceFormats(signal: AbortSignal | undefined): Promise<InterfaceFormatListResponse>;
+  getInterfaceFormat(formatId: string, signal: AbortSignal | undefined): Promise<InterfaceFormatDetail>;
+  /** 格式侧路径发现：请求体可附响应头（与配方侧那份 `.strict() {sample}` 不共用）。 */
+  discoverInterfaceFormatPaths(
+    formatId: string,
+    body: InterfaceFormatPathDiscoveryBody,
+  ): Promise<InterfaceRecipePathDiscoveryResponse>;
+  /** 用户自建格式（同步草稿）：创建、更新、删除；响应含实体身份与自动生成的判定配方。 */
+  createInterfaceFormat(body: CustomInterfaceFormatDraft): Promise<CustomInterfaceFormatWriteResponse>;
+  updateInterfaceFormat(
+    formatId: string,
+    body: CustomInterfaceFormatDraft,
+  ): Promise<CustomInterfaceFormatWriteResponse>;
+  deleteInterfaceFormat(formatId: string): Promise<CustomInterfaceFormatRemovalResponse>;
+  /** 复制为我的格式：服务端整实体克隆，返回新格式身份与可选的派生判定。 */
+  copyInterfaceFormat(formatId: string): Promise<CustomInterfaceFormatCopyResponse>;
   /** 首次指引展示态（docs/hub/首次指引-design.md §4.1）：独立小文件，不经 /api/config。 */
   getOnboardingState(signal: AbortSignal | undefined): Promise<OnboardingStateResponse>;
   dismissOnboardingGuide(): Promise<OnboardingStateResponse>;

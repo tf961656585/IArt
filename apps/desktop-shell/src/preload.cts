@@ -186,9 +186,11 @@ contextBridge.exposeInMainWorld("electron", {
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
   // 检查更新
   checkForUpdates: (manual: boolean) => ipcRenderer.invoke("check-for-updates", manual),
-  // 开始下载更新
+  // 开始下载更新（由用户显式触发）
   startUpdateDownload: () => ipcRenderer.invoke("start-update-download"),
-  // 安装更新并重启
+  // 取消正在进行的更新下载（仅下载中有效，取消后回到发现新版本状态）
+  cancelUpdateDownload: () => ipcRenderer.invoke("cancel-update-download"),
+  // 打开已下载的安装器 / 定位安装包（不静默安装、不重启）
   installUpdate: () => ipcRenderer.invoke("install-update"),
   revealDownloadedUpdate: () => ipcRenderer.invoke("reveal-downloaded-update"),
   // 获取更新状态快照（用于刷新/重载后恢复 UI）

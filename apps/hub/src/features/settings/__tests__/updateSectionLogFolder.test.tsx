@@ -56,6 +56,7 @@ const createPlatform = (
     getAppVersion: vi.fn(() => Promise.resolve('9.9.9')),
     checkForUpdates: vi.fn(() => Promise.resolve(skippedCommand())),
     startUpdateDownload: vi.fn(),
+    cancelUpdateDownload: vi.fn(),
     installUpdate: vi.fn(),
     revealDownloadedUpdate: vi.fn(),
     getUpdateState: vi.fn(() => Promise.resolve(null)),

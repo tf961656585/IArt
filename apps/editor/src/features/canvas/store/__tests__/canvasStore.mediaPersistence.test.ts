@@ -129,8 +129,6 @@ describe('canvasStore media persistence contract', () => {
           lastSourcePortId: undefined,
           valueSource: 'upstream',
           mediaError: undefined,
-          derivedFromNodeId: undefined,
-          derivedOp: undefined,
           taskInfo: {
             ...createNodeTaskInfoFixture(),
             taskId: 'image-task-1',
@@ -141,9 +139,6 @@ describe('canvasStore media persistence contract', () => {
             updatedAt: 1,
           },
           cachedContent: undefined,
-          originalImageMeta: undefined,
-          resizePercent: undefined,
-          outpaintModelId: undefined,
         },
       }),
     ];

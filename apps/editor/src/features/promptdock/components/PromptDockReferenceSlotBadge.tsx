@@ -12,7 +12,7 @@ import {
 import { cn } from '@/lib/utils';
 import type { PromptDockCatalogEntry } from '@/client/api/promptDockApi';
 import type { PromptDockReference } from '../PromptDock.types';
-import { candidateSlots, slotIdOf, slotOccupant } from '../referenceSlotModel';
+import { candidateSlots, slotIdOf, slotIsMulti, slotOccupant } from '../referenceSlotModel';
 
 /**
  * 参考 chip 上的「用途」徽章与用途菜单（设计 §4.1 / §4.2 / §4.4 / §4.6）。
@@ -24,6 +24,8 @@ import { candidateSlots, slotIdOf, slotOccupant } from '../referenceSlotModel';
  * - ≥2 候选 → 可点，打开菜单。
  *
  * 菜单里已被另一张占用的单张用途标注「已用于另一张」但**不禁选**（选中即换绑，§4.4）。
+ * 多张用途已放满时标注「已满 N 张」并禁用——多张位没有「挤掉哪一张」的合理答案，硬塞会让
+ * 提交时超额（§4.7）。
  * 界面不印解释段落：徽章可点、菜单项自带占用标注，用户看得到下一步。
  */
 
@@ -112,21 +114,30 @@ export function PromptDockReferenceSlotBadge({
             );
             const selected = slot.slotId === currentSlotId;
             const label = slot.label.length > 0 ? slot.label : slot.fieldKey;
+            // 多张位的余量按「已绑定条数 vs 声明张数」判；单张位的占用走既有换绑语义（不禁选）。
+            const boundCount = references.filter((other) => slotIdOf(other) === slot.slotId).length;
+            const atCapacity = slotIsMulti(slot) && boundCount >= slot.maxFiles && !selected;
             return (
               <button
                 key={slot.slotId}
                 type="button"
                 role="option"
                 aria-selected={selected}
+                disabled={atCapacity}
                 aria-label={
-                  occupant === null
-                    ? label
-                    : `${label}（已用于另一张，选择后会换绑）`
+                  atCapacity
+                    ? `${label}（已满 ${slot.maxFiles} 张）`
+                    : occupant === null
+                      ? label
+                      : `${label}（已用于另一张，选择后会换绑）`
                 }
                 onClick={() => onSelect(reference.refId, slot.slotId)}
                 className={cn(
-                  'flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] hover:bg-accent',
-                  selected && 'font-medium',
+                  'flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px]',
+                  'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
+                  selected
+                    ? 'bg-accent text-accent-foreground font-medium hover:bg-accent'
+                    : 'hover:bg-foreground/5',
                 )}
                 data-testid={`promptdock-slot-option-${slot.slotId}`}
               >
@@ -134,7 +145,11 @@ export function PromptDockReferenceSlotBadge({
                   {selected ? <Check size={11} /> : null}
                 </span>
                 <span className="truncate">{label}</span>
-                {occupant !== null ? (
+                {atCapacity ? (
+                  <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                    已满 {slot.maxFiles} 张
+                  </span>
+                ) : occupant !== null ? (
                   <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
                     已用于另一张
                   </span>

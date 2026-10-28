@@ -4,6 +4,7 @@ import type {
   CustomChatModel,
   CustomGenerationModel,
   ExecutableModelDirectoryEntry,
+  InterfaceRecipe,
   ProviderConnection,
   ThinkingTierPool,
 } from '@iart/contracts';
@@ -24,7 +25,7 @@ import { countModelsByConnection } from './invalidity';
  * - **目录失败要可见**：目录端点失败时不再静默给空数组，而是暴露 `catalogUnavailable`，
  *   由界面区分「读不到目录」与「没有可接入模型」。
  * - **目录按协议族分流**：可执行目录（`catalog`，含自建生成模型的族模板合成投影）与对话模型目录
- *   （`chatCatalog`）是两个独立端点：对话模型不进 PromptDock 目录。连接级接口类型已摘除
+ *   （`chatCatalog`）是两个独立端点：对话模型不进 PromptDock 目录。连接级接口格式已摘除
  *   （2026-09-29），消费方不再按连接协议选源——详情行状态按行类型选目录（见 ProviderDetail）。
  * - **模型记录单独取一次**：`customChatModels` / `customGenerationModels` 是用户自己添加的模型
  *   （能力属性 + 所属服务商一体），与目录不是同一件事——它属于「用户添加了什么」，目录属于
@@ -63,6 +64,9 @@ export function useProviderConnectionData() {
   /** 用户自建生成模型（GET /api/custom-generation-models）：删除入口用它判「是不是自己添加的」 */
   const [customGenerationModels, setCustomGenerationModels] = useState<CustomGenerationModel[]>([]);
   const [customGenerationModelsUnavailable, setCustomGenerationModelsUnavailable] = useState(false);
+  /** 接口配方公共库（GET /api/interface-recipes）：全局共享，模型记录按 recipe_id 引用 */
+  const [interfaceRecipes, setInterfaceRecipes] = useState<InterfaceRecipe[]>([]);
+  const [interfaceRecipesUnavailable, setInterfaceRecipesUnavailable] = useState(false);
   /** Agent 形态默认模型（GET /api/config 的 `agentDefaultModelId`）；null = 没设默认 */
   const [agentDefaultModelId, setAgentDefaultModelId] = useState<string | null>(null);
   /** 生成形态默认模型（GET /api/config 的 `generationDefaultModelId`）；null = 没设默认 */
@@ -79,7 +83,7 @@ export function useProviderConnectionData() {
     setLoadState('loading');
     try {
       // 协议适配器清单不再拉取（2026-09-29 摘除连接级预选后，Hub 无消费方；
-      // 后端端点与客户端方法保留）。接口类型只在添加模型时配置，表单选项值域来自契约枚举。
+      // 后端端点与客户端方法保留）。接口格式只在添加模型时配置，表单选项值域来自契约枚举。
       const [connectionResult, routeResult] = await Promise.all([
         api.listProviderConnections(undefined),
         api.listActiveRoutes(undefined),
@@ -89,14 +93,21 @@ export function useProviderConnectionData() {
       // 模型目录：契约字段来自 Runtime Backend 模型能力包投影，Hub 不得本地推导或伪造
       // （AGENTS.md：禁止复制 Provider 事实源）。可执行目录服务进度行与非对话行状态，
       // 对话目录服务对话行状态；端点不可用时显式标记，不静默降级为空。
-      const [catalogOutcome, chatCatalogOutcome, tierPoolOutcome, customModelOutcome, customGenerationOutcome] =
-        await Promise.allSettled([
-          api.listExecutableModelCatalog(undefined),
-          api.listChatModelCatalog(undefined),
-          api.listThinkingTiers(undefined),
-          api.listCustomChatModels(undefined),
-          api.listCustomGenerationModels(undefined),
-        ]);
+      const [
+        catalogOutcome,
+        chatCatalogOutcome,
+        tierPoolOutcome,
+        customModelOutcome,
+        customGenerationOutcome,
+        recipeOutcome,
+      ] = await Promise.allSettled([
+        api.listExecutableModelCatalog(undefined),
+        api.listChatModelCatalog(undefined),
+        api.listThinkingTiers(undefined),
+        api.listCustomChatModels(undefined),
+        api.listCustomGenerationModels(undefined),
+        api.listInterfaceRecipes(undefined),
+      ]);
       if (catalogOutcome.status === 'fulfilled') {
         setCatalog(catalogOutcome.value.models);
         setCatalogUnavailable(false);
@@ -131,6 +142,13 @@ export function useProviderConnectionData() {
       } else {
         setCustomGenerationModels([]);
         setCustomGenerationModelsUnavailable(true);
+      }
+      if (recipeOutcome.status === 'fulfilled') {
+        setInterfaceRecipes(recipeOutcome.value.recipes);
+        setInterfaceRecipesUnavailable(false);
+      } else {
+        setInterfaceRecipes([]);
+        setInterfaceRecipesUnavailable(true);
       }
       // 默认模型：两种形态各一条本机配置，读不到就都按「没设默认」呈现——它们只影响创作面的
       // 初始预选，不是配置真相的展示面。两条配置来自同一次 GET /api/config，不为此多发一次请求。
@@ -214,6 +232,8 @@ export function useProviderConnectionData() {
     customChatModelsUnavailable,
     customGenerationModels,
     customGenerationModelsUnavailable,
+    interfaceRecipes,
+    interfaceRecipesUnavailable,
     agentDefaultModelId,
     saveAgentDefaultModel,
     generationDefaultModelId,

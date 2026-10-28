@@ -16,7 +16,7 @@
    边界，让 Dialog 等共享组件 variant 里的工具类（top-[50%] / translate-y-[-50%]
    / sm:max-w-[42rem] 等）被生成——缺失时 DialogContent 居中定位整体失效，
    内容层掉到视口外只剩遮罩变暗（与 Hub globals.css 同款注释同款修法）。 */
-@source "../../../../packages/ui/src/**/*.tsx";
+@source "../../../../packages/ui/src/**/*.{ts,tsx}";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -136,6 +136,13 @@ svg { display:block; max-width:100%; }
   --muted-foreground: oklch(0.556 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
+  /* 选中态配方（docs/ui-selection-standard.md §5.2 L1 回退）：Editor 的 accent 与 muted /
+     secondary 同值，没有可用的品牌 tint，暂用 primary 实底映射；depth/edge 透明即关闭内凹陷。
+     待 Editor accent 与 muted 分离后，可切回 L3（软凹陷）。 */
+  --selection-bg: var(--primary);
+  --selection-fg: var(--primary-foreground);
+  --selection-depth: transparent;
+  --selection-edge: transparent;
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
@@ -598,23 +605,60 @@ a:not([data-slot="button"]):not([data-slot="button"] *):hover { color: var(--col
   transition: transform .15s linear;
 }
 
-/* 失败 overlay（原因 + 详情折叠 + 动作） */
+/* 失败 overlay（自带头部 + 中间滚动区 + 固定动作区；按失败阶段分流动作） */
 .task-failure {
   position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 5;
+  display: flex; flex-direction: column;
   max-height: calc(100% - 16px);
+  overflow: hidden;
   border-radius: var(--radius-md);
   background: var(--scrim-70); color: var(--scrim-text);
-  padding: 8px 10px; font-size: 12px; line-height: 1.45;
+  padding: 6px 10px; font-size: 12px; line-height: 1.45;
 }
-.task-failure .sum { margin: 0; word-break: break-word; }
-.task-failure details { margin-top: 4px; }
-.task-failure summary { cursor: pointer; font-size: 10px; color: rgba(255,255,255,.8); user-select: none; }
+.failure-head {
+  flex: none; display: flex; align-items: center; gap: 6px;
+  height: 20px; margin-bottom: 4px;
+}
+.failure-id {
+  max-width: 104px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10px; color: rgba(255,255,255,.75);
+}
+.failure-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.failure-acts { flex: none; }
+.task-failure .sum { margin: 0; word-break: break-word; line-height: 1.4; }
+.task-failure details { margin-top: 0; }
+.task-failure summary {
+  position: absolute; top: 8px; right: 10px; margin: 0;
+  cursor: pointer; font-size: 10px; color: rgba(255,255,255,.8); user-select: none;
+}
 .task-failure pre {
   margin: 4px 0 0; font-size: 10px; color: rgba(255,255,255,.9);
   white-space: pre-wrap; word-break: break-word;
-  max-height: 72px; overflow-y: auto;
+  max-height: 48px; overflow-y: auto;
 }
-.task-failure .acts { display: flex; gap: 6px; margin-top: 8px; }
+.task-failure .acts { display: flex; gap: 6px; }
+.task-failure .acts-primary { margin-top: 6px; flex-wrap: wrap; }
+.task-failure .acts-danger {
+  margin-top: 6px; padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--scrim-text) 18%, transparent);
+}
+.task-failure .task-failure-action { height: 26px; font-size: 11px; font-weight: 500; padding: 0 10px; }
+.task-failure .task-failure-secondary {
+  border: 1px solid rgba(255,255,255,.28);
+  background: transparent; color: var(--scrim-text);
+}
+.task-failure .task-failure-secondary:hover { background: rgba(255,255,255,.12); }
+.task-failure [aria-disabled="true"] {
+  opacity: .45; cursor: default; pointer-events: none;
+}
+.task-failure .requery-error {
+  margin: 6px 0 0; font-size: 10px; line-height: 1.4; color: var(--scrim-danger-text);
+}
+.task-failure .btn-spinner {
+  display: inline-block; width: 10px; height: 10px; margin-right: 5px;
+  border: 1.5px solid currentColor; border-top-color: transparent; border-radius: 9999px;
+  animation: iart-hatch-spin .8s linear infinite; vertical-align: -1px;
+}
 /* 失败 overlay 动作钮（重试/删除）已迁共享 Button（primary / ghost-destructive · 2xs），
    .act-primary / .act-danger 类体系退役（ui-button-standard §4）。 */
 
@@ -685,6 +729,15 @@ a:not([data-slot="button"]):not([data-slot="button"] *):hover { color: var(--col
 [data-theme='light'] .task-failure .sum { color: var(--st-failed-text); }
 [data-theme='light'] .task-failure summary,
 [data-theme='light'] .task-failure pre { color: var(--muted-foreground); }
+[data-theme='light'] .failure-id { color: var(--muted-foreground); }
+[data-theme='light'] .task-failure .acts-danger { border-top-color: var(--border); }
+[data-theme='light'] .task-failure .task-failure-secondary {
+  border-color: var(--border);
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+}
+[data-theme='light'] .task-failure .task-failure-secondary:hover { background: var(--accent); }
+[data-theme='light'] .task-failure .requery-error { color: var(--st-failed-text); }
 /* 取消 note：实色卡片 */
 [data-theme='light'] .task-cancelled-note {
   background: var(--card); color: var(--foreground);

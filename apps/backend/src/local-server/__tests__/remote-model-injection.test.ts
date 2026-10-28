@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyRemoteModelInjection } from "../provider-connection/remote-model-injection.cts";
+import { applyRemoteModelInjection, resolveModelInjectionMode } from "../provider-connection/remote-model-injection.cts";
 import { buildRequestBody } from "../task-engine-request.cts";
 import { isSerializedFormDataBody } from "@iart/contracts";
 import { ExecutionSnapshotSchema } from "@iart/contracts";
@@ -157,6 +157,43 @@ void test("openai-image-v1 i2i 全链：注入后 buildRequestBody 产出的 For
 
 // 可灵新标准（2026-10-19 拆成三个提交端点）：模型身份在 URL path，请求体**没有**模型字段。
 // 三个 id 都必须归 URL 模板类——归入 body 类会向上游多注入一个其契约未定义的顶层 model。
+void test("注入落点由接口格式实体的 {{model_id}} 规则派生（body 路径 / query 名）", () => {
+  // 分类不再看「是不是 body.model」这个具体路径：凡是值为 `{{model_id}}` 的规则，
+  // 按 target 解析成请求体路径或查询参数名。
+  const bodyExpectations = [
+    "openai-image-v1",
+    "openai-video-v1",
+    "seedance-2-0-v1",
+    "gemini-image-interactions-v1",
+  ];
+  for (const formatId of bodyExpectations) {
+    assert.deepEqual(
+      resolveModelInjectionMode(formatId),
+      { bodyPaths: ["model"], queryNames: [] },
+      `${formatId} 的注入落点`,
+    );
+  }
+
+  // 模型身份在 URL path 的格式（可灵 / veo）：没有 body/query 落点，替换由 {model} 承担。
+  for (const formatId of ["veo-v1", "kling-text2video-v1", "kling-image2video-v1", "kling-omni-video-v1"]) {
+    assert.deepEqual(
+      resolveModelInjectionMode(formatId),
+      { bodyPaths: [], queryNames: [] },
+      `${formatId} 不得声明 body/query 模型落点`,
+    );
+  }
+
+  // 对话适配器没有接口格式实体：不注入（adapter 自身路径承载模型身份）。
+  for (const chatAdapterId of ["openai-chat-completions-v1", "anthropic-messages-v1"]) {
+    assert.deepEqual(
+      resolveModelInjectionMode(chatAdapterId),
+      { bodyPaths: [], queryNames: [] },
+      `${chatAdapterId} 不得注入模型`,
+    );
+  }
+  assert.deepEqual(resolveModelInjectionMode("format-does-not-exist-v1"), { bodyPaths: [], queryNames: [] });
+});
+
 void test("可灵三个适配器：请求体不注入 model（模型身份在 URL path）", () => {
   for (const adapterId of ["kling-text2video-v1", "kling-image2video-v1", "kling-omni-video-v1"]) {
     const snapshot = buildSnapshot(adapterId, "kling-v3");

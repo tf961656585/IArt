@@ -34,6 +34,8 @@ type ProjectionRuntimeRaw = {
   url_input_upload_mode: unknown | undefined;
   payload_format: unknown | undefined;
   payload_format_rule: unknown | undefined;
+  form_field_style: unknown | undefined;
+  form_array_style: unknown | undefined;
   payload_rules: unknown | undefined;
   pre_requests: unknown | undefined;
 };
@@ -53,9 +55,9 @@ type PayloadApiRaw = {
   method: unknown | undefined;
   contentType: unknown | undefined;
   headers: unknown | undefined;
+  query: unknown | undefined;
 };
 
-type HeaderMap = { contentTypeLower: unknown | undefined; contentTypeCanonical: unknown | undefined };
 type PayloadRaw = { api: unknown | undefined; body: unknown | undefined; meta: unknown | undefined };
 
 type TaskExecutionPlanRaw = {
@@ -239,7 +241,7 @@ export {
   type EvaluationOptions,
   type EvaluateState,
   type AssemblerContext,
-  type HeaderMap,
+  type ProjectionRuntimeRaw,
   normalizeString,
   isPlainObject,
   asProjectionRaw,

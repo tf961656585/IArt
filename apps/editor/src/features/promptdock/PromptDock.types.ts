@@ -130,9 +130,10 @@ export type PromptDockDraft = {
 };
 
 /**
- * 用途类问题的定位细节（`slot-required-empty` / `slot-unspecified` / `slot-not-in-model` 携带）。
+ * 用途类问题的定位细节（`slot-required-empty` / `slot-unspecified` / `slot-not-in-model` /
+ * `slot-capacity-exceeded` 携带）。
  *
- * 存在的理由：三类问题的可修复动作都指向「某个用途」，而 CLI 没有画布徽章可点，只能把
+ * 存在的理由：这些问题的可修复动作都指向「某个用途」，而 CLI 没有画布徽章可点，只能把
  * 「该模型这一媒体类型有哪些用途」直接写进错误文案。不带这份细节，CLI 只能让用户去界面上
  * 点一个命令行提交永远读不到的位置（0.6.5 的报错死路）。
  */
@@ -141,6 +142,11 @@ export type PromptDockSlotIssueDetail = {
   slotId: string | null;
   /** 该素材位的媒体类型，决定文案列出哪一档可选用途 */
   mediaType: 'image' | 'video' | 'audio';
+  /**
+   * 超量细节：仅 `slot-capacity-exceeded` 携带（`count` 条绑定 vs `maxFiles` 张上限），
+   * 供 CLI 文案点名「超了几条」。消费端按 `issue.code` 分支读取，不对其他问题做空值兜底。
+   */
+  capacity?: { count: number; maxFiles: number };
 };
 
 /** 前置校验失败定位反馈（spec 节点执行前置校验.md：不提交 + 定位 + 覆盖全部）。 */
@@ -157,7 +163,9 @@ export type PromptDockPreflightIssue = {
     /** 参考图在参考区里但还没有指定用途。 */
     | 'slot-unspecified'
     /** 参考图标的用途在当前模型的素材位上不存在（模型切换后残留、或调用方给错用途标识）。 */
-    | 'slot-not-in-model';
+    | 'slot-not-in-model'
+    /** 绑定到某用途的条数超过该位声明的张数（模型切换 / 张数改小 / 复用 / 脚本提交）。 */
+    | 'slot-capacity-exceeded';
   /** 用户可读原因，已定位到问题输入 */
   message: string;
   /** 问题字段（参数 fieldKey、引用 assetId 或失效预设 presetId） */
@@ -169,7 +177,7 @@ export type PromptDockPreflightIssue = {
    */
   exit: 'hub-providers' | null;
   /**
-   * 用途类问题的定位细节（仅 `slot-*` 三类携带；其余问题不设该键）。
+   * 用途类问题的定位细节（仅 `slot-*` 四类携带；其余问题不设该键）。
    * `exactOptionalPropertyTypes` 下不用 `slot: undefined` 表达缺席，构造侧以条件展开省略。
    */
   slot?: PromptDockSlotIssueDetail;

@@ -191,16 +191,15 @@ describe('canvasStore.loadNodeGraph - ID 规范化', () => {
     expect(node.size).toBeUndefined();
   });
 
-  it('应当保留当前 taskInfo 与工具选模字段的 canonical modelId', async () => {
+  it('应当保留当前 taskInfo 的 canonical modelId', async () => {
     const graph = createLooseGraph('当前字段加载测试');
     graph.nodes = [
       {
         id: 'image-current',
         type: 'imageInput',
         data: {
-          label: '当前扩图节点',
+          label: '当前任务节点',
           imageUrl: null,
-          outpaintModelId: 'gemini-3-pro-image',
           taskInfo: {
             taskId: 'task-current',
             modelId: 'gemini-3-pro-image',
@@ -217,7 +216,6 @@ describe('canvasStore.loadNodeGraph - ID 规范化', () => {
     const loadedNodes = getLoadedGraph().nodes;
     const imageNode = loadedNodes.find((node) => node.id === 'image-current');
 
-    expect(readRecord(imageNode?.data)['outpaintModelId']).toBe('gemini-3-pro-image');
     expect(readRecord(imageNode?.data)['taskInfo']).toMatchObject({
       taskId: 'task-current',
       modelId: 'gemini-3-pro-image',

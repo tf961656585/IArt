@@ -3,6 +3,7 @@ import { ERROR_CODES, cloneValue, toRecord } from "./task-engine-shared.cts";
 import { readValueByPath } from "./task-engine-polling-utils.cts";
 import { resolveHttpStatusUserMessage } from "./http-status-fallback-messages.cts";
 import { normalizeString } from "./task-normalizer.cts";
+import { evaluateRecipeCondition } from "./result-condition-evaluator.cts";
 
 type OpenObject = object;
 
@@ -104,89 +105,17 @@ const assignMappedValue = (
   return true;
 };
 
-const compareValues = (left: unknown, right: unknown): boolean => {
-  if (
-    left === null ||
-    right === null ||
-    typeof left === "string" ||
-    typeof left === "number" ||
-    typeof left === "boolean" ||
-    typeof right === "string" ||
-    typeof right === "number" ||
-    typeof right === "boolean"
-  ) {
-    return Object.is(left, right);
-  }
-  try {
-    return JSON.stringify(left) === JSON.stringify(right);
-  } catch {
-    return false;
-  }
-};
-
-const valueContains = (source: unknown, expected: unknown): boolean => {
-  if (typeof source === "string") {
-    const expectedText = toScalarString(expected);
-    return expectedText ? source.includes(expectedText) : false;
-  }
-  if (Array.isArray(source)) {
-    return source.some((item) => compareValues(item, expected));
-  }
-  return false;
-};
-
+// 条件树求值唯一实现在 result-condition-evaluator.cts；本函数保持既有导出名与签名，
+// 供 HTTP 提交失败路径（failure_condition）继续使用，不得再维护第二套判定。
+//
+// 比较语义随求值器统一（2026-10-26 有意为之，非「仅扩展可表达语义」）：`eq / neq / in /
+// not_in` 的相等比较忽略字符串大小写；任一侧是数字时，两侧都能转成有限数字才按数值比较
+// （`1` 与 `"1"` 相等）——合并求值器前本路径的严格相等（`Object.is`）口径不再保留。
+// 新增 `gt / gte / lt / lte` 在此基础上再扩展可表达的阈值语义。
 const evaluateResultCondition = (
   conditionInput: unknown,
   responseBody: unknown,
-): boolean => {
-  const condition = toOptionalObject(conditionInput);
-  if (!condition) return false;
-  const op = normalizeString(readField(condition, "op")).toLowerCase();
-  const children = readArrayField(condition, "children");
-  if (op === "all") {
-    return (
-      children.length > 0 &&
-      children.every((child) => evaluateResultCondition(child, responseBody))
-    );
-  }
-  if (op === "any") {
-    return children.some((child) => evaluateResultCondition(child, responseBody));
-  }
-  if (op === "not") {
-    const explicitNested = readField(condition, "condition");
-    const nested = explicitNested ?? children[0];
-    return nested === undefined
-      ? false
-      : !evaluateResultCondition(nested, responseBody);
-  }
-
-  const conditionPath =
-    normalizeString(readField(condition, "path")) ||
-    normalizeString(readField(condition, "field"));
-  const actual = conditionPath
-    ? readValueByPath(responseBody, conditionPath, { silent: true, parseJsonString: undefined })
-    : responseBody;
-
-  if (op === "exists") return actual !== undefined;
-  if (op === "missing") return actual === undefined;
-  if (op === "empty") return isEmptyValue(actual);
-  if (op === "not_empty") return !isEmptyValue(actual);
-  const expectedValue = readField(condition, "value");
-  if (op === "eq") return compareValues(actual, expectedValue);
-  if (op === "neq") return !compareValues(actual, expectedValue);
-  if (op === "in") {
-    return Array.isArray(expectedValue)
-      ? expectedValue.some((item) => compareValues(actual, item))
-      : false;
-  }
-  if (op === "not_in") {
-    return Array.isArray(expectedValue)
-      ? !expectedValue.some((item) => compareValues(actual, item))
-      : true;
-  }
-  if (op === "contains") return valueContains(actual, expectedValue);
-  return false;
-};
+): boolean => evaluateRecipeCondition(conditionInput, responseBody, null).matched;
 
 const readResultRule = (taskRecord: unknown): OpenObject | null => {
   const metadata = toRecord(readField(toRecord(taskRecord), "metadata"));
@@ -346,6 +275,12 @@ const buildRemoteHttpFailurePayload = (
     : false;
   if (params.responseOk && !failureConditionMatched) return null;
 
+  // 配方声明的失败原因只在该条件树命中时生效：它解释的是「这条失败判定为什么算失败」，
+  // 不参与传输层错误的归因（HTTP 5xx、网络异常的文案仍走既有链）。
+  const recipeFailureReason = failureConditionMatched
+    ? toScalarString(readField(resultRule, "failure_reason"))
+    : null;
+
   const httpStatus = Number.isFinite(params.httpStatus)
     ? params.httpStatus
     : 0;
@@ -382,7 +317,12 @@ const buildRemoteHttpFailurePayload = (
     genericRemoteMessage ??
     genericRemoteCode ??
     genericRemoteType;
-  const message = mappedUserMessage ?? mappedMessage ?? genericRemoteMessage ?? httpMessage;
+  const message =
+    recipeFailureReason ??
+    mappedUserMessage ??
+    mappedMessage ??
+    genericRemoteMessage ??
+    httpMessage;
   const details = buildRemoteDetails({
     httpStatus,
     responseBody: params.responseBody,
@@ -400,7 +340,7 @@ const buildRemoteHttpFailurePayload = (
   return {
     code: mappedCode ?? params.defaultCode ?? ERROR_CODES.TASK_EXECUTION_FAILED,
     message,
-    userMessage: mappedUserMessage ?? httpFallbackUserMessage,
+    userMessage: recipeFailureReason ?? mappedUserMessage ?? httpFallbackUserMessage,
     backendMessage: buildBackendMessage(httpMessage, remoteSummary),
     retryable: typeof retryableValue === "boolean" ? retryableValue : null,
     details,
@@ -410,4 +350,5 @@ const buildRemoteHttpFailurePayload = (
 export {
   buildRemoteHttpFailurePayload,
   evaluateResultCondition,
+  readResultRule,
 };

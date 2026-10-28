@@ -33,6 +33,7 @@ import {
 } from "./model-input-shared.cts";
 import { logDebug, logInfo } from "../logging.cts";
 import { guessFileExtension } from "../request-assembler-runtime.cts";
+import { wrapMultipartFile } from "./model-input-multipart-file.cts";
 import {
   uploadInlineDataViaRelay,
   materializeStringValueForPublicUrl,
@@ -184,7 +185,18 @@ const materializeMultipartFile = (
 ): AtomPreparationResult => {
   const bufferOrError = resolveMultipartFileBuffer(placeholder.source, context.projectPath);
   if (isBuffer(bufferOrError)) {
-    return { ok: true, value: bufferOrError };
+    // 字节照旧出网；来源身份只随字节带进文件描述（审计），出网形态由序列化器固定。
+    return {
+      ok: true,
+      value: wrapMultipartFile(bufferOrError, {
+        sourceFilename: placeholder.filename,
+        mimeType:
+          placeholder.mimeType ??
+          (placeholder.source.kind === "inline_data" ? placeholder.source.mimeType : undefined),
+        assetId: placeholder.assetId,
+        slotId: placeholder.slotId,
+      }),
+    };
   }
   return {
     ok: false,

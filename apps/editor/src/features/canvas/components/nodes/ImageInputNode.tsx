@@ -9,48 +9,29 @@ import { TaskStatusBadge } from "./shared/TaskStatusBadge";
 import { downloadMedia } from "@/client/utils/download"; import { useCanvasStore } from "../../store/canvasStore";
 import { useExecutionStore } from "../../store/executionStore";
 import { ContentCacheManager } from "../../services/contentCacheManager"; import { importLocalFile } from "../../services/localMediaImport";
-import { edgeDetectImage } from "@/client/api/imageEdgeDetect"; import { chromaKeyImage } from "@/client/api/imageChromaKey"; import { differenceKeyImage } from "@/client/api/imageDifferenceKey";
-import { cropImage } from "@/client/api/imageCrop"; import { resizeImage } from "@/client/api/imageResize"; import { splitImage } from "@/client/api/imageSplit";
-import { createDerivedImageInputNode, createDerivedImageInputNodesGrid } from "../../utils/imageDerivation";
-import { ensureBackendConsumableImageSource } from "../../utils/mediaUtils"; import { normalizeLocalFileUrlWithQuery } from "../../utils/mediaUrl";
+import { normalizeLocalFileUrlWithQuery } from "../../utils/mediaUrl";
 import { classifyMediaUrl } from "@/features/models/shared/mediaResolutionTypes";
 import { formatBytesCompact, getMediaSizeBytes } from "../../utils/mediaSize";
 import { resolveMediaPresentation } from "../../services/mediaPresentation";
-import { ImageNodeToolbar } from "./ImageNodeToolbar"; import { ImageResizeDialog } from "../dialogs/ImageResizeDialog";
-import { ImageCropDialog, type ImageCropRect } from "../dialogs/ImageCropDialog"; import { ImageSplitDialog, type ImageSplitDialogPayload } from "../dialogs/ImageSplitDialog";
-import { ImageAnnotateDialog } from "../dialogs/ImageAnnotateDialog"; import { ImageEdgeDetectDialog } from "../dialogs/ImageEdgeDetectDialog";
-import { ImageChromaKeyDialog } from "../dialogs/ImageChromaKeyDialog"; import { ImageDifferenceKeyDialog } from "../dialogs/ImageDifferenceKeyDialog"; import { ImageOutpaintDialog } from "../dialogs/ImageOutpaintDialog"; import { listRuntimeProjectedImageToImageModels } from "@/client/config/runtimeModelSelection";
 import type {ImageInputNodeData,ImageMeta,
 } from "../../types"; import { getTaskStatusOverlayText } from "../../utils/taskStatusMeta";
-import { resolveTaskFailurePresentation } from "../../utils/taskFailurePresentation"; import { useSmartSplitDialog } from "./useSmartSplitDialog";
-import { clearNodeOutput } from "../../storage"; import { revealTaskArchive } from "@iart/backend-sdk/electron-bridge";
+import { resolveTaskFailurePresentation } from "../../utils/taskFailurePresentation";
+import { revealTaskArchive } from "@iart/backend-sdk/electron-bridge";
 import { revealFilesUrlWithToast } from "@/client/utils/revealFilesUrlWithToast"; import { createFallbackGraphNode, useNodeFromStore } from "../../hooks/useNodeFromStore";
-import { useImageOutpaint } from "./useImageOutpaint";
-import { useCanvasSelectionBridge } from "../canvas/useCanvasSelectionBridge";
 export const ImageInputNode = memo(function ImageInputNode({ id, data: _data, selected }: NodeProps) { const fallback = useMemo(() => createFallbackGraphNode<ImageInputNodeData>({ nodeId: id, type: "imageInput", data: undefined }), [id]);
-  const isSoloSelectedInStore = useCanvasStore(
-    (state) => state.selectedNodeIds.length === 1 && state.selectedNodeIds[0] === id,
-  );
-  const selectedNodeCountInStore = useCanvasStore(
-    (state) => state.selectedNodeIds.length,
-  );
-  const toolbarVisible =
-    selectedNodeCountInStore === 0 ? Boolean(selected) : isSoloSelectedInStore;
   const { data: nodeData } = useNodeFromStore<ImageInputNodeData>({ nodeId: id, fallback, select: (s) => s, equalityFn: () => undefined });
-  const { selectNodes } = useCanvasSelectionBridge();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const updateNodeData = useCanvasStore((state) => state.updateNodeData);
   const nodeGraphId = useCanvasStore((state) => (state.nodeGraph !== null && state.nodeGraph !== undefined ? state.nodeGraph.id : undefined) ?? "");
 
   const mediaAssets = useCanvasStore((state) => state.mediaAssets);
 
-  const { imageUrl, imageMeta, originalImageMeta, resizePercent, valueSource, taskInfo, mediaError, outpaintModelId, assetId } = useMemo(() => {
+  const { imageUrl, imageMeta, valueSource, taskInfo, mediaError, assetId } = useMemo(() => {
     const dataSource = (nodeData ?? null) as ImageInputNodeData | null;
     return {
       imageUrl: (dataSource !== null && dataSource !== undefined ? (dataSource as ImageInputNodeData).imageUrl : undefined) ?? null, imageMeta: (dataSource !== null && dataSource !== undefined ? (dataSource as ImageInputNodeData).imageMeta : undefined) ?? null,
-      originalImageMeta: (dataSource !== null && dataSource !== undefined ? (dataSource as ImageInputNodeData).originalImageMeta : undefined) ?? null, resizePercent: (dataSource !== null && dataSource !== undefined ? (dataSource as ImageInputNodeData).resizePercent : undefined) ?? 100,
       valueSource: (dataSource !== null && dataSource !== undefined ? (dataSource as ImageInputNodeData).valueSource : undefined), taskInfo: (dataSource !== null && dataSource !== undefined ? (dataSource as ImageInputNodeData).taskInfo : undefined) ?? null,
-      mediaError: (dataSource !== null && dataSource !== undefined ? (dataSource as ImageInputNodeData).mediaError : undefined) ?? null, outpaintModelId: typeof (dataSource !== null && dataSource !== undefined ? (dataSource as ImageInputNodeData).outpaintModelId : undefined) === "string" ? (dataSource as ImageInputNodeData).outpaintModelId : "",
+      mediaError: (dataSource !== null && dataSource !== undefined ? (dataSource as ImageInputNodeData).mediaError : undefined) ?? null,
       assetId: (dataSource !== null && dataSource !== undefined ? (dataSource as ImageInputNodeData).assetId : undefined) ?? null,
     };
   }, [nodeData]);
@@ -59,9 +40,6 @@ export const ImageInputNode = memo(function ImageInputNode({ id, data: _data, se
     if (!assetId) return null;
     return resolveMediaPresentation({ mediaAssets, assetId, mediaType: 'image', sourceUrl: null, projectRef: undefined, fileKey: undefined });
   }, [mediaAssets, assetId]);
-
-  const runtimeI2iModelOptions = listRuntimeProjectedImageToImageModels().map((config) => ({ modelId: config.modelId ?? config.modelId,
-    label: config.label, }));
 
   // 图片上传状态
   const [isUploading, setIsUploading] = useState(false); const [fileSizeBytes, setFileSizeBytes] = useState<number | null | undefined>(undefined);
@@ -109,26 +87,11 @@ export const ImageInputNode = memo(function ImageInputNode({ id, data: _data, se
       setFileSizeBytes(bytes); });
   }, [imageUrl]);
 
-  const [previewOpen, setPreviewOpen] = useState(false); const [resizeDialogOpen, setResizeDialogOpen] = useState(false);
-  const [cropDialogOpen, setCropDialogOpen] = useState(false); const [splitDialogOpen, setSplitDialogOpen] = useState(false);
-  const [annotateDialogOpen, setAnnotateDialogOpen] = useState(false); const [edgeDetectDialogOpen, setEdgeDetectDialogOpen] = useState(false);
-  const [chromaKeyDialogOpen, setChromaKeyDialogOpen] = useState(false); const [differenceKeyDialogOpen, setDifferenceKeyDialogOpen] = useState(false); const [outpaintDialogOpen, setOutpaintDialogOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const rawImageUrl = typeof imageUrl === "string" ? imageUrl.trim() : ""; const isLocalMedia = classifyMediaUrl(rawImageUrl).kind === "local-media";
   const localRuntimePath = rawImageUrl ? normalizeLocalFileUrlWithQuery(rawImageUrl) : null; const resolvedImageUrl = isLocalMedia ? rawImageUrl : localRuntimePath ? localRuntimePath : null;
-  const imageOperationSourceUrl = useMemo(() => { if (presentation !== null && presentation !== undefined) {
-      const originalUrl = (presentation.previewUrl !== null && presentation.previewUrl !== undefined ? presentation.previewUrl : undefined) ?? (presentation.downloadUrl !== null && presentation.downloadUrl !== undefined ? presentation.downloadUrl : undefined) ?? null;
-      if (typeof originalUrl === "string" && originalUrl.trim()) { return originalUrl.trim();
-      }
-    }
-    if (rawImageUrl) { console.debug("[ImageInputNode] fallback to imageUrl for image operation source", {
-        nodeId: id, assetId,
-      }); return rawImageUrl;
-    }
-    console.debug("[ImageInputNode] no image operation source resolved", {
-      nodeId: id, assetId,
-    }); return null; }, [assetId, id, presentation, rawImageUrl]);
-  const { dialog: smartSplitDialog, openDialog: openSmartSplitDialog } = useSmartSplitDialog(id, imageOperationSourceUrl, selectNodes); const mediaErrorText = mediaError || (rawImageUrl && !isLocalMedia && !localRuntimePath ? "结果还没取回本地，暂时无法预览" : "");
+  const mediaErrorText = mediaError || (rawImageUrl && !isLocalMedia && !localRuntimePath ? "结果还没取回本地，暂时无法预览" : "");
 
   useEffect(() => { if (!resolvedImageUrl) {
       setPreviewOpen(false);
@@ -151,8 +114,7 @@ export const ImageInputNode = memo(function ImageInputNode({ id, data: _data, se
       if (!file || !file.type.startsWith("image/") || !nodeGraphId) return; setIsUploading(true);
       try { const { persistentUrl, assetId } = await importLocalFile(file);
         updateNodeData(id, { imageUrl: persistentUrl,
-          imageMeta: null, originalImageMeta: null, // 清除原始尺寸，等待图片加载后重新记录
-          resizePercent: 100, // 重置缩放百分比
+          imageMeta: null, // 清除尺寸元信息，等待图片加载后重新记录
           valueSource: "upload", mediaError: undefined,
           lastExecutionId: undefined, lastSourceNodeId: undefined,
           lastSourcePortId: undefined, assetId, }, undefined);
@@ -172,16 +134,6 @@ export const ImageInputNode = memo(function ImageInputNode({ id, data: _data, se
     } catch (error) { console.error("下载图片失败", error);
     } }, [resolvedImageUrl]);
 
-  const handleRemoveImage = useCallback(() => {
-    // 同时清除前端状态和后端索引，防止轮询同步恢复已删除的图片
-    updateNodeData(id, { imageUrl: null,
-      imageMeta: null, valueSource: undefined,
-      mediaError: undefined, taskInfo: undefined,
-      lastExecutionId: undefined, lastSourceNodeId: undefined,
-      lastSourcePortId: undefined, }, undefined);
-    // 异步清除后端索引（不阻塞 UI）
-    void clearNodeOutput(id); }, [id, updateNodeData]);
-
   const handleImageMeta = useCallback( (meta: ImageMeta) => {
       const updates: Partial<ImageInputNodeData> = {};
 
@@ -191,120 +143,9 @@ export const ImageInputNode = memo(function ImageInputNode({ id, data: _data, se
         if (!unchanged) { updates.imageMeta = meta;
         } }
 
-      // 记录/纠正原始尺寸（用于 resize 基准）
-      // - 历史版本可能在“缩略图渲染”时误写入缩略图尺寸，导致 resize 基准与实际原图不一致
-      // - 以当前测得的源图尺寸为准，发现不一致即自动纠正
-      if (!originalImageMeta) { updates.originalImageMeta = meta;
-      } else { const originalUnchanged = originalImageMeta.width === meta.width && originalImageMeta.height === meta.height && originalImageMeta.aspectRatio === meta.aspectRatio;
-        if (!originalUnchanged) { updates.originalImageMeta = meta;
-        } }
-
       if (Object.keys(updates).length > 0) { updateNodeData(id, updates, undefined);
       } },
-    [id, imageMeta, originalImageMeta, updateNodeData], );
-
-  const handleResizeConfirm: Parameters<typeof ImageResizeDialog>[0]["onConfirm"] = useCallback( async (percent, kernel) => {
-      if (!imageOperationSourceUrl || !originalImageMeta) { throw new Error("图片或原始尺寸信息缺失");
-      }
-
-      const sourceUrl = await ensureBackendConsumableImageSource(imageOperationSourceUrl);
-
-      // 调用后端 API 进行缩放
-      const result = await resizeImage(sourceUrl, percent, kernel);
-
-      // 链式衍生：不修改当前节点，创建新的下游 imageInput 节点承载处理结果
-      const created = createDerivedImageInputNode({ sourceNodeId: id,
-        resultUrl: result.url, assetId: result.assetId, mediaAsset: result.mediaAsset, derivedOp: { type: "resize", percent, kernel },
-        selectNodes,
-      }); if (!created) {
-        throw new Error("创建衍生节点失败"); }
-    }, [id, imageOperationSourceUrl, originalImageMeta, selectNodes],
-  );
-
-  const handleCropConfirm = useCallback( async (rect: ImageCropRect) => {
-      if (!imageOperationSourceUrl) { throw new Error("图片缺失");
-      }
-
-      const sourceUrl = await ensureBackendConsumableImageSource(imageOperationSourceUrl); const result = await cropImage(sourceUrl, rect);
-
-      const created = createDerivedImageInputNode({ sourceNodeId: id,
-        resultUrl: result.url, assetId: result.assetId, mediaAsset: result.mediaAsset, derivedOp: { type: "crop", ...rect },
-        selectNodes,
-      }); if (!created) {
-        throw new Error("创建衍生节点失败"); }
-    }, [id, imageOperationSourceUrl, selectNodes],
-  );
-
-  const handleSplitConfirm = useCallback( async (payload: ImageSplitDialogPayload) => {
-      if (!imageOperationSourceUrl) { throw new Error("图片缺失");
-      }
-
-      const sourceUrl = await ensureBackendConsumableImageSource(imageOperationSourceUrl); const result = await splitImage(sourceUrl, {
-        horizontalPercents: payload.horizontalPercents, verticalPercents: payload.verticalPercents,
-      });
-
-      const created = createDerivedImageInputNodesGrid({ sourceNodeId: id,
-        rows: result.rows, cols: result.cols,
-        horizontalPercents: result.horizontalPercents, verticalPercents: result.verticalPercents,
-        tiles: result.tiles,
-        selectNodes, });
-      if (!created || created.length === 0) { throw new Error("创建图块节点失败");
-      } },
-    [id, imageOperationSourceUrl, selectNodes], );
-
-  const handleAnnotateConfirm = useCallback( async (blob: Blob) => {
-      if (!blob) throw new Error("无效标注结果");
-
-      const mimeType = blob.type || "image/png"; const file = new File([blob], "annotated.png", { type: mimeType });
-      const { persistentUrl, assetId } = await importLocalFile(file);
-
-      const created = createDerivedImageInputNode({ sourceNodeId: id,
-        resultUrl: persistentUrl, assetId, mediaAsset: undefined, derivedOp: { type: "annotate" },
-        selectNodes,
-      }); if (!created) {
-        throw new Error("创建衍生节点失败"); }
-    }, [id, selectNodes],
-  );
-
-  const handleEdgeDetectConfirm = useCallback( async (threshold: number) => {
-      if (!imageOperationSourceUrl) { throw new Error("图片缺失");
-      }
-
-      const sourceUrl = await ensureBackendConsumableImageSource(imageOperationSourceUrl); const result = await edgeDetectImage(sourceUrl, threshold, "sobel");
-
-      const created = createDerivedImageInputNode({ sourceNodeId: id,
-        resultUrl: result.url, assetId: result.assetId, mediaAsset: result.mediaAsset, derivedOp: { type: "edgeDetect", mode: "sobel", threshold },
-        selectNodes,
-      }); if (!created) {
-        throw new Error("创建衍生节点失败"); }
-    }, [id, imageOperationSourceUrl, selectNodes],
-  );
-
-  const handleChromaKeyConfirm = useCallback( async (params: { targetColor: { r: number; g: number; b: number }; tolerance: number; feather: number }) => {
-      if (!imageOperationSourceUrl) { throw new Error("图片缺失"); }
-      const sourceUrl = await ensureBackendConsumableImageSource(imageOperationSourceUrl);
-      const result = await chromaKeyImage(sourceUrl, params.targetColor, params.tolerance, params.feather);
-      const created = createDerivedImageInputNode({ sourceNodeId: id,         resultUrl: result.url, assetId: result.assetId, mediaAsset: result.mediaAsset,
-        derivedOp: { type: "chromaKey", targetColor: params.targetColor, tolerance: params.tolerance, feather: params.feather },
-        selectNodes,
-      }); if (!created) { throw new Error("创建衍生节点失败"); }
-    }, [id, imageOperationSourceUrl, selectNodes],
-  );
-
-  const handleDifferenceKeyConfirm = useCallback( async (params: { threshold: number; softness: number; secondSourceUrl: string; secondSourceAssetId: string }) => {
-      if (!imageOperationSourceUrl) { throw new Error("图片缺失"); }
-      if (!params.secondSourceUrl) { throw new Error("背景图缺失"); }
-      const sourceUrl = await ensureBackendConsumableImageSource(imageOperationSourceUrl);
-      const secondSourceUrl = await ensureBackendConsumableImageSource(params.secondSourceUrl);
-      const result = await differenceKeyImage(sourceUrl, secondSourceUrl, params.threshold, params.softness);
-      const created = createDerivedImageInputNode({ sourceNodeId: id,         resultUrl: result.url, assetId: result.assetId, mediaAsset: result.mediaAsset,
-        derivedOp: { type: "differenceKey", threshold: params.threshold, softness: params.softness },
-        selectNodes,
-      }); if (!created) { throw new Error("创建衍生节点失败"); }
-    }, [id, imageOperationSourceUrl, selectNodes],
-  );
-
-  const handleOutpaintConfirm = useImageOutpaint(id, nodeGraphId, updateNodeData);
+    [id, imageMeta, updateNodeData], );
 
   const placeholder = ( <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-4 text-center">
       <IconPhoto size={24} className="text-muted-foreground" /> <p className="text-xs text-muted-foreground">拖拽图片到此处，或使用上传按钮</p>
@@ -336,7 +177,7 @@ export const ImageInputNode = memo(function ImageInputNode({ id, data: _data, se
   ) : ( placeholder
   );
 
-  const sourceBadgeLabel = valueSource === "upload" ? "本地上传" : valueSource === "processed" ? "处理结果" : valueSource === "upstream" ? "上游节点" : null;
+  const sourceBadgeLabel = valueSource === "upload" ? "本地上传" : valueSource === "upstream" ? "上游节点" : null;
 
   const overlayBadges = taskInfo || sourceBadgeLabel ? (
       <div className="pointer-events-none absolute left-2 top-2 flex flex-col gap-1"> {(taskInfo !== null && taskInfo !== undefined && taskInfo.status !== undefined) ? <TaskStatusBadge status={taskInfo.status} className={undefined} compact={undefined} labelOverride={undefined} onActivate={() => undefined} ariaLabel={undefined} /> : null}
@@ -381,13 +222,7 @@ export const ImageInputNode = memo(function ImageInputNode({ id, data: _data, se
             aria-label="替换图片" onClick={(event) => {
               event.stopPropagation(); triggerFileDialog();
             }} >
-            <IconUpload size={14} /> </button>
-          <button type="button"
-            className="pointer-events-auto inline-flex h-6 w-6 items-center justify-center rounded-full bg-white/90 text-destructive shadow hover:bg-white" aria-label="删除图片"
-            onClick={(event) => { event.stopPropagation();
-              handleRemoveImage(); }}
-          > <IconX size={14} />
-          </button> </div>
+            <IconUpload size={14} /> </button> </div>
       )} </>
   );
   return ( <ContentNodeCard nodeId={id} selected={selected} fill width={undefined} noPadding overlay={undefined} contentRenderPolicy={undefined} identityHint={undefined} identityPlaceholder={undefined} minWidth={undefined} minHeight={undefined} className={undefined}>
@@ -456,14 +291,6 @@ export const ImageInputNode = memo(function ImageInputNode({ id, data: _data, se
           />
         </DialogContent>
       </Dialog>
-      {/* 图片节点工具栏 */} <ImageNodeToolbar nodeId={id} imageUrl={imageUrl} visible={toolbarVisible} onOutpaintClick={() => setOutpaintDialogOpen(true)} onResizeClick={() => setResizeDialogOpen(true)} onCropClick={() => setCropDialogOpen(true)} onSplitClick={() => setSplitDialogOpen(true)} onAnnotateClick={() => setAnnotateDialogOpen(true)} onEdgeDetectClick={() => setEdgeDetectDialogOpen(true)} onChromaKeyClick={() => setChromaKeyDialogOpen(true)} onDifferenceKeyClick={() => setDifferenceKeyDialogOpen(true)} onSmartSplitClick={openSmartSplitDialog} />
-      {/* 调整尺寸弹窗 */} <ImageResizeDialog open={resizeDialogOpen} onOpenChange={setResizeDialogOpen} originalMeta={originalImageMeta} currentPercent={resizePercent} defaultKernel="lanczos3" onConfirm={handleResizeConfirm} />
-      {/* 裁剪图片弹窗 */} <ImageCropDialog open={cropDialogOpen} onOpenChange={setCropDialogOpen} imageUrl={imageOperationSourceUrl} onConfirm={handleCropConfirm} />
-      {/* 图片分割弹窗 */} <ImageSplitDialog open={splitDialogOpen} onOpenChange={setSplitDialogOpen} imageUrl={imageOperationSourceUrl} onConfirm={handleSplitConfirm} />
-      {/* 画笔标注弹窗 */} <ImageAnnotateDialog open={annotateDialogOpen} onOpenChange={setAnnotateDialogOpen} imageUrl={imageOperationSourceUrl} onConfirm={handleAnnotateConfirm} />
-      {/* 边缘检测弹窗 */} <ImageEdgeDetectDialog open={edgeDetectDialogOpen} onOpenChange={setEdgeDetectDialogOpen} defaultThreshold={128} onConfirm={handleEdgeDetectConfirm} />
-      {/* 色度抠图弹窗 */} <ImageChromaKeyDialog open={chromaKeyDialogOpen} onOpenChange={setChromaKeyDialogOpen} imageUrl={imageOperationSourceUrl ?? ""} onConfirm={handleChromaKeyConfirm} /> {/* 差异抠图弹窗 */} <ImageDifferenceKeyDialog open={differenceKeyDialogOpen} onOpenChange={setDifferenceKeyDialogOpen} imageUrl={imageOperationSourceUrl ?? ""} onConfirm={handleDifferenceKeyConfirm} /> {/* 智能切图弹窗 */} {smartSplitDialog}
-      {/* 扩图弹窗 */} <ImageOutpaintDialog open={outpaintDialogOpen} onOpenChange={setOutpaintDialogOpen} imageUrl={imageOperationSourceUrl} initialModelId={outpaintModelId} modelOptions={runtimeI2iModelOptions} onConfirm={handleOutpaintConfirm} />
     </ContentNodeCard> );
 });
 export default ImageInputNode;

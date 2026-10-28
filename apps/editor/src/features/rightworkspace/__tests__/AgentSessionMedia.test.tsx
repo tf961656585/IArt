@@ -122,7 +122,7 @@ describe('会话视图媒体统一件', () => {
     expect(toast.warning).not.toHaveBeenCalled();
   });
 
-  it('视频产物用作参考：按素材 ID 直加但准入不过 → 可见提示（与资产路径同一套准入，不静默丢弃）', () => {
+  it('视频产物用作参考：按素材 ID 直加成功（准入按当前模型能力判定，不再按媒体类型拒绝）', () => {
     const videoResultMessage: AgentMessageRecord = {
       ...cropResultMessage,
       body: {
@@ -141,9 +141,8 @@ describe('会话视图媒体统一件', () => {
 
     fireEvent.click(screen.getByTestId('agent-asset-use-as-reference'));
 
-    expect(referenceAssetIds()).toEqual([]);
-    expect(toast.warning).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(toast.warning).mock.calls[0]?.[0]).toContain('参考素材只支持图片');
+    expect(referenceAssetIds()).toEqual(['asset_video']);
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 
   it('注册表无资产条目时按产物未就绪占位（非按钮、不显示破图），无「用作参考」出口（产物未就绪档）', () => {

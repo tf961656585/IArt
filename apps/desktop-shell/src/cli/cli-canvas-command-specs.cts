@@ -111,7 +111,7 @@ export const CANVAS_COMMAND_SPECS: readonly CommandSpec[] = [
       { name: "--dry-run" },
     ],
     summary: "把单个节点移动到目标画布坐标。",
-    syntax: "iart canvas node move --node <节点id> --x N --y N --project P",
+    syntax: "iart canvas node move --node <节点id> --x N --y N [--dry-run] --project P",
   },
   {
     phrase: "canvas nodes move",
@@ -200,7 +200,7 @@ export const CANVAS_COMMAND_SPECS: readonly CommandSpec[] = [
     ],
     summary: "整理画布、组或容器布局（默认按视觉阅读序；--pack 把顶层容器排成行列看板），或用计划文件一次完成多组排布。",
     syntax:
-      "iart canvas layout (--scope all|containers|group:<id> [--order-mode position|created|insertion] [--columns N] [--order id1,id2] [--gap N] [--pack [--gap N]] | --plan <路径>) [--dry-run] --project P",
+      "iart canvas layout (--scope all|group:<id> [--columns N] [--order id1,id2] [--order-mode position|created|insertion] [--gap N] | --scope containers [--pack [--columns N] [--order id1,id2] [--order-mode position|insertion] [--gap N]] | --plan <路径>) [--dry-run] --project P",
     notes: [
       "两种模式二选一：--scope 族（逐次整理）或 --plan（计划文件），不能同时给出；两者都缺按用法错误拒绝。",
       "计划文件为 JSON：groups[]（逐个顶层组网格排布）、containers（整版容器排布）、positions（显式坐标）三段均可选；--order-mode 仅支持 position/insertion。",

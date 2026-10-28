@@ -14,11 +14,14 @@ import { createCustomChatModelRoutes } from "./routes/custom-chat-model-routes.c
 import { createCustomGenerationModelRoutes } from "./routes/custom-generation-model-routes.cts";
 import { onCustomGenerationModelsChanged } from "./provider-connection/custom-generation-model-store.cts";
 import { onCustomChatModelsChanged } from "./provider-connection/custom-chat-model-store.cts";
+import { onInterfaceRecipesChanged } from "./provider-connection/interface-recipe-store.cts";
 import { createOnboardingRoutes } from "./routes/onboarding-routes.cts";
 import { createExecutableModelCatalogRoutes } from "./routes/executable-model-catalog-routes.cts";
 import { createFileRoutes } from "./routes/file-routes.cts";
 import { createGenerationBatchRoutes } from "./routes/generation-batch-routes.cts";
 import { createGenerationFamilyTemplateRoutes } from "./routes/generation-family-template-routes.cts";
+import { createInterfaceFormatRoutes } from "./routes/interface-format-routes.cts";
+import { createInterfaceRecipeRoutes } from "./routes/interface-recipe-routes.cts";
 import { createProviderConnectionRoutes } from "./routes/provider-connection-routes.cts";
 import { createMediaRoutes } from "./routes/media-routes.cts";
 import { createProxyRoutes } from "./routes/proxy-routes.cts";
@@ -110,6 +113,8 @@ const createRequestHandler = (options: unknown = {}) => {
   onCustomGenerationModelsChanged(modelProjectionSnapshot.invalidate);
   // 对话侧自建记录变更同样使投影快照失效（对齐生成侧模式；记录改档位/删除即失效重建）。
   onCustomChatModelsChanged(modelProjectionSnapshot.invalidate);
+  // 接口配方变更使引用它的记录投影失效（判定与结果段落来自配方；不重建会继续跑旧计划）。
+  onInterfaceRecipesChanged(modelProjectionSnapshot.invalidate);
   const ensureProjectFilesResolvable = (projectPath: unknown) => {
     const normalizedProjectPath = typeof projectPath === "string" && projectPath.trim() ? projectPath.trim() : "";
     if (!normalizedProjectPath) return;
@@ -123,6 +128,8 @@ const createRequestHandler = (options: unknown = {}) => {
     ...createCustomChatModelRoutes(),
     ...createCustomGenerationModelRoutes(),
     ...createGenerationFamilyTemplateRoutes(),
+    ...createInterfaceFormatRoutes(),
+    ...createInterfaceRecipeRoutes(),
     ...createOnboardingRoutes(),
     ...createProviderConnectionRoutes(),
     ...createThinkingTierRoutes(),

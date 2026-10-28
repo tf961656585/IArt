@@ -39,13 +39,8 @@ const buildImageInputData = (
   lastSourcePortId: undefined,
   valueSource: undefined,
   mediaError: undefined,
-  derivedFromNodeId: undefined,
-  derivedOp: undefined,
   taskInfo: undefined,
   cachedContent: undefined,
-  originalImageMeta: undefined,
-  resizePercent: undefined,
-  outpaintModelId: undefined,
   ...overrides,
 });
 

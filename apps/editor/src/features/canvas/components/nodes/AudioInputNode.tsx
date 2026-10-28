@@ -21,7 +21,6 @@ import { useCanvasStore } from '../../store/canvasStore';
 import { useExecutionStore } from '../../store/executionStore';
 import { ContentCacheManager } from '../../services/contentCacheManager';
 import { importLocalFile } from '../../services/localMediaImport';
-import { clearNodeOutput } from '../../storage';
 import type { AudioInputNodeData } from '../../types';
 import type { AudioSegment } from '../../types/audioSegment';
 import { SegmentList } from './audio/SegmentList';
@@ -302,24 +301,6 @@ export const AudioInputNode = memo(function AudioInputNode({ id, data: _data, se
     [handleFile],
   );
 
-    const handleRemoveAudio = useCallback(() => {
-      // 同时清除前端状态和后端索引，防止轮询同步恢复已删除的音频
-      updateNodeData(id, {
-        audioUrl: null,
-        valueSource: undefined,
-        mediaError: undefined,
-        taskInfo: undefined,
-        lastExecutionId: undefined,
-        lastSourceNodeId: undefined,
-        lastSourcePortId: undefined,
-        duration: 0,
-        segments: [],
-        segmentModeEnabled: false,
-      }, undefined);
-      // 异步清除后端索引（不阻塞 UI）
-      void clearNodeOutput(id);
-    }, [id, updateNodeData]);
-
   // 处理分段保存
   const handleSegmentsSave = useCallback(
     (newSegments: AudioSegment[]) => {
@@ -436,17 +417,6 @@ export const AudioInputNode = memo(function AudioInputNode({ id, data: _data, se
               }}
             >
               <IconUpload size={14} />
-            </button>
-            <button
-              type="button"
-              className="pointer-events-auto inline-flex h-6 w-6 items-center justify-center rounded-full bg-white/90 text-destructive shadow hover:bg-white"
-              aria-label="删除音频"
-              onClick={(event) => {
-                event.stopPropagation();
-                handleRemoveAudio();
-              }}
-            >
-              <IconX size={14} />
             </button>
           </div>
         )}

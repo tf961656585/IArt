@@ -46,7 +46,7 @@ export function ProviderNoticeBar({
         type="button"
         onClick={onDismiss}
         aria-label="关闭提示"
-        className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent"
+        className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-foreground/5"
       >
         <X className="h-3.5 w-3.5" aria-hidden="true" />
       </button>

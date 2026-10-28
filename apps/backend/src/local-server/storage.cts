@@ -10,6 +10,8 @@ import {
   THINKING_TIER_PRESETS_FILENAME,
   CUSTOM_CHAT_MODELS_FILENAME,
   CUSTOM_GENERATION_MODELS_FILENAME,
+  INTERFACE_RECIPES_FILENAME,
+  INTERFACE_FORMATS_FILENAME,
   ONBOARDING_STATE_FILENAME,
   RECENT_PROJECTS_FILENAME,
   RECENT_PROJECTS_VERSION,
@@ -50,6 +52,10 @@ const getStoragePaths = () => {
     thinkingTierPresets: path.join(configRoot, THINKING_TIER_PRESETS_FILENAME),
     customChatModels: path.join(configRoot, CUSTOM_CHAT_MODELS_FILENAME),
     customGenerationModels: path.join(configRoot, CUSTOM_GENERATION_MODELS_FILENAME),
+    // 接口配方公共库（docs/custom-providers/接口配方-design.md §4/§9）
+    interfaceRecipes: path.join(configRoot, INTERFACE_RECIPES_FILENAME),
+    // 用户自建接口格式库（2026-10-26 批次 B5a）
+    interfaceFormats: path.join(configRoot, INTERFACE_FORMATS_FILENAME),
     onboardingState: path.join(configRoot, ONBOARDING_STATE_FILENAME),
     recentProjects: path.join(configRoot, RECENT_PROJECTS_FILENAME),
     globalCharacters: path.join(configRoot, 'global-characters.json'),

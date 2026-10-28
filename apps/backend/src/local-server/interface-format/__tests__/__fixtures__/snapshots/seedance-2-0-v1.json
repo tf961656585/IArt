@@ -1,0 +1,1292 @@
+{
+  "runtimeModel": {
+    "model_id": "interface-format-golden-model",
+    "provider_id": "bytedance",
+    "default_task_type": "video",
+    "mode": "video",
+    "role": "generator",
+    "capability": {
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "supports_async_task": true,
+      "supports_streaming": false,
+      "supports_multi_image": true,
+      "supports_reference_media": true,
+      "constraints": []
+    },
+    "parameter_schema": {
+      "schema_type": "object",
+      "fields": [
+        {
+          "label": "fields.first_frame.label",
+          "description": "fields.first_frame.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component_props": {
+            "accept": "image/*",
+            "maxFiles": 1
+          },
+          "field_key": "first_frame",
+          "component": "imageUpload",
+          "default_value": []
+        },
+        {
+          "label": "fields.last_frame.label",
+          "description": "fields.last_frame.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component_props": {
+            "accept": "image/*",
+            "maxFiles": 1
+          },
+          "field_key": "last_frame",
+          "component": "imageUpload",
+          "default_value": []
+        },
+        {
+          "label": "fields.reference_images.label",
+          "description": "fields.reference_images.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component_props": {
+            "accept": "image/*",
+            "allowMultiple": true,
+            "maxFiles": 9
+          },
+          "field_key": "reference_images",
+          "component": "imageUpload",
+          "default_value": []
+        },
+        {
+          "label": "fields.reference_videos.label",
+          "description": "fields.reference_videos.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component_props": {
+            "accept": "video/mp4,video/quicktime,video/*",
+            "allowMultiple": true,
+            "maxFiles": 3
+          },
+          "field_key": "reference_videos",
+          "component": "file",
+          "default_value": []
+        },
+        {
+          "label": "fields.reference_audios.label",
+          "description": "fields.reference_audios.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component_props": {
+            "accept": "audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/*",
+            "allowMultiple": true,
+            "maxFiles": 3
+          },
+          "field_key": "reference_audios",
+          "component": "file",
+          "default_value": []
+        },
+        {
+          "field_key": "resolution",
+          "label": "fields.resolution.label",
+          "description": "fields.resolution.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            {
+              "value": "480p",
+              "label": "fields.resolution.options.480p.label"
+            },
+            {
+              "value": "720p",
+              "label": "fields.resolution.options.720p.label"
+            }
+          ],
+          "component_props": {},
+          "default_value": "720p"
+        },
+        {
+          "field_key": "ratio",
+          "label": "fields.ratio.label",
+          "description": "fields.ratio.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            {
+              "value": "16:9",
+              "label": "fields.ratio.options.16_9.label"
+            },
+            {
+              "value": "4:3",
+              "label": "fields.ratio.options.4_3.label"
+            },
+            {
+              "value": "1:1",
+              "label": "fields.ratio.options.1_1.label"
+            },
+            {
+              "value": "3:4",
+              "label": "fields.ratio.options.3_4.label"
+            },
+            {
+              "value": "9:16",
+              "label": "fields.ratio.options.9_16.label"
+            },
+            {
+              "value": "21:9",
+              "label": "fields.ratio.options.21_9.label"
+            },
+            {
+              "value": "adaptive",
+              "label": "fields.ratio.options.adaptive.label"
+            }
+          ],
+          "component_props": {},
+          "default_value": "adaptive"
+        },
+        {
+          "field_key": "duration",
+          "label": "fields.duration.label",
+          "description": "fields.duration.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            {
+              "value": "4",
+              "label": "fields.duration.options.4.label"
+            },
+            {
+              "value": "5",
+              "label": "fields.duration.options.5.label"
+            },
+            {
+              "value": "6",
+              "label": "fields.duration.options.6.label"
+            },
+            {
+              "value": "7",
+              "label": "fields.duration.options.7.label"
+            },
+            {
+              "value": "8",
+              "label": "fields.duration.options.8.label"
+            },
+            {
+              "value": "9",
+              "label": "fields.duration.options.9.label"
+            },
+            {
+              "value": "10",
+              "label": "fields.duration.options.10.label"
+            },
+            {
+              "value": "11",
+              "label": "fields.duration.options.11.label"
+            },
+            {
+              "value": "12",
+              "label": "fields.duration.options.12.label"
+            },
+            {
+              "value": "13",
+              "label": "fields.duration.options.13.label"
+            },
+            {
+              "value": "14",
+              "label": "fields.duration.options.14.label"
+            },
+            {
+              "value": "15",
+              "label": "fields.duration.options.15.label"
+            },
+            {
+              "value": "-1",
+              "label": "fields.duration.options.smart.label"
+            }
+          ],
+          "component_props": {},
+          "default_value": "5"
+        },
+        {
+          "field_key": "generate_audio",
+          "label": "fields.generate_audio.label",
+          "description": "fields.generate_audio.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "switch",
+          "default_value": true
+        },
+        {
+          "field_key": "return_last_frame",
+          "label": "fields.return_last_frame.label",
+          "description": "fields.return_last_frame.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "switch",
+          "default_value": false
+        },
+        {
+          "field_key": "watermark",
+          "label": "fields.watermark.label",
+          "description": "fields.watermark.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "switch",
+          "default_value": false
+        }
+      ],
+      "required_fields": [],
+      "validation_rules": [],
+      "default_values": {
+        "resolution": "720p",
+        "ratio": "adaptive",
+        "duration": "5",
+        "generate_audio": true,
+        "return_last_frame": false,
+        "watermark": false,
+        "first_frame": [],
+        "last_frame": [],
+        "reference_images": [],
+        "reference_videos": [],
+        "reference_audios": []
+      }
+    },
+    "execution_profile": {
+      "task_type": "video",
+      "supports_async_task": true
+    },
+    "display": {
+      "visible": true,
+      "order": 9000
+    },
+    "runtime": {
+      "provider_id": "bytedance",
+      "default_task_type": "video",
+      "mode": "video",
+      "aliases": [],
+      "workspace": {
+        "task_list_position": "right"
+      },
+      "api_defaults": {
+        "endpoint": "/api/v3/contents/generations/tasks",
+        "method": "POST",
+        "contentType": "application/json"
+      },
+      "payload_rules": {
+        "api.endpoint": {
+          "kind": "literal",
+          "value": "/api/v3/contents/generations/tasks"
+        },
+        "api.method": {
+          "kind": "literal",
+          "value": "POST"
+        },
+        "api.contentType": {
+          "kind": "literal",
+          "value": "application/json"
+        },
+        "api.responseHandling.mode": {
+          "kind": "literal",
+          "value": "async"
+        },
+        "body.model": {
+          "kind": "literal",
+          "value": "interface-format-golden-model"
+        },
+        "body.content": {
+          "kind": "compute",
+          "operator": "map_array",
+          "cache_key": "declaredSeedance20.content",
+          "note": "按记录的素材位组装官方 content 数组：prepend 文本块，append 首/尾帧与参考图/视频/音频；skip_if_empty 丢弃未填写的分支。",
+          "options": {
+            "source": {
+              "kind": "literal",
+              "value": []
+            },
+            "item": {
+              "kind": "literal",
+              "value": null
+            },
+            "prepend": [
+              {
+                "kind": "compute",
+                "operator": "object",
+                "entries": {
+                  "type": {
+                    "kind": "literal",
+                    "value": "text"
+                  },
+                  "text": {
+                    "kind": "field",
+                    "field_key": "__prompt",
+                    "transforms": [
+                      "trim"
+                    ]
+                  }
+                }
+              }
+            ],
+            "append": [
+              {
+                "kind": "when",
+                "condition": {
+                  "op": "and",
+                  "conditions": [
+                    {
+                      "op": "ne",
+                      "field": "first_frame",
+                      "value": []
+                    },
+                    {
+                      "op": "eq",
+                      "field": "reference_images",
+                      "value": []
+                    },
+                    {
+                      "op": "eq",
+                      "field": "reference_videos",
+                      "value": []
+                    },
+                    {
+                      "op": "eq",
+                      "field": "reference_audios",
+                      "value": []
+                    }
+                  ]
+                },
+                "truthy": {
+                  "kind": "compute",
+                  "operator": "object",
+                  "entries": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "image_url"
+                    },
+                    "image_url": {
+                      "kind": "compute",
+                      "operator": "object",
+                      "entries": {
+                        "url": {
+                          "kind": "field",
+                          "field_key": "first_frame",
+                          "transforms": [
+                            "extractFirstUrl"
+                          ],
+                          "media_target": "public_url"
+                        }
+                      }
+                    },
+                    "role": {
+                      "kind": "literal",
+                      "value": "first_frame"
+                    }
+                  }
+                },
+                "falsy": {
+                  "kind": "literal",
+                  "value": null
+                }
+              },
+              {
+                "kind": "when",
+                "condition": {
+                  "op": "and",
+                  "conditions": [
+                    {
+                      "op": "ne",
+                      "field": "last_frame",
+                      "value": []
+                    },
+                    {
+                      "op": "eq",
+                      "field": "reference_images",
+                      "value": []
+                    },
+                    {
+                      "op": "eq",
+                      "field": "reference_videos",
+                      "value": []
+                    },
+                    {
+                      "op": "eq",
+                      "field": "reference_audios",
+                      "value": []
+                    }
+                  ]
+                },
+                "truthy": {
+                  "kind": "compute",
+                  "operator": "object",
+                  "entries": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "image_url"
+                    },
+                    "image_url": {
+                      "kind": "compute",
+                      "operator": "object",
+                      "entries": {
+                        "url": {
+                          "kind": "field",
+                          "field_key": "last_frame",
+                          "transforms": [
+                            "extractFirstUrl"
+                          ],
+                          "media_target": "public_url"
+                        }
+                      }
+                    },
+                    "role": {
+                      "kind": "literal",
+                      "value": "last_frame"
+                    }
+                  }
+                },
+                "falsy": {
+                  "kind": "literal",
+                  "value": null
+                }
+              },
+              {
+                "kind": "compute",
+                "operator": "map_array",
+                "cache_key": "declaredSeedance20.reference_image",
+                "options": {
+                  "source": {
+                    "kind": "field",
+                    "field_key": "reference_images",
+                    "transforms": [
+                      "extractUrls"
+                    ],
+                    "media_target": "public_url"
+                  },
+                  "item": {
+                    "kind": "compute",
+                    "operator": "object",
+                    "entries": {
+                      "type": {
+                        "kind": "literal",
+                        "value": "image_url"
+                      },
+                      "image_url": {
+                        "kind": "compute",
+                        "operator": "object",
+                        "entries": {
+                          "url": {
+                            "kind": "item"
+                          }
+                        }
+                      },
+                      "role": {
+                        "kind": "literal",
+                        "value": "reference_image"
+                      }
+                    }
+                  },
+                  "skip_if_empty": true
+                }
+              },
+              {
+                "kind": "compute",
+                "operator": "map_array",
+                "cache_key": "declaredSeedance20.reference_video",
+                "options": {
+                  "source": {
+                    "kind": "field",
+                    "field_key": "reference_videos",
+                    "transforms": [
+                      "extractUrls"
+                    ],
+                    "media_target": "public_url"
+                  },
+                  "item": {
+                    "kind": "compute",
+                    "operator": "object",
+                    "entries": {
+                      "type": {
+                        "kind": "literal",
+                        "value": "video_url"
+                      },
+                      "video_url": {
+                        "kind": "compute",
+                        "operator": "object",
+                        "entries": {
+                          "url": {
+                            "kind": "item"
+                          }
+                        }
+                      },
+                      "role": {
+                        "kind": "literal",
+                        "value": "reference_video"
+                      }
+                    }
+                  },
+                  "skip_if_empty": true
+                }
+              },
+              {
+                "kind": "compute",
+                "operator": "map_array",
+                "cache_key": "declaredSeedance20.reference_audio",
+                "options": {
+                  "source": {
+                    "kind": "field",
+                    "field_key": "reference_audios",
+                    "transforms": [
+                      "extractUrls"
+                    ],
+                    "media_target": "public_url"
+                  },
+                  "item": {
+                    "kind": "compute",
+                    "operator": "object",
+                    "entries": {
+                      "type": {
+                        "kind": "literal",
+                        "value": "audio_url"
+                      },
+                      "audio_url": {
+                        "kind": "compute",
+                        "operator": "object",
+                        "entries": {
+                          "url": {
+                            "kind": "item"
+                          }
+                        }
+                      },
+                      "role": {
+                        "kind": "literal",
+                        "value": "reference_audio"
+                      }
+                    }
+                  },
+                  "skip_if_empty": true
+                }
+              }
+            ],
+            "skip_if_empty": true
+          }
+        },
+        "body.resolution": {
+          "kind": "compute",
+          "operator": "normalize_enum",
+          "cache_key": "declaredSeedance20.resolution",
+          "args": [
+            {
+              "kind": "field",
+              "field_key": "resolution",
+              "transforms": [
+                "trim"
+              ]
+            }
+          ],
+          "options": {
+            "allowed_values": [
+              "480p",
+              "720p"
+            ],
+            "fallback": "720p"
+          }
+        },
+        "body.ratio": {
+          "kind": "compute",
+          "operator": "normalize_enum",
+          "cache_key": "declaredSeedance20.ratio",
+          "args": [
+            {
+              "kind": "field",
+              "field_key": "ratio",
+              "transforms": [
+                "trim"
+              ]
+            }
+          ],
+          "options": {
+            "allowed_values": [
+              "16:9",
+              "4:3",
+              "1:1",
+              "3:4",
+              "9:16",
+              "21:9",
+              "adaptive"
+            ],
+            "fallback": "adaptive"
+          }
+        },
+        "body.duration": {
+          "kind": "compute",
+          "operator": "normalize_enum",
+          "cache_key": "declaredSeedance20.duration",
+          "args": [
+            {
+              "kind": "field",
+              "field_key": "duration",
+              "transforms": [
+                "toNumber"
+              ]
+            }
+          ],
+          "options": {
+            "allowed_values": [
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              -1
+            ],
+            "fallback": 5
+          }
+        },
+        "body.generate_audio": {
+          "kind": "field",
+          "field_key": "generate_audio"
+        },
+        "body.return_last_frame": {
+          "kind": "field",
+          "field_key": "return_last_frame"
+        },
+        "body.watermark": {
+          "kind": "field",
+          "field_key": "watermark"
+        },
+        "prompt": {
+          "kind": "field",
+          "field_key": "__prompt",
+          "transforms": [
+            "trim"
+          ]
+        },
+        "input": {
+          "kind": "field",
+          "field_key": "__prompt",
+          "transforms": [
+            "trim"
+          ]
+        },
+        "meta.model_id": {
+          "kind": "literal",
+          "value": "interface-format-golden-model"
+        },
+        "meta.resolution": {
+          "kind": "compute",
+          "operator": "normalize_enum",
+          "cache_key": "declaredSeedance20.resolution",
+          "args": [
+            {
+              "kind": "field",
+              "field_key": "resolution",
+              "transforms": [
+                "trim"
+              ]
+            }
+          ],
+          "options": {
+            "allowed_values": [
+              "480p",
+              "720p"
+            ],
+            "fallback": "720p"
+          }
+        },
+        "meta.ratio": {
+          "kind": "compute",
+          "operator": "normalize_enum",
+          "cache_key": "declaredSeedance20.ratio",
+          "args": [
+            {
+              "kind": "field",
+              "field_key": "ratio",
+              "transforms": [
+                "trim"
+              ]
+            }
+          ],
+          "options": {
+            "allowed_values": [
+              "16:9",
+              "4:3",
+              "1:1",
+              "3:4",
+              "9:16",
+              "21:9",
+              "adaptive"
+            ],
+            "fallback": "adaptive"
+          }
+        },
+        "meta.duration": {
+          "kind": "compute",
+          "operator": "normalize_enum",
+          "cache_key": "declaredSeedance20.duration",
+          "args": [
+            {
+              "kind": "field",
+              "field_key": "duration",
+              "transforms": [
+                "toNumber"
+              ]
+            }
+          ],
+          "options": {
+            "allowed_values": [
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              -1
+            ],
+            "fallback": 5
+          }
+        },
+        "meta.generate_audio": {
+          "kind": "field",
+          "field_key": "generate_audio"
+        },
+        "meta.return_last_frame": {
+          "kind": "field",
+          "field_key": "return_last_frame"
+        },
+        "meta.watermark": {
+          "kind": "field",
+          "field_key": "watermark"
+        }
+      },
+      "capabilities": {
+        "execution_traits": [
+          "nonBlocking"
+        ]
+      },
+      "schema_defaults": {
+        "resolution": "720p",
+        "ratio": "adaptive",
+        "duration": "5",
+        "generate_audio": true,
+        "return_last_frame": false,
+        "watermark": false,
+        "first_frame": [],
+        "last_frame": [],
+        "reference_images": [],
+        "reference_videos": [],
+        "reference_audios": []
+      },
+      "execution_driver": "http_formal_task",
+      "form_field_style": "dotted",
+      "form_array_style": "repeat",
+      "payload_format": "json",
+      "url_input_upload_mode": "public_relay",
+      "url_input_upload_target_type": "cloudflare_image_public_url"
+    },
+    "request_strategy": {
+      "request_stage": "submit",
+      "protocol": "http",
+      "endpoint": "/api/v3/contents/generations/tasks",
+      "method": "POST"
+    },
+    "prompt_field": {
+      "field_key": "__prompt",
+      "required": true,
+      "validation_rules": []
+    },
+    "result_rule": {
+      "mode": "async",
+      "submit_response_id_path": "/id"
+    },
+    "result_output_mapping": {
+      "response_mode": "structured_payload",
+      "output_mapping_rules": [
+        {
+          "target": "output.video_url",
+          "source": {
+            "kind": "response",
+            "path": "content.video_url"
+          },
+          "required": false,
+          "default_value": null
+        },
+        {
+          "target": "output.video_url",
+          "source": {
+            "kind": "response",
+            "path": "data.content.video_url"
+          },
+          "required": false,
+          "default_value": null
+        }
+      ],
+      "note": "declared generation model (seedance-2-0-v1 family template)"
+    },
+    "polling_strategy": {
+      "request": {
+        "url_template": "/api/v3/contents/generations/tasks/{id}",
+        "method": "GET",
+        "headers": {},
+        "query": [],
+        "body": null,
+        "body_format": "json",
+        "content_type": null
+      },
+      "polling": {
+        "intervalMs": 3000,
+        "maxAttempts": 500,
+        "successStatuses": [
+          "succeeded"
+        ],
+        "statusFieldPaths": [
+          "status",
+          "data.status"
+        ],
+        "failureStatuses": [
+          "failed",
+          "expired"
+        ],
+        "successFieldPaths": [
+          "content.video_url",
+          "status"
+        ],
+        "failureCodePaths": [
+          "error.code"
+        ],
+        "failureMessagePaths": [
+          "error.message",
+          "message",
+          "data.message",
+          "fail_reason"
+        ]
+      }
+    }
+  },
+  "node": {
+    "node_type": "model",
+    "group_key": "bytedance",
+    "input_ports": [
+      {
+        "id": "first_frame",
+        "name": "ports.inputs.first_frame.name",
+        "data_type": "image",
+        "required": false,
+        "max_connections": 1,
+        "description": "ports.inputs.first_frame.description",
+        "field_key": "first_frame",
+        "multiple": false
+      },
+      {
+        "id": "last_frame",
+        "name": "ports.inputs.last_frame.name",
+        "data_type": "image",
+        "required": false,
+        "max_connections": 1,
+        "description": "ports.inputs.last_frame.description",
+        "field_key": "last_frame",
+        "multiple": false
+      },
+      {
+        "id": "reference_images",
+        "name": "ports.inputs.reference_images.name",
+        "data_type": "image",
+        "required": false,
+        "max_connections": 9,
+        "description": "ports.inputs.reference_images.description",
+        "field_key": "reference_images",
+        "multiple": true
+      },
+      {
+        "id": "reference_videos",
+        "name": "ports.inputs.reference_videos.name",
+        "data_type": "video",
+        "required": false,
+        "max_connections": 3,
+        "description": "ports.inputs.reference_videos.description",
+        "field_key": "reference_videos",
+        "multiple": true
+      },
+      {
+        "id": "reference_audios",
+        "name": "ports.inputs.reference_audios.name",
+        "data_type": "audio",
+        "required": false,
+        "max_connections": 3,
+        "description": "ports.inputs.reference_audios.description",
+        "field_key": "reference_audios",
+        "multiple": true
+      }
+    ],
+    "output_ports": [
+      {
+        "id": "video",
+        "name": "ports.outputs.video.name",
+        "data_type": "video",
+        "field_key": "output_video",
+        "multiple": true,
+        "description": "ports.outputs.video.description"
+      }
+    ]
+  },
+  "localizationResources": {
+    "zh-CN": {
+      "fields": {
+        "prompt": {
+          "label": "提示词"
+        },
+        "first_frame": {
+          "label": "首帧",
+          "description": "作为视频起始画面。宽高比 0.4–2.5、单边 300–6000 px、单张小于 30 MB；含真人人脸的素材会被上游拒绝。"
+        },
+        "last_frame": {
+          "label": "尾帧",
+          "description": "作为视频结束画面，与首帧图成对使用；约束与首帧图相同。"
+        },
+        "reference_images": {
+          "label": "参考图",
+          "description": "最多 9 张。宽高比 0.4–2.5、单边 300–6000 px、单张小于 30 MB；含真人人脸的素材会被上游拒绝。"
+        },
+        "reference_videos": {
+          "label": "参考视频",
+          "description": "最多 3 段，单段 2–15 秒且不超过 200 MB；与参考音频合计时长不超过 15 秒。"
+        },
+        "reference_audios": {
+          "label": "参考音频",
+          "description": "最多 3 段，WAV / MP3，单段 2–15 秒；不能单独作参考，需同时提供至少 1 张参考图或 1 段参考视频。"
+        },
+        "resolution": {
+          "label": "分辨率",
+          "description": "默认 720p，可选 480p / 720p。",
+          "options": {
+            "480p": {
+              "label": "480p 标清"
+            },
+            "720p": {
+              "label": "720p 高清"
+            }
+          }
+        },
+        "ratio": {
+          "label": "画幅比例",
+          "description": "官方 7 档，默认 adaptive（按输入内容自适应）。",
+          "options": {
+            "16_9": {
+              "label": "16:9"
+            },
+            "4_3": {
+              "label": "4:3"
+            },
+            "1_1": {
+              "label": "1:1"
+            },
+            "3_4": {
+              "label": "3:4"
+            },
+            "9_16": {
+              "label": "9:16"
+            },
+            "21_9": {
+              "label": "21:9"
+            },
+            "adaptive": {
+              "label": "自适应（默认）"
+            }
+          }
+        },
+        "duration": {
+          "label": "视频时长（秒）",
+          "description": "4–15 秒整数，或「智能时长」（由提示词复杂度决定，约 5 秒）；默认 5 秒。帧率固定 24 fps，不可调。",
+          "options": {
+            "4": {
+              "label": "4 秒"
+            },
+            "5": {
+              "label": "5 秒"
+            },
+            "6": {
+              "label": "6 秒"
+            },
+            "7": {
+              "label": "7 秒"
+            },
+            "8": {
+              "label": "8 秒"
+            },
+            "9": {
+              "label": "9 秒"
+            },
+            "10": {
+              "label": "10 秒"
+            },
+            "11": {
+              "label": "11 秒"
+            },
+            "12": {
+              "label": "12 秒"
+            },
+            "13": {
+              "label": "13 秒"
+            },
+            "14": {
+              "label": "14 秒"
+            },
+            "15": {
+              "label": "15 秒"
+            },
+            "smart": {
+              "label": "智能时长（约 5 秒）"
+            }
+          }
+        },
+        "generate_audio": {
+          "label": "生成音频",
+          "description": "默认开启。关闭后提交静音视频。"
+        },
+        "return_last_frame": {
+          "label": "返回尾帧图",
+          "description": "开启后任务成功时额外返回尾帧图 URL，可用于续拍。"
+        },
+        "watermark": {
+          "label": "展示水印",
+          "description": "默认关闭。平台强制的可见水印与此开关无关。"
+        }
+      },
+      "ports": {
+        "inputs": {
+          "first_frame": {
+            "name": "首帧",
+            "description": "接入素材或资产节点作为视频起始画面。"
+          },
+          "last_frame": {
+            "name": "尾帧",
+            "description": "接入素材或资产节点作为视频结束画面。"
+          },
+          "reference_images": {
+            "name": "参考图",
+            "description": "接入多张参考图（最多 9 张）。"
+          },
+          "reference_videos": {
+            "name": "参考视频",
+            "description": "接入参考视频（最多 3 段）。"
+          },
+          "reference_audios": {
+            "name": "参考音频",
+            "description": "接入参考音频（最多 3 段）。"
+          }
+        },
+        "outputs": {
+          "video": {
+            "name": "生成视频",
+            "description": "生成的视频结果。"
+          }
+        }
+      }
+    },
+    "en": {
+      "fields": {
+        "prompt": {
+          "label": "Prompt"
+        },
+        "first_frame": {
+          "label": "First frame",
+          "description": "The starting frame. Aspect ratio 0.4–2.5, edges 300–6000 px, under 30 MB; inputs containing real human faces are rejected upstream."
+        },
+        "last_frame": {
+          "label": "Last frame",
+          "description": "The ending frame, used together with the first frame; same constraints as the first frame."
+        },
+        "reference_images": {
+          "label": "Reference images",
+          "description": "Up to 9 images. Aspect ratio 0.4–2.5, edges 300–6000 px, under 30 MB; inputs containing real human faces are rejected upstream."
+        },
+        "reference_videos": {
+          "label": "Reference videos",
+          "description": "Up to 3 clips, each 2–15 s and under 200 MB; combined with reference audio the total length must stay within 15 s."
+        },
+        "reference_audios": {
+          "label": "Reference audio",
+          "description": "Up to 3 clips in WAV / MP3, each 2–15 s. Audio cannot stand alone: attach at least one reference image or video."
+        },
+        "resolution": {
+          "label": "Resolution",
+          "description": "Defaults to 720p. Available: 480p, 720p.",
+          "options": {
+            "480p": {
+              "label": "480p SD"
+            },
+            "720p": {
+              "label": "720p HD"
+            }
+          }
+        },
+        "ratio": {
+          "label": "Aspect ratio",
+          "description": "All 7 official ratios. Defaults to adaptive (follows the input content).",
+          "options": {
+            "16_9": {
+              "label": "16:9"
+            },
+            "4_3": {
+              "label": "4:3"
+            },
+            "1_1": {
+              "label": "1:1"
+            },
+            "3_4": {
+              "label": "3:4"
+            },
+            "9_16": {
+              "label": "9:16"
+            },
+            "21_9": {
+              "label": "21:9"
+            },
+            "adaptive": {
+              "label": "Adaptive (default)"
+            }
+          }
+        },
+        "duration": {
+          "label": "Duration (seconds)",
+          "description": "An integer from 4 to 15, or \"smart\" duration (decided by prompt complexity, around 5 s). Defaults to 5 s. Frame rate is fixed at 24 fps.",
+          "options": {
+            "4": {
+              "label": "4 s"
+            },
+            "5": {
+              "label": "5 s"
+            },
+            "6": {
+              "label": "6 s"
+            },
+            "7": {
+              "label": "7 s"
+            },
+            "8": {
+              "label": "8 s"
+            },
+            "9": {
+              "label": "9 s"
+            },
+            "10": {
+              "label": "10 s"
+            },
+            "11": {
+              "label": "11 s"
+            },
+            "12": {
+              "label": "12 s"
+            },
+            "13": {
+              "label": "13 s"
+            },
+            "14": {
+              "label": "14 s"
+            },
+            "15": {
+              "label": "15 s"
+            },
+            "smart": {
+              "label": "Smart (about 5 s)"
+            }
+          }
+        },
+        "generate_audio": {
+          "label": "Generate audio",
+          "description": "On by default. Turn off to submit a silent video."
+        },
+        "return_last_frame": {
+          "label": "Return last frame",
+          "description": "When on, a succeeded task also returns the last-frame image URL for continuation."
+        },
+        "watermark": {
+          "label": "Watermark",
+          "description": "Off by default. Platform-enforced visible watermarking is independent of this switch."
+        }
+      },
+      "ports": {
+        "inputs": {
+          "first_frame": {
+            "name": "First frame",
+            "description": "Connect an asset as the starting frame."
+          },
+          "last_frame": {
+            "name": "Last frame",
+            "description": "Connect an asset as the ending frame."
+          },
+          "reference_images": {
+            "name": "Reference images",
+            "description": "Connect up to 9 reference images."
+          },
+          "reference_videos": {
+            "name": "Reference videos",
+            "description": "Connect up to 3 reference videos."
+          },
+          "reference_audios": {
+            "name": "Reference audio",
+            "description": "Connect up to 3 reference audio clips."
+          }
+        },
+        "outputs": {
+          "video": {
+            "name": "Generated video",
+            "description": "The generated video output."
+          }
+        }
+      }
+    }
+  }
+}

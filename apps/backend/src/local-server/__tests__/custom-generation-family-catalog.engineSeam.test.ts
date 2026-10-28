@@ -10,6 +10,7 @@ import {
   ExecutableModelCatalogResponseSchema,
   PromptDockBatchSubmitResponseSchema,
   TaskStateNotificationSchema,
+  type CustomGenerationModel,
   type GenerationMediaSlotId,
   type TaskStateNotification,
 } from '@iart/contracts';
@@ -52,6 +53,8 @@ import { setCredentialForConnection } from '../provider-connection/credential-st
 
 const DECLARED_MODEL_ID = 'seam-declared-image';
 const DECLARED_REF_MODEL_ID = 'seam-declared-image-ref';
+const DECLARED_VIDEO_MODEL_ID = 'seam-declared-video';
+const DECLARED_VIDEO_REF_MODEL_ID = 'seam-declared-video-ref';
 const REMOTE_MODEL_ID = 'remote-seam-declared';
 const CONNECTION_BASE_URL = 'https://seam-declared-upstream.example.invalid';
 const CREDENTIAL_VALUE = 'sk-seam-declared-key';
@@ -233,8 +236,13 @@ const setupTest = async (t: TestContext) => {
   return { projectPath: project.projectPath };
 };
 
-/** 单记录口径：能力属性 + 接入归属一次写入（openai-image-v1 连接 + 凭证）→ active route。 */
-const seedDeclarationAndRouting = async (params: { modelId: string; acceptedMediaSlots: GenerationMediaSlotId[] }): Promise<void> => {
+/** 单记录口径：能力属性 + 接入归属一次写入（默认 openai-image-v1 连接 + 凭证）→ active route。 */
+const seedDeclarationAndRouting = async (params: {
+  modelId: string;
+  acceptedMediaSlots: GenerationMediaSlotId[];
+  familyAdapterId?: CustomGenerationModel['family_adapter_id'];
+  parameterOverrides?: CustomGenerationModel['parameter_overrides'];
+}): Promise<void> => {
   const connection = createConnection({
     display_name: 'seam-declared-upstream',
     base_url: CONNECTION_BASE_URL,
@@ -246,8 +254,11 @@ const seedDeclarationAndRouting = async (params: { modelId: string; acceptedMedi
     model_id: params.modelId,
     connection_id: connection.connection_id,
     remote_model_id: REMOTE_MODEL_ID,
-    family_adapter_id: 'openai-image-v1',
+    family_adapter_id: params.familyAdapterId ?? 'openai-image-v1',
     accepted_media_slots: params.acceptedMediaSlots,
+    ...(params.parameterOverrides === undefined
+      ? {}
+      : { parameter_overrides: params.parameterOverrides }),
   });
   assert.equal(added.ok, true, 'declaration should be accepted by the real store');
   assert.equal(setActiveDeployment(params.modelId, added.model.record_id), added.model.record_id);
@@ -373,4 +384,63 @@ void test('接缝：声明勾选参考图素材位时能力投影含图像输入
     entry.parameter_schema.fields.some((field) => field.fieldKey === 'image'),
     'reference-capable declaration must project the reference-image form field',
   );
+  // 用途候选的中文名必须来自族模板本地化资源：契约要求这里是中文名，缺失才给空串让消费端
+  // 回退；取本地化键末段会把内部字段键（inputReference / image）当名字上屏。
+  assert.deepEqual(
+    entry.media_slots?.map((slot) => [slot.slotId, slot.fieldKey, slot.label, slot.maxFiles]),
+    [['reference_image', 'image', '参考图', 16]],
+    'media slot candidates must carry the localized Chinese name and the declared capacity',
+  );
+});
+void test('接缝：素材位用途候选只含已勾选的位，且带中文显示名（openai-video 族）', async (t) => {
+  await setupTest(t);
+  await seedDeclarationAndRouting({
+    modelId: DECLARED_VIDEO_MODEL_ID,
+    acceptedMediaSlots: ['first_frame', 'last_frame'],
+    familyAdapterId: 'openai-video-v1',
+  });
+  const baseUrl = await startServer(t);
+
+  const catalogPayload = await fetchJson(baseUrl, '/api/executable-model-catalog');
+  const catalog = ExecutableModelCatalogResponseSchema.parse(catalogPayload);
+  const entry = catalog.models.find((model) => model.model_id === DECLARED_VIDEO_MODEL_ID);
+  assert.ok(entry, 'declared video model must appear in the executable catalog');
+  assert.deepEqual(
+    entry.media_slots?.map((slot) => [slot.slotId, slot.fieldKey, slot.label, slot.maxFiles]),
+    [
+      ['first_frame', 'inputReference', '首帧', 1],
+      ['last_frame', 'lastFrame', '尾帧', 1],
+    ],
+    '未勾选的参考图不得作为用途出现；显示名必须是模板里的中文名，不是内部字段键',
+  );
+});
+
+void test('接缝：素材位的「最多几张」覆盖经目录投影下发（openai-video 参考图 = 2）', async (t) => {
+  await setupTest(t);
+  await seedDeclarationAndRouting({
+    modelId: DECLARED_VIDEO_REF_MODEL_ID,
+    acceptedMediaSlots: ['reference_image'],
+    familyAdapterId: 'openai-video-v1',
+    // 用户实测配置：只勾参考图，并在参数设置里把「最多几张」改成 2。
+    parameterOverrides: {
+      official: [{ field_key: 'referenceImage', media_max_files: 2 }],
+      custom: [],
+    },
+  });
+  const baseUrl = await startServer(t);
+
+  const catalogPayload = await fetchJson(baseUrl, '/api/executable-model-catalog');
+  const catalog = ExecutableModelCatalogResponseSchema.parse(catalogPayload);
+  const entry = catalog.models.find((model) => model.model_id === DECLARED_VIDEO_REF_MODEL_ID);
+  assert.ok(entry, 'declared video ref model must appear in the executable catalog');
+  // 「张数」必须一路从记录覆盖走到目录：Editor 的参考区容量判据只读这份值，投影丢了
+  // 就只剩族模板默认 1，用户配置的 2 在创作面静默失效（本轮缺陷的裂纹位置）。
+  assert.deepEqual(
+    entry.media_slots?.map((slot) => [slot.slotId, slot.fieldKey, slot.maxFiles]),
+    [['reference_image', 'referenceImage', 2]],
+    'media slot capacity must reflect the record override, not the family default',
+  );
+  const field = entry.parameter_schema.fields.find((candidate) => candidate.fieldKey === 'referenceImage');
+  assert.equal(field?.componentProps?.maxFiles, 2, 'form attachment cap must use the same value');
+  assert.equal(field?.componentProps?.allowMultiple, true, 'multi-select follows the same value');
 });

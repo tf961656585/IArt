@@ -264,19 +264,31 @@ const buildMediaRefPlaceholders = (
     }
     if (Array.isArray(entry)) { for (const item of entry) { processEntry(item); } return; }
     if (typeof entry !== "object") return;
+    // 媒体身份（提交面显式给出时）：来源资产标识与产品级素材位标识。
+    // 只作审计/溯源随占位符带到序列化文件描述，不参与字段分桶与出网形态。
+    const entryAssetId =
+      normalizeString(readOpenField(entry, "assetId")) ||
+      normalizeString(readOpenField(entry, "asset_id"));
+    const entrySlotId =
+      normalizeString(readOpenField(entry, "slotId")) ||
+      normalizeString(readOpenField(entry, "slot_id"));
+    const identity = {
+      ...(entryAssetId ? { assetId: entryAssetId } : {}),
+      ...(entrySlotId ? { slotId: entrySlotId } : {}),
+    };
     const kind = normalizeString(readOpenField(entry, "kind")).toLowerCase();
     if (kind === "inline_data") {
       const data = normalizeString(readOpenField(entry, "data"));
       const mimeType = normalizeString(readOpenField(entry, "mimeType")) || normalizeString(readOpenField(entry, "mime_type")) || "application/octet-stream";
       if (!data) { loggingModule.logDebug("[request-assembler-runtime] buildMediaRefPlaceholders: inline_data entry has empty data, skipping", undefined); return; }
       const fn = readOpenField(entry, "filename");
-      results.push({ ...MEDIA_REF_MARKER, source: { kind: "inline_data" as const, data, mimeType }, mimeType, transport, filename: typeof fn === "string" && fn.trim() ? fn.trim() : guessFilename(mimeType), fieldPath });
+      results.push({ ...MEDIA_REF_MARKER, source: { kind: "inline_data" as const, data, mimeType }, mimeType, transport, filename: typeof fn === "string" && fn.trim() ? fn.trim() : guessFilename(mimeType), fieldPath, ...identity });
       return;
     }
     const url = normalizeString(readOpenField(entry, "url"));
     if (url) {
       const fn = readOpenField(entry, "filename");
-      results.push({ ...MEDIA_REF_MARKER, source: { kind: "url" as const, url }, mimeType: normalizeString(readOpenField(entry, "mime_type")) || undefined, transport, filename: typeof fn === "string" && fn.trim() ? fn.trim() : undefined, fieldPath });
+      results.push({ ...MEDIA_REF_MARKER, source: { kind: "url" as const, url }, mimeType: normalizeString(readOpenField(entry, "mime_type")) || undefined, transport, filename: typeof fn === "string" && fn.trim() ? fn.trim() : undefined, fieldPath, ...identity });
       return;
     }
     const rawUrl = normalizeString(readOpenField(entry, "asset_url") || readOpenField(entry, "assetUrl") || readOpenField(entry, "src"));

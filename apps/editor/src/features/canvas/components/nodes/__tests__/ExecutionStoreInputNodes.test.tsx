@@ -218,11 +218,6 @@ vi.mock('@/client/api/imageSplit', () => ({
   splitImage: vi.fn(),
 }));
 
-vi.mock('../../../utils/imageDerivation', () => ({
-  createDerivedImageInputNode: vi.fn(),
-  createDerivedImageInputNodesGrid: vi.fn(),
-}));
-
 vi.mock('../../../utils/mediaUtils', () => ({
   ensureLocalFilesImageUrl: (value: string) => value,
 }));
@@ -270,11 +265,6 @@ vi.mock('@/features/models/shared/imageGenerationOptions', () => ({
 
 vi.mock('@/client/utils/revealFilesUrlWithToast', () => ({
   revealFilesUrlWithToast: vi.fn(),
-}));
-
-vi.mock('../imageOutpaintTaskSubmission', () => ({
-  bindOutpaintTaskInfo: vi.fn(),
-  createOutpaintTaskInfo: vi.fn(),
 }));
 
 vi.mock('../../../nodes/audio/AudioNodeFactory', () => ({
@@ -332,13 +322,8 @@ const createImageInputData = (taskInfo: NodeTaskInfo): ImageInputNodeData => ({
   lastSourcePortId: undefined,
   valueSource: undefined,
   mediaError: undefined,
-  derivedFromNodeId: undefined,
-  derivedOp: undefined,
   taskInfo,
   cachedContent: undefined,
-  originalImageMeta: null,
-  resizePercent: undefined,
-  outpaintModelId: undefined,
 });
 
 const createVideoInputData = (taskInfo: NodeTaskInfo): VideoInputNodeData => ({
@@ -350,8 +335,6 @@ const createVideoInputData = (taskInfo: NodeTaskInfo): VideoInputNodeData => ({
   videoMeta: null,
   valueSource: undefined,
   mediaError: undefined,
-  derivedFromNodeId: undefined,
-  derivedOp: undefined,
   lastExecutionId: undefined,
   lastSourceNodeId: undefined,
   lastSourcePortId: undefined,

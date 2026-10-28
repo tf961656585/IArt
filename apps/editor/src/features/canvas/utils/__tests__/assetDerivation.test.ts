@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MediaAsset } from '@iart/contracts';
 import { createNodeGraph } from '../../types/nodeGraph';
 import { useCanvasStore } from '../../store/canvasStore';
@@ -6,7 +6,12 @@ import {
   applyOutpaintResultToAssetNode,
   bindOutpaintTaskToAssetNode,
   createDerivedAssetNode,
+  createDerivedAssetNodesInGrid,
 } from '../assetDerivation';
+import {
+  DERIVED_NODE_HEIGHT_ESTIMATE,
+  DERIVED_NODE_WIDTH_ESTIMATE,
+} from '../derivedNodePlacement';
 import type { AssetNodeData, GraphNode, NodeGraph } from '../../types';
 import {
   createMediaAssetFixture,
@@ -48,8 +53,8 @@ const createMediaAsset = (id: string, url: string): MediaAsset =>
     },
   });
 
-const addSourceAssetNode = (): GraphNode<AssetNodeData> => {
-  const node = useCanvasStore.getState().addNode('asset', { x: 0, y: 0 }, {
+const addSourceAssetNode = (position: { x: number; y: number } = { x: 0, y: 0 }): GraphNode<AssetNodeData> => {
+  const node = useCanvasStore.getState().addNode('asset', position, {
     label: 'gpt-image-2',
     sourceBatchId: 'b1',
     sourceTaskId: 't1',
@@ -207,5 +212,226 @@ describe('createDerivedAssetNode 成员关系继承（AG-CN-017 / 成员节点�
 
     expect(created).toBeTruthy();
     expect(created?.groupId).toBeUndefined();
+  });
+});
+
+describe('createDerivedAssetNodesInGrid（分割/智能切图的批量产出）', () => {
+  const createTileMediaAsset = (assetId: string): MediaAsset =>
+    createMediaAsset(assetId, `/project-media/prj_demo/${assetId}.png`);
+
+  beforeEach(() => {
+    resetStore();
+    const graph = createNodeGraph(createTestNodeGraphParams('测试画板'));
+    useCanvasStore.setState((state) => {
+      state.nodeGraph = graph;
+    });
+    useCanvasStore.getState().setProjectMediaAssets(
+      { 'asset-src': createMediaAsset('asset-src', '/project-media/prj_demo/src.png') },
+      { source: 'user-action' },
+    );
+  });
+
+  it('2×2 四个图块 → 四个资产节点、血缘正确、素材已注册、按源图坐标摆成 2×2、一次性全选', () => {
+    const source = addSourceAssetNode();
+    const selectCalls: Array<{ nodeIds: string[]; reason: string }> = [];
+
+    const created = createDerivedAssetNodesInGrid({
+      sourceNodeId: source.id,
+      mediaType: 'image',
+      derivedFrom: { sourceAssetId: 'asset-src', tool: 'split' },
+      sourceSize: { width: 200, height: 200 },
+      items: [
+        { assetId: 'asset-tile-0', mediaAsset: createTileMediaAsset('asset-tile-0'), label: '图块 0', sourceRect: { x: 0, y: 0, width: 100, height: 100 }, row: 0, col: 0 },
+        { assetId: 'asset-tile-1', mediaAsset: createTileMediaAsset('asset-tile-1'), label: '图块 1', sourceRect: { x: 100, y: 0, width: 100, height: 100 }, row: 0, col: 1 },
+        { assetId: 'asset-tile-2', mediaAsset: createTileMediaAsset('asset-tile-2'), label: '图块 2', sourceRect: { x: 0, y: 100, width: 100, height: 100 }, row: 1, col: 0 },
+        { assetId: 'asset-tile-3', mediaAsset: createTileMediaAsset('asset-tile-3'), label: '图块 3', sourceRect: { x: 100, y: 100, width: 100, height: 100 }, row: 1, col: 1 },
+      ],
+      selectNodes: (nodeIds, reason) => selectCalls.push({ nodeIds, reason }),
+    });
+
+    expect(created).toHaveLength(4);
+    const graph = requireGraph();
+    const createdIds = (created ?? []).map((node) => node.id);
+    const state = useCanvasStore.getState();
+
+    for (const nodeId of createdIds) {
+      const node = graph.nodes.find((entry) => entry.id === nodeId);
+      expect(node?.type).toBe('asset');
+      const data = node?.data as AssetNodeData;
+      expect(data.derivedFrom).toEqual({ sourceAssetId: 'asset-src', tool: 'split' });
+      expect(data.assetId).toMatch(/^asset-tile-\d$/);
+      // 产出资产注册进项目媒体资产表
+      expect(state.mediaAssets[data.assetId]).toBeTruthy();
+    }
+
+    // 血缘与内容：每块各自独立，不合并成单节点
+    const assetIds = createdIds.map((nodeId) => {
+      const node = graph.nodes.find((entry) => entry.id === nodeId);
+      return (node?.data as AssetNodeData).assetId;
+    });
+    expect(new Set(assetIds).size).toBe(4);
+
+    // 按源图坐标摆成 2×2：第 1 行 x 不同 y 相同，第 1 列 y 不同 x 相同（不是纵向长列）
+    const positions = createdIds.map((nodeId) => {
+      const node = graph.nodes.find((entry) => entry.id === nodeId);
+      return node?.position ?? { x: 0, y: 0 };
+    });
+    const [p0, p1, p2, p3] = positions as [
+      { x: number; y: number },
+      { x: number; y: number },
+      { x: number; y: number },
+      { x: number; y: number },
+    ];
+    expect(p1.x).toBeGreaterThan(p0.x);
+    expect(p1.y).toBe(p0.y);
+    expect(p2.x).toBe(p0.x);
+    expect(p2.y).toBeGreaterThan(p0.y);
+    expect(p3.x).toBeGreaterThan(p0.x);
+    expect(p3.y).toBeGreaterThan(p0.y);
+
+    // 同批不重叠（按展示尺寸估算口径）
+    for (const [i, a] of positions.entries()) {
+      for (const [j, b] of positions.entries()) {
+        if (j <= i) continue;
+        const dx = Math.abs(a.x - b.x);
+        const dy = Math.abs(a.y - b.y);
+        expect(dx >= DERIVED_NODE_WIDTH_ESTIMATE || dy >= DERIVED_NODE_HEIGHT_ESTIMATE).toBe(true);
+      }
+    }
+
+    // 整批一次选中
+    expect(selectCalls).toEqual([{ nodeIds: createdIds, reason: 'asset-derivation' }]);
+
+    // 非破坏：源资产节点不变
+    const sourceAfter = graph.nodes.find((node) => node.id === source.id);
+    expect((sourceAfter?.data as AssetNodeData).assetId).toBe('asset-src');
+  });
+
+  it('智能切图按每一块在原图中的真实 x/y 排列（左右 / 上下关系保持）', () => {
+    const source = addSourceAssetNode();
+
+    const created = createDerivedAssetNodesInGrid({
+      sourceNodeId: source.id,
+      mediaType: 'image',
+      derivedFrom: { sourceAssetId: 'asset-src', tool: 'smartSplit' },
+      sourceSize: { width: 1000, height: 1000 },
+      items: [
+        { assetId: 'el-0', mediaAsset: createTileMediaAsset('el-0'), label: '元素 0', sourceRect: { x: 0, y: 0, width: 100, height: 100 } },
+        { assetId: 'el-1', mediaAsset: createTileMediaAsset('el-1'), label: '元素 1', sourceRect: { x: 400, y: 0, width: 100, height: 100 } },
+        { assetId: 'el-2', mediaAsset: createTileMediaAsset('el-2'), label: '元素 2', sourceRect: { x: 0, y: 500, width: 100, height: 100 } },
+      ],
+    });
+
+    expect(created).toHaveLength(3);
+    const graph = requireGraph();
+    const byAssetId = new Map(
+      (created ?? []).map((node) => {
+        const live = graph.nodes.find((entry) => entry.id === node.id);
+        return [(live?.data as AssetNodeData).assetId, live?.position ?? { x: 0, y: 0 }] as const;
+      }),
+    );
+    const p0 = byAssetId.get('el-0');
+    const p1 = byAssetId.get('el-1');
+    const p2 = byAssetId.get('el-2');
+    if (!p0 || !p1 || !p2) throw new Error('元素节点缺失');
+    // 同一行的第二个元素在右侧、与第一个同高
+    expect(p1.x).toBeGreaterThan(p0.x);
+    expect(p1.y).toBe(p0.y);
+    // 下方元素与第一个同列、在其下方（不是单列顺延：两个元素在原图同一行）
+    expect(p2.x).toBe(p0.x);
+    expect(p2.y).toBeGreaterThan(p0.y);
+  });
+
+  it('目标位置已有节点 → 整批平移，保持批内相对布局（不逐块下推）', () => {
+    const source = addSourceAssetNode();
+    const blocker = useCanvasStore.getState().addNode('asset', { x: 260, y: 0 }, {
+      label: '占位',
+      sourceBatchId: '',
+      sourceTaskId: '',
+      sourceModelId: '',
+      mediaType: 'image',
+      assetId: 'asset-blocker',
+    });
+    expect(blocker).toBeTruthy();
+
+    const created = createDerivedAssetNodesInGrid({
+      sourceNodeId: source.id,
+      mediaType: 'image',
+      derivedFrom: { sourceAssetId: 'asset-src', tool: 'split' },
+      sourceSize: { width: 200, height: 200 },
+      items: [
+        { assetId: 'asset-tile-0', mediaAsset: createTileMediaAsset('asset-tile-0'), label: '图块 0', sourceRect: { x: 0, y: 0, width: 100, height: 100 } },
+        { assetId: 'asset-tile-1', mediaAsset: createTileMediaAsset('asset-tile-1'), label: '图块 1', sourceRect: { x: 100, y: 0, width: 100, height: 100 } },
+        { assetId: 'asset-tile-2', mediaAsset: createTileMediaAsset('asset-tile-2'), label: '图块 2', sourceRect: { x: 0, y: 100, width: 100, height: 100 } },
+        { assetId: 'asset-tile-3', mediaAsset: createTileMediaAsset('asset-tile-3'), label: '图块 3', sourceRect: { x: 100, y: 100, width: 100, height: 100 } },
+      ],
+    });
+
+    expect(created).toHaveLength(4);
+    const graph = requireGraph();
+    const positions = (created ?? []).map((node) => {
+      const live = graph.nodes.find((entry) => entry.id === node.id);
+      return live?.position ?? { x: 0, y: 0 };
+    });
+    const [p0, p1, p2, p3] = positions as [
+      { x: number; y: number },
+      { x: number; y: number },
+      { x: number; y: number },
+      { x: number; y: number },
+    ];
+    // 整批被移到占位节点右侧，但批内 2×2 的相对关系不变
+    expect(p0.x).toBeGreaterThan(260 + DERIVED_NODE_WIDTH_ESTIMATE);
+    expect(p1.x - p0.x).toBeGreaterThan(0);
+    expect(p1.y).toBe(p0.y);
+    expect(p2.x).toBe(p0.x);
+    expect(p2.y - p0.y).toBeGreaterThan(0);
+    expect(p3.x - p2.x).toBe(p1.x - p0.x);
+    expect(p3.y).toBe(p2.y);
+    expect(p3.y - p0.y).toBe(p2.y - p0.y);
+  });
+
+  it('缺原始几何（只有 row/col）→ 等距网格兜底，仍不重叠', () => {
+    const source = addSourceAssetNode();
+
+    const created = createDerivedAssetNodesInGrid({
+      sourceNodeId: source.id,
+      mediaType: 'image',
+      derivedFrom: { sourceAssetId: 'asset-src', tool: 'split' },
+      items: [
+        { assetId: 'asset-tile-0', mediaAsset: null, label: '图块 0', row: 0, col: 0 },
+        { assetId: 'asset-tile-1', mediaAsset: null, label: '图块 1', row: 0, col: 1 },
+      ],
+    });
+
+    expect(created).toHaveLength(2);
+    const graph = requireGraph();
+    const positions = (created ?? []).map((node) => {
+      const live = graph.nodes.find((entry) => entry.id === node.id);
+      return live?.position ?? { x: 0, y: 0 };
+    });
+    expect(positions[1]?.x).toBeGreaterThan(positions[0]?.x ?? 0);
+    expect(positions[1]?.y).toBe(positions[0]?.y);
+  });
+
+  it('任一图块缺 assetId → 返回 null 且不创建任何节点', () => {
+    const source = addSourceAssetNode();
+    const selectNodes = vi.fn();
+
+    const created = createDerivedAssetNodesInGrid({
+      sourceNodeId: source.id,
+      mediaType: 'image',
+      derivedFrom: { sourceAssetId: 'asset-src', tool: 'split' },
+      items: [
+        { assetId: 'asset-tile-0', mediaAsset: createTileMediaAsset('asset-tile-0'), label: '图块 0', row: 0, col: 0 },
+        { assetId: '', mediaAsset: null, label: '图块 1', row: 0, col: 1 },
+      ],
+      selectNodes,
+    });
+
+    expect(created).toBeNull();
+    expect(selectNodes).not.toHaveBeenCalled();
+    const graph = requireGraph();
+    expect(graph.nodes).toHaveLength(1);
+    expect(graph.nodes[0]?.id).toBe(source.id);
   });
 });

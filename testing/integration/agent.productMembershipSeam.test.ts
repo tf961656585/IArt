@@ -490,9 +490,6 @@ const writeGenerationPackage = (packageRoot: string): void => {
       protocol: 'http',
       endpoint: '/v1/test',
       method: 'POST',
-      header_rules: [],
-      body_rules: [],
-      query_rules: [],
     },
     // 同步结果规则：提交响应即结果（无轮询）。
     result_rule: { mode: 'sync', submit_response_id_path: '/id' },

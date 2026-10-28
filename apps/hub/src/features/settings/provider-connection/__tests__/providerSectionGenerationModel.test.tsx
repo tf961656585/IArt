@@ -6,6 +6,7 @@ import type {
   CustomGenerationModel,
   ProviderConnection,
 } from '@iart/contracts';
+import { PRESET_FORMAT_SUMMARIES } from './formatOptionsFixture';
 import { ProviderSection } from '../../ProviderSection';
 import { createHubApiClient } from '../../../../client/api/hub-api';
 import { createHubHttpClient } from '../../../../client/adapters/http-client';
@@ -62,11 +63,27 @@ const jsonResponse = (body: unknown, status = 200): Response =>
 const familyTemplateDescriptor = {
   family_adapter_id: 'openai-image-v1',
   official_fields: [
+    // 素材位行（2026-10-24 起官方参数区也渲染它）：只有发送名称与最多几张两个维度
+    {
+      field_key: 'referenceImage',
+      label: '参考图',
+      component: 'imageUpload',
+      wire_name: 'reference_image',
+      wire_location: 'body',
+      required: false,
+      default_value: null,
+      enum_options: [],
+      resolution_presets: [],
+      aspect_presets: [],
+      media_slot_id: 'reference_image',
+      media_max_files: 16,
+    },
     {
       field_key: 'size',
       label: '画面尺寸',
       component: 'imageSize',
       wire_name: 'size',
+      wire_location: 'body',
       required: false,
       default_value: 'auto',
       enum_options: [],
@@ -81,6 +98,7 @@ const familyTemplateDescriptor = {
       label: '图片画质',
       component: 'select',
       wire_name: 'quality',
+      wire_location: 'body',
       required: false,
       default_value: 'auto',
       enum_options: ['auto', 'low', 'medium', 'high'],
@@ -92,6 +110,7 @@ const familyTemplateDescriptor = {
       label: '输出格式',
       component: 'select',
       wire_name: 'output_format',
+      wire_location: 'body',
       required: false,
       default_value: 'jpeg',
       enum_options: ['png', 'jpeg', 'webp'],
@@ -103,6 +122,7 @@ const familyTemplateDescriptor = {
       label: '内容审核',
       component: 'select',
       wire_name: 'moderation',
+      wire_location: 'body',
       required: false,
       default_value: 'auto',
       enum_options: ['auto', 'low'],
@@ -110,7 +130,7 @@ const familyTemplateDescriptor = {
       aspect_presets: [],
     },
   ],
-  reserved_wire_names: ['model', 'prompt', 'input', 'n'],
+  reserved_wire_names: { body: ['model', 'prompt', 'input', 'n'], query: [], header: [] },
   // 2026-10-19 起表单按该族能力逐项渲染素材位勾选（openai 族只有参考图一位）
   supports_media_slots: ['reference_image'],
 };
@@ -136,7 +156,7 @@ const stubFetch = ({ failCreate = false, failDeterministic = false, failTemplate
         }
         if (failDeterministic) {
           // 确定性拒绝（写入侧校验，如素材位超出该族能力）：message 是后端写给用户读的可操作原因
-          return jsonResponse({ message: '这个接口类型不接受「参考图」这类素材' }, 400);
+          return jsonResponse({ message: '这个接口格式不接受「参考图」这类素材' }, 400);
         }
         const declared = JSON.parse(String(init.body)) as {
           model_id: string;
@@ -180,6 +200,9 @@ const stubFetch = ({ failCreate = false, failDeterministic = false, failTemplate
         const modelId = url.split('/api/custom-generation-models/')[1] ?? '';
         return jsonResponse({ model_id: decodeURIComponent(modelId) });
       }
+      if (url.includes('/api/interface-formats')) {
+        return jsonResponse({ formats: PRESET_FORMAT_SUMMARIES });
+      }
       throw new Error(`未预期的请求：${init?.method ?? 'GET'} ${url}`);
     },
   );
@@ -212,6 +235,8 @@ function Harness({
     customChatModelsUnavailable: false,
     customGenerationModels,
     customGenerationModelsUnavailable: false,
+    interfaceRecipes: [],
+    interfaceRecipesUnavailable: false,
     agentDefaultModelId: null,
     saveAgentDefaultModel: async () => undefined,
     generationDefaultModelId: null,
@@ -260,10 +285,11 @@ const openAddModelDialog = (): void => {
   fireEvent.click(screen.getByRole('menuitem', { name: '生成模型' }));
 };
 
-/** 在弹窗里选「接口类型」（下拉渲染在 portal，选项按 body 级查询；jsdom 无 PointerEvent：键盘开下拉，click 选中）。 */
-const chooseFamilyAdapter = (): void => {
-  fireEvent.keyDown(dialog().getByLabelText('接口类型'), { key: 'Enter' });
-  fireEvent.click(screen.getByRole('option', { name: 'OpenAI Image' }));
+/** 在弹窗里选「接口格式」（下拉渲染在 portal，选项按 body 级查询；jsdom 无 PointerEvent：键盘开下拉，click 选中）。 */
+const chooseFamilyAdapter = async (): Promise<void> => {
+  fireEvent.keyDown(dialog().getByLabelText('接口格式'), { key: 'Enter' });
+  // 接口格式选项来自列表接口（异步装载）：等它出现再点，不假设同步就绪。
+  fireEvent.click(await screen.findByRole('option', { name: 'OpenAI Image' }));
 };
 
 /** 等素材位能力读完：勾选框出现才算放行提交（读不到能力时不猜清单）。 */
@@ -302,7 +328,7 @@ describe('生成族服务商：添加模型提交流', () => {
 
     openAddModelDialog();
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
-    chooseFamilyAdapter();
+    await chooseFamilyAdapter();
     fireEvent.change(dialog().getByLabelText('服务商那边的模型 ID'), { target: { value: 'remote-name' } });
     // 素材位按所选族能力渲染（openai 族只有「参考图」），读到之后才放行提交
     await waitFor(() => {
@@ -337,7 +363,7 @@ describe('生成族服务商：添加模型提交流', () => {
 
     openAddModelDialog();
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
-    chooseFamilyAdapter();
+    await chooseFamilyAdapter();
     await waitFor(() => {
       expect(dialog().getByRole('checkbox', { name: '参考图' })).not.toBeChecked();
     });
@@ -359,7 +385,7 @@ describe('生成族服务商：添加模型提交流', () => {
 
     openAddModelDialog();
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
-    chooseFamilyAdapter();
+    await chooseFamilyAdapter();
     await waitForMediaSlots();
     fireEvent.click(dialog().getByRole('button', { name: '添加' }));
 
@@ -377,13 +403,13 @@ describe('生成族服务商：添加模型提交流', () => {
 
     openAddModelDialog();
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
-    chooseFamilyAdapter();
+    await chooseFamilyAdapter();
     await waitForMediaSlots();
     fireEvent.click(dialog().getByRole('button', { name: '添加' }));
 
     await waitFor(() => {
       expect(dialog().getByRole('alert')).toHaveTextContent(
-        '这个接口类型不接受「参考图」这类素材',
+        '这个接口格式不接受「参考图」这类素材',
       );
     });
     expect(screen.getByRole('dialog', { name: '添加模型到「我的绘图服务」' })).toBeInTheDocument();
@@ -395,7 +421,7 @@ describe('生成族服务商：添加模型提交流', () => {
 
     openAddModelDialog();
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
-    chooseFamilyAdapter();
+    await chooseFamilyAdapter();
     await waitForMediaSlots();
     fireEvent.click(dialog().getByRole('button', { name: '添加' }));
 
@@ -473,7 +499,7 @@ describe('生成族服务商：添加时自定义参数（高级参数自定义�
 
     openAddModelDialog();
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
-    chooseFamilyAdapter();
+    await chooseFamilyAdapter();
     await expandAdvanced();
 
     // 别名：把「输出格式」的发送名称改成服务商自己的名字（失焦提交）
@@ -511,7 +537,7 @@ describe('生成族服务商：添加时自定义参数（高级参数自定义�
 
     openAddModelDialog();
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
-    chooseFamilyAdapter();
+    await chooseFamilyAdapter();
     await expandAdvanced();
 
     const wireInput = dialog().getByLabelText('「图片画质」的发送名称');
@@ -535,12 +561,12 @@ describe('生成族服务商：添加时自定义参数（高级参数自定义�
 
     openAddModelDialog();
     fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
-    chooseFamilyAdapter();
+    await chooseFamilyAdapter();
 
     // 素材位能力与参数描述同源于族模板：读不到时两处各自给原因，添加被拦下
     await waitFor(() => {
       expect(
-        dialog().getByText('暂时读不到这个接口类型能用的素材。关掉这个窗口后点「刷新」再试。'),
+        dialog().getByText('暂时读不到这个接口格式能用的素材。关掉这个窗口后点「刷新」再试。'),
       ).toBeInTheDocument();
     });
     fireEvent.click(dialog().getByRole('button', { name: '高级参数自定义' }));
@@ -550,6 +576,187 @@ describe('生成族服务商：添加时自定义参数（高级参数自定义�
 
     fireEvent.click(dialog().getByRole('button', { name: '添加' }));
     expect(fetchFn.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+  });
+});
+
+describe('生成族服务商：素材位行的参数设置', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** 打开添加弹层 → 选接口格式 → 勾上参考图 → 展开高级区（装载完成以普通参数行出现为准）。 */
+  const openAdvanced = async (): Promise<void> => {
+    openAddModelDialog();
+    fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
+    await chooseFamilyAdapter();
+    // 素材位行只在勾选后出现（族级描述符不掌握勾选）：先勾参考图，再看它的参数行
+    await waitForMediaSlots();
+    fireEvent.click(dialog().getByRole('checkbox', { name: '参考图' }));
+    fireEvent.click(dialog().getByRole('button', { name: '高级参数自定义' }));
+    await waitFor(() => {
+      expect(dialog().getByText('图片画质')).toBeInTheDocument();
+    });
+  };
+
+  it('素材位行只有「发送名称」「最多几张」：没有启用开关、可选值、默认值，内部标识不上屏', async () => {
+    stubFetch();
+    openDetail();
+    await openAdvanced();
+
+    const mediaRow = dialog().getByRole('group', { name: '参考图' });
+    expect(within(mediaRow).getByText('发送名称')).toBeInTheDocument();
+    expect(within(mediaRow).getByText('最多几张')).toBeInTheDocument();
+    // 是否接收这类素材由上方勾选清单管，行内不再给第二个开关
+    expect(within(mediaRow).queryByRole('switch')).not.toBeInTheDocument();
+    // 素材位没有枚举/默认值/预设这些维度
+    expect(within(mediaRow).queryByText('可选值')).not.toBeInTheDocument();
+    expect(within(mediaRow).queryByText('默认值')).not.toBeInTheDocument();
+    expect(within(mediaRow).queryByText('分辨率档位')).not.toBeInTheDocument();
+    expect(dialog().queryByText('reference_image')).not.toBeInTheDocument();
+    expect(dialog().queryByText('referenceImage')).not.toBeInTheDocument();
+  });
+
+  it('改发送名称写入 wire_name', async () => {
+    const fetchFn = stubFetch();
+    openDetail();
+    await openAdvanced();
+
+    const wireInput = dialog().getByLabelText('「参考图」的发送名称');
+    fireEvent.change(wireInput, { target: { value: 'image' } });
+    fireEvent.blur(wireInput);
+    fireEvent.click(dialog().getByRole('button', { name: '添加' }));
+
+    await waitFor(() => {
+      expect(bodyOf(fetchFn, '/api/custom-generation-models', 'POST')).toEqual({
+        model_id: 'my-image-model',
+        connection_id: generationConnection.connection_id,
+        family_adapter_id: 'openai-image-v1',
+        accepted_media_slots: ['reference_image'],
+        parameter_overrides: {
+          official: [{ field_key: 'referenceImage', wire_name: 'image' }],
+          custom: [],
+        },
+      });
+    });
+  });
+
+  it('清空发送名称回到默认：覆盖里不留这个维度', async () => {
+    const fetchFn = stubFetch();
+    openDetail();
+    await openAdvanced();
+
+    const wireInput = dialog().getByLabelText('「参考图」的发送名称');
+    fireEvent.change(wireInput, { target: { value: 'image' } });
+    fireEvent.blur(wireInput);
+    fireEvent.change(wireInput, { target: { value: '' } });
+    fireEvent.blur(wireInput);
+    fireEvent.click(dialog().getByRole('button', { name: '添加' }));
+
+    await waitFor(() => {
+      // 清空后没有任何改动：请求体不带 parameter_overrides（与从未改过一致）
+      expect(bodyOf(fetchFn, '/api/custom-generation-models', 'POST')).toEqual({
+        model_id: 'my-image-model',
+        connection_id: generationConnection.connection_id,
+        family_adapter_id: 'openai-image-v1',
+        accepted_media_slots: ['reference_image'],
+      });
+    });
+  });
+
+  it('填最多几张写入 media_max_files', async () => {
+    const fetchFn = stubFetch();
+    openDetail();
+    await openAdvanced();
+
+    fireEvent.change(dialog().getByLabelText('「参考图」的最多几张'), { target: { value: '9' } });
+    fireEvent.click(dialog().getByRole('button', { name: '添加' }));
+
+    await waitFor(() => {
+      expect(bodyOf(fetchFn, '/api/custom-generation-models', 'POST')).toEqual({
+        model_id: 'my-image-model',
+        connection_id: generationConnection.connection_id,
+        family_adapter_id: 'openai-image-v1',
+        accepted_media_slots: ['reference_image'],
+        parameter_overrides: {
+          official: [{ field_key: 'referenceImage', media_max_files: 9 }],
+          custom: [],
+        },
+      });
+    });
+  });
+
+  it('最多几张填 0、负数或小数：行内提示且不写入', async () => {
+    const fetchFn = stubFetch();
+    openDetail();
+    await openAdvanced();
+
+    const maxInput = dialog().getByLabelText('「参考图」的最多几张');
+    for (const invalid of ['0', '-1', '1.5']) {
+      fireEvent.change(maxInput, { target: { value: invalid } });
+      expect(dialog().getByRole('alert')).toHaveTextContent('最多几张要填 1 或更大的整数');
+    }
+    fireEvent.click(dialog().getByRole('button', { name: '添加' }));
+
+    await waitFor(() => {
+      // 不合法的张数没有被写入：请求体不带 parameter_overrides
+      expect(bodyOf(fetchFn, '/api/custom-generation-models', 'POST')).toEqual({
+        model_id: 'my-image-model',
+        connection_id: generationConnection.connection_id,
+        family_adapter_id: 'openai-image-v1',
+        accepted_media_slots: ['reference_image'],
+      });
+    });
+  });
+
+  it('未勾选的素材位不出现在高级参数区：勾上才出现，取消后又消失', async () => {
+    stubFetch();
+    openDetail();
+    openAddModelDialog();
+    fireEvent.change(dialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
+    await chooseFamilyAdapter();
+    await waitForMediaSlots();
+
+    fireEvent.click(dialog().getByRole('button', { name: '高级参数自定义' }));
+    await waitFor(() => {
+      expect(dialog().getByText('图片画质')).toBeInTheDocument();
+    });
+    // 还没勾参考图：它的参数行不出现（族描述符里有这一行，但记录当前不接受它）
+    expect(dialog().queryByRole('group', { name: '参考图' })).not.toBeInTheDocument();
+
+    fireEvent.click(dialog().getByRole('checkbox', { name: '参考图' }));
+    expect(dialog().getByRole('group', { name: '参考图' })).toBeInTheDocument();
+
+    fireEvent.click(dialog().getByRole('checkbox', { name: '参考图' }));
+    expect(dialog().queryByRole('group', { name: '参考图' })).not.toBeInTheDocument();
+  });
+
+  it('取消勾选后该位的覆盖不进请求体；同一次弹层内勾回来填过的值还在', async () => {
+    const fetchFn = stubFetch();
+    openDetail();
+    await openAdvanced();
+
+    fireEvent.change(dialog().getByLabelText('「参考图」的最多几张'), { target: { value: '9' } });
+    const slotCheckbox = dialog().getByRole('checkbox', { name: '参考图' });
+    fireEvent.click(slotCheckbox);
+    expect(dialog().queryByRole('group', { name: '参考图' })).not.toBeInTheDocument();
+
+    // 勾回来：行重新出现，填过的张数仍在（弹层内保留输入，不静默丢用户的值）
+    fireEvent.click(slotCheckbox);
+    const maxInput = dialog().getByLabelText('「参考图」的最多几张') as HTMLInputElement;
+    expect(maxInput.value).toBe('9');
+
+    // 再取消并保存：该位与它的覆盖都不进请求体（后端会按勾选清单校验，带上必然被整次拒绝）
+    fireEvent.click(dialog().getByRole('checkbox', { name: '参考图' }));
+    fireEvent.click(dialog().getByRole('button', { name: '添加' }));
+
+    await waitFor(() => {
+      expect(bodyOf(fetchFn, '/api/custom-generation-models', 'POST')).toEqual({
+        model_id: 'my-image-model',
+        connection_id: generationConnection.connection_id,
+        family_adapter_id: 'openai-image-v1',
+        accepted_media_slots: [],
+      });
+    });
   });
 });
 
@@ -567,16 +774,17 @@ describe('生成族服务商：编辑已添加模型（素材位 + 参数覆盖�
     },
   };
 
-  it('接口类型只读、素材位可改：不出现接口类型下拉，取消勾选后保存按新清单整体替换', async () => {
+  it('接口格式只读、素材位可改：不出现接口格式下拉，取消勾选后保存按新清单整体替换', async () => {
     const fetchFn = stubFetch();
     openDetail({ customGenerationModels: [declaredRecord] });
 
     openRowMenu('my-image-model');
     fireEvent.click(screen.getByRole('menuitem', { name: '修改配置' }));
 
-    // 接口类型创建后不可变（换族等于换一个模型）：只读展示名，不给下拉
-    expect(editDialog().getByText('OpenAI Image')).toBeInTheDocument();
-    expect(editDialog().queryByLabelText('接口类型')).not.toBeInTheDocument();
+    // 接口格式创建后不可变（换族等于换一个模型）：只读展示名，不给下拉。
+    // 展示名来自接口格式列表（异步装载），等它到位。
+    expect(await editDialog().findByText('OpenAI Image')).toBeInTheDocument();
+    expect(editDialog().queryByLabelText('接口格式')).not.toBeInTheDocument();
     expect(editDialog().queryByRole('combobox')).not.toBeInTheDocument();
 
     // 素材位按该族能力渲染，并回填记录里已勾的那一位
@@ -596,6 +804,49 @@ describe('生成族服务商：编辑已添加模型（素材位 + 参数覆盖�
       expect(JSON.parse(String(put?.[1]?.body))).toEqual({
         accepted_media_slots: [],
         parameter_overrides: { official: [], custom: [] },
+      });
+    });
+  });
+
+  it('取消勾选素材位后保存：该位的覆盖被裁掉，其它覆盖原样保留', async () => {
+    const fetchFn = stubFetch();
+    openDetail({
+      customGenerationModels: [
+        {
+          ...declaredRecord,
+          parameter_overrides: {
+            official: [
+              { field_key: 'referenceImage', media_max_files: 9 },
+              { field_key: 'format', wire_name: 'image_format' },
+            ],
+            custom: [],
+          },
+        },
+      ],
+    });
+
+    openRowMenu('my-image-model');
+    fireEvent.click(screen.getByRole('menuitem', { name: '修改配置' }));
+
+    await waitFor(() => {
+      expect(editDialog().getByRole('checkbox', { name: '参考图' })).toBeChecked();
+    });
+    fireEvent.click(editDialog().getByRole('checkbox', { name: '参考图' }));
+    fireEvent.click(editDialog().getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      const put = fetchFn.mock.calls.find(
+        ([input, init]) =>
+          String(input).includes('/api/custom-generation-models/my-image-model') && init?.method === 'PUT',
+      );
+      expect(put).toBeDefined();
+      // 未勾选位留下的覆盖不进请求体：后端按本次勾选的模板校验，带上它整次保存会被拒
+      expect(JSON.parse(String(put?.[1]?.body))).toEqual({
+        accepted_media_slots: [],
+        parameter_overrides: {
+          official: [{ field_key: 'format', wire_name: 'image_format' }],
+          custom: [],
+        },
       });
     });
   });

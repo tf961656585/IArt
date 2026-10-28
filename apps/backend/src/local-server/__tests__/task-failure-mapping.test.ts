@@ -255,6 +255,101 @@ void describe("task-failure-mapping", () => {
     assert.doesNotMatch(failure?.userMessage ?? "", /限流/);
   });
 
+  // 2026-10-26：同步失败判定与轮询共用同一求值器后，eq 的比较语义放宽为
+  // 「字符串忽略大小写 + 双侧可转数值时按数值比较」。这里固定的正是这条既有实现行为，
+  // 避免 `task-failure-mapping.cts` 的注释再次与实现相反。
+  void it("matches failure_condition with relaxed eq semantics on the sync path", () => {
+    const caseInsensitive = buildRemoteHttpFailurePayload({
+      taskRecord: {
+        metadata: {
+          taskExecutionPlan: {
+            result_rule: {
+              mode: "sync",
+              submit_response_id_path: "/id",
+              failure_condition: { op: "eq", path: "status", value: "failed" },
+            },
+          },
+        },
+      },
+      httpStatus: 200,
+      responseOk: true,
+      responseBodyType: "json",
+      contentType: "application/json",
+      responseBody: { status: "FAILED" },
+    } as Parameters<typeof buildRemoteHttpFailurePayload>[0]);
+    assert.ok(caseInsensitive, "字符串比较必须忽略大小写");
+
+    const numeric = buildRemoteHttpFailurePayload({
+      taskRecord: {
+        metadata: {
+          taskExecutionPlan: {
+            result_rule: {
+              mode: "sync",
+              submit_response_id_path: "/id",
+              failure_condition: { op: "eq", path: "code", value: 1 },
+            },
+          },
+        },
+      },
+      httpStatus: 200,
+      responseOk: true,
+      responseBodyType: "json",
+      contentType: "application/json",
+      responseBody: { code: "1" },
+    } as Parameters<typeof buildRemoteHttpFailurePayload>[0]);
+    assert.ok(numeric, "两侧可转数值时必须按数值比较");
+  });
+
+  void it("prefers the recipe failure_reason when failure_condition matches", () => {
+    const failure = buildRemoteHttpFailurePayload({
+      taskRecord: {
+        metadata: {
+          taskExecutionPlan: {
+            result_rule: {
+              mode: "sync",
+              submit_response_id_path: "/id",
+              failure_condition: { op: "eq", path: "status", value: "failed" },
+              failure_reason: "这段内容被服务商判定为不合规，请修改提示词后重试。",
+            },
+          },
+        },
+      },
+      httpStatus: 200,
+      responseOk: true,
+      responseBodyType: "json",
+      contentType: "application/json",
+      responseBody: { status: "FAILED" },
+    } as Parameters<typeof buildRemoteHttpFailurePayload>[0]);
+
+    assert.equal(failure?.message, "这段内容被服务商判定为不合规，请修改提示词后重试。");
+    assert.equal(failure?.userMessage, "这段内容被服务商判定为不合规，请修改提示词后重试。");
+  });
+
+  void it("does not apply the recipe failure_reason when failure_condition is not matched", () => {
+    const failure = buildRemoteHttpFailurePayload({
+      taskRecord: {
+        metadata: {
+          taskExecutionPlan: {
+            result_rule: {
+              mode: "sync",
+              submit_response_id_path: "/id",
+              failure_condition: { op: "eq", path: "status", value: "failed" },
+              failure_reason: "配方声明的失败原因",
+            },
+          },
+        },
+      },
+      httpStatus: 500,
+      responseOk: false,
+      responseBodyType: "json",
+      contentType: "application/json",
+      responseBody: { status: "running" },
+    } as Parameters<typeof buildRemoteHttpFailurePayload>[0]);
+
+    assert.equal(failure?.message, "HTTP 500");
+    assert.doesNotMatch(failure?.userMessage ?? "", /配方声明的失败原因/);
+  });
+
   void it("injects the built-in 5xx fallback userMessage on server errors", () => {
     const failure = buildRemoteHttpFailurePayload({
       taskRecord: {

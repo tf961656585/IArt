@@ -1,0 +1,611 @@
+{
+  "runtimeModel": {
+    "model_id": "interface-format-golden-model",
+    "provider_id": "openai",
+    "default_task_type": "video",
+    "mode": "video",
+    "role": "generator",
+    "capability": {
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "supports_async_task": true,
+      "supports_streaming": false,
+      "supports_multi_image": false,
+      "supports_reference_media": true,
+      "constraints": []
+    },
+    "parameter_schema": {
+      "schema_type": "object",
+      "fields": [
+        {
+          "label": "fields.inputReference.label",
+          "description": "fields.inputReference.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component_props": {
+            "accept": "image/*",
+            "allowMultiple": false,
+            "maxFiles": 1
+          },
+          "field_key": "inputReference",
+          "component": "imageUpload",
+          "default_value": []
+        },
+        {
+          "label": "fields.lastFrame.label",
+          "description": "fields.lastFrame.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component_props": {
+            "accept": "image/*",
+            "allowMultiple": false,
+            "maxFiles": 1
+          },
+          "field_key": "lastFrame",
+          "component": "imageUpload",
+          "default_value": []
+        },
+        {
+          "label": "fields.referenceImage.label",
+          "description": "fields.referenceImage.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component_props": {
+            "accept": "image/*",
+            "allowMultiple": false,
+            "maxFiles": 1
+          },
+          "field_key": "referenceImage",
+          "component": "imageUpload",
+          "default_value": []
+        },
+        {
+          "field_key": "seconds",
+          "label": "fields.seconds.label",
+          "description": "fields.seconds.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            {
+              "value": "4",
+              "label": "fields.seconds.options.seconds_4.label"
+            },
+            {
+              "value": "8",
+              "label": "fields.seconds.options.seconds_8.label"
+            },
+            {
+              "value": "12",
+              "label": "fields.seconds.options.seconds_12.label"
+            },
+            {
+              "value": "16",
+              "label": "fields.seconds.options.seconds_16.label"
+            },
+            {
+              "value": "20",
+              "label": "fields.seconds.options.seconds_20.label"
+            }
+          ],
+          "component_props": {},
+          "default_value": "4"
+        },
+        {
+          "field_key": "size",
+          "label": "fields.size.label",
+          "description": "fields.size.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            {
+              "value": "1280x720",
+              "label": "fields.size.options.preset_1280x720.label"
+            },
+            {
+              "value": "720x1280",
+              "label": "fields.size.options.preset_720x1280.label"
+            },
+            {
+              "value": "1920x1080",
+              "label": "fields.size.options.preset_1920x1080.label"
+            },
+            {
+              "value": "1080x1920",
+              "label": "fields.size.options.preset_1080x1920.label"
+            }
+          ],
+          "component_props": {},
+          "default_value": "1280x720"
+        }
+      ],
+      "required_fields": [],
+      "validation_rules": [],
+      "default_values": {
+        "seconds": "4",
+        "size": "1280x720",
+        "inputReference": [],
+        "lastFrame": [],
+        "referenceImage": []
+      }
+    },
+    "execution_profile": {
+      "task_type": "video",
+      "supports_async_task": true
+    },
+    "display": {
+      "visible": true,
+      "order": 9000
+    },
+    "runtime": {
+      "provider_id": "openai",
+      "default_task_type": "video",
+      "mode": "video",
+      "aliases": [],
+      "workspace": {
+        "task_list_position": "right"
+      },
+      "api_defaults": {
+        "endpoint": "/v1/videos",
+        "method": "POST"
+      },
+      "payload_rules": {
+        "api.endpoint": {
+          "kind": "literal",
+          "value": "/v1/videos"
+        },
+        "api.method": {
+          "kind": "literal",
+          "value": "POST"
+        },
+        "api.contentType": {
+          "kind": "literal",
+          "value": null
+        },
+        "body.model": {
+          "kind": "literal",
+          "value": "interface-format-golden-model"
+        },
+        "body.prompt": {
+          "kind": "field",
+          "field_key": "__prompt",
+          "transforms": [
+            "trim"
+          ]
+        },
+        "body.seconds": {
+          "kind": "field",
+          "field_key": "seconds",
+          "transforms": [
+            "trim"
+          ]
+        },
+        "body.size": {
+          "kind": "field",
+          "field_key": "size",
+          "transforms": [
+            "trim"
+          ]
+        },
+        "body.input_reference": {
+          "kind": "when",
+          "condition": {
+            "op": "ne",
+            "field": "inputReference",
+            "value": []
+          },
+          "truthy": {
+            "kind": "field",
+            "field_key": "inputReference",
+            "transforms": [
+              "extractFirstFile"
+            ],
+            "media_target": "multipart_file"
+          },
+          "falsy": {
+            "kind": "literal",
+            "value": null
+          }
+        },
+        "body.last_frame": {
+          "kind": "when",
+          "condition": {
+            "op": "ne",
+            "field": "lastFrame",
+            "value": []
+          },
+          "truthy": {
+            "kind": "field",
+            "field_key": "lastFrame",
+            "transforms": [
+              "extractFirstFile"
+            ],
+            "media_target": "multipart_file"
+          },
+          "falsy": {
+            "kind": "literal",
+            "value": null
+          }
+        },
+        "body.reference_image": {
+          "kind": "when",
+          "condition": {
+            "op": "ne",
+            "field": "referenceImage",
+            "value": []
+          },
+          "truthy": {
+            "kind": "field",
+            "field_key": "referenceImage",
+            "transforms": [
+              "allUploadFiles"
+            ],
+            "media_target": "multipart_file",
+            "multipart_array_naming": "repeated"
+          },
+          "falsy": {
+            "kind": "literal",
+            "value": null
+          }
+        },
+        "prompt": {
+          "kind": "field",
+          "field_key": "__prompt",
+          "transforms": [
+            "trim"
+          ]
+        },
+        "input": {
+          "kind": "field",
+          "field_key": "__prompt",
+          "transforms": [
+            "trim"
+          ]
+        },
+        "meta.model_id": {
+          "kind": "literal",
+          "value": "interface-format-golden-model"
+        },
+        "meta.seconds": {
+          "kind": "field",
+          "field_key": "seconds"
+        },
+        "meta.size": {
+          "kind": "field",
+          "field_key": "size"
+        }
+      },
+      "capabilities": {
+        "execution_traits": [
+          "nonBlocking"
+        ]
+      },
+      "schema_defaults": {
+        "seconds": "4",
+        "size": "1280x720",
+        "inputReference": [],
+        "lastFrame": [],
+        "referenceImage": []
+      },
+      "execution_driver": "http_formal_task",
+      "form_field_style": "dotted",
+      "form_array_style": "repeat",
+      "payload_format": "multipart"
+    },
+    "request_strategy": {
+      "request_stage": "submit",
+      "protocol": "http",
+      "endpoint": "/v1/videos",
+      "method": "POST"
+    },
+    "prompt_field": {
+      "field_key": "__prompt",
+      "required": true,
+      "validation_rules": []
+    },
+    "result_rule": {
+      "mode": "async",
+      "submit_response_id_path": "id"
+    },
+    "result_output_mapping": {
+      "response_mode": "structured_payload",
+      "requires_auth": true,
+      "output_mapping_rules": [
+        {
+          "target": "output.video_url",
+          "source": {
+            "kind": "response",
+            "path": "__acquired_media_url"
+          },
+          "required": true
+        }
+      ],
+      "note": "openai-video-v1 family template: binary final result is materialized by the acquisition stage"
+    },
+    "result_acquisition_strategy": {
+      "acquisition_mode": "fetch_final_result",
+      "identity_source": "remote_request_id",
+      "request_strategy": {
+        "request_stage": "acquisition",
+        "protocol": "http",
+        "endpoint": "/v1/videos/{id}/content",
+        "method": "GET"
+      },
+      "accept": "binary",
+      "media_type": "video",
+      "requires_auth": true,
+      "note": "openai-video-v1 family template: GET /v1/videos/{id}/content (binary, same-origin credential)",
+      "request_headers": {}
+    },
+    "polling_strategy": {
+      "request": {
+        "url_template": "/v1/videos/{id}",
+        "method": "GET",
+        "headers": {},
+        "query": [],
+        "body": null,
+        "body_format": "json",
+        "content_type": null
+      },
+      "polling": {
+        "intervalMs": 10000,
+        "maxAttempts": 500,
+        "successStatuses": [
+          "completed",
+          "succeeded",
+          "success",
+          "done"
+        ],
+        "statusFieldPaths": [
+          "status",
+          "data.status",
+          "state"
+        ],
+        "failureStatuses": [
+          "failed",
+          "error",
+          "cancelled",
+          "canceled"
+        ],
+        "failureCodePaths": [
+          "error.code",
+          "data.error.code"
+        ],
+        "failureMessagePaths": [
+          "error.message",
+          "message",
+          "data.error.message"
+        ]
+      }
+    }
+  },
+  "node": {
+    "node_type": "model",
+    "group_key": "openai",
+    "input_ports": [
+      {
+        "id": "inputReference",
+        "name": "ports.inputs.inputReference.name",
+        "data_type": "image",
+        "required": false,
+        "max_connections": 1,
+        "description": "ports.inputs.inputReference.description",
+        "field_key": "inputReference",
+        "multiple": false
+      },
+      {
+        "id": "lastFrame",
+        "name": "ports.inputs.lastFrame.name",
+        "data_type": "image",
+        "required": false,
+        "max_connections": 1,
+        "description": "ports.inputs.lastFrame.description",
+        "field_key": "lastFrame",
+        "multiple": false
+      },
+      {
+        "id": "referenceImage",
+        "name": "ports.inputs.referenceImage.name",
+        "data_type": "image",
+        "required": false,
+        "max_connections": 1,
+        "description": "ports.inputs.referenceImage.description",
+        "field_key": "referenceImage",
+        "multiple": false
+      }
+    ],
+    "output_ports": [
+      {
+        "id": "video",
+        "name": "ports.outputs.video.name",
+        "data_type": "video",
+        "field_key": "output_video",
+        "multiple": true,
+        "description": "ports.outputs.video.description"
+      }
+    ]
+  },
+  "localizationResources": {
+    "zh-CN": {
+      "fields": {
+        "prompt": {
+          "label": "提示词"
+        },
+        "inputReference": {
+          "label": "首帧",
+          "description": "作为视频起始画面；不选择时按纯文生视频提交。"
+        },
+        "lastFrame": {
+          "label": "尾帧",
+          "description": "作为视频结束画面；是否支持、以及能不能和首帧同时使用，取决于服务商。"
+        },
+        "referenceImage": {
+          "label": "参考图",
+          "description": "作为画面参考；可放几张取决于服务商，可在模型参数里调整最多张数。"
+        },
+        "seconds": {
+          "label": "视频时长",
+          "description": "不同服务支持的时长档位不同；可在模型参数中调整可选项。",
+          "options": {
+            "seconds_4": {
+              "label": "4 秒"
+            },
+            "seconds_8": {
+              "label": "8 秒"
+            },
+            "seconds_12": {
+              "label": "12 秒"
+            },
+            "seconds_16": {
+              "label": "16 秒"
+            },
+            "seconds_20": {
+              "label": "20 秒"
+            }
+          }
+        },
+        "size": {
+          "label": "画面尺寸",
+          "description": "不同服务支持的尺寸不同；可在模型参数中调整可选项。",
+          "options": {
+            "preset_1280x720": {
+              "label": "1280×720"
+            },
+            "preset_720x1280": {
+              "label": "720×1280"
+            },
+            "preset_1920x1080": {
+              "label": "1920×1080"
+            },
+            "preset_1080x1920": {
+              "label": "1080×1920"
+            }
+          }
+        }
+      },
+      "ports": {
+        "inputs": {
+          "inputReference": {
+            "name": "首帧",
+            "description": "接入素材或资产节点作为视频起始画面。"
+          },
+          "lastFrame": {
+            "name": "尾帧",
+            "description": "接入素材或资产节点作为视频结束画面。"
+          },
+          "referenceImage": {
+            "name": "参考图",
+            "description": "接入素材或资产节点作为画面参考；可连几个取决于模型的最多张数。"
+          }
+        },
+        "outputs": {
+          "video": {
+            "name": "生成视频",
+            "description": "生成的视频结果。"
+          }
+        }
+      }
+    },
+    "en": {
+      "fields": {
+        "prompt": {
+          "label": "Prompt"
+        },
+        "inputReference": {
+          "label": "First frame",
+          "description": "Used as the opening frame; leave empty to generate from text only."
+        },
+        "lastFrame": {
+          "label": "Last frame",
+          "description": "Used as the closing frame; whether it is supported, and whether it can be combined with the first frame, depends on the service."
+        },
+        "referenceImage": {
+          "label": "Reference images",
+          "description": "Used as visual references; how many are accepted depends on the service, and the limit can be adjusted in the model parameters."
+        },
+        "seconds": {
+          "label": "Duration",
+          "description": "Available lengths vary by service; you can adjust the options in the model parameters.",
+          "options": {
+            "seconds_4": {
+              "label": "4 seconds"
+            },
+            "seconds_8": {
+              "label": "8 seconds"
+            },
+            "seconds_12": {
+              "label": "12 seconds"
+            },
+            "seconds_16": {
+              "label": "16 seconds"
+            },
+            "seconds_20": {
+              "label": "20 seconds"
+            }
+          }
+        },
+        "size": {
+          "label": "Video size",
+          "description": "Available sizes vary by service; you can adjust the options in the model parameters.",
+          "options": {
+            "preset_1280x720": {
+              "label": "1280×720"
+            },
+            "preset_720x1280": {
+              "label": "720×1280"
+            },
+            "preset_1920x1080": {
+              "label": "1920×1080"
+            },
+            "preset_1080x1920": {
+              "label": "1080×1920"
+            }
+          }
+        }
+      },
+      "ports": {
+        "inputs": {
+          "inputReference": {
+            "name": "First frame",
+            "description": "Connect an asset as the opening frame."
+          },
+          "lastFrame": {
+            "name": "Last frame",
+            "description": "Connect an asset as the closing frame."
+          },
+          "referenceImage": {
+            "name": "Reference images",
+            "description": "Connect assets as visual references; the number of connections depends on the model limit."
+          }
+        },
+        "outputs": {
+          "video": {
+            "name": "Generated video",
+            "description": "The generated video output."
+          }
+        }
+      }
+    }
+  }
+}

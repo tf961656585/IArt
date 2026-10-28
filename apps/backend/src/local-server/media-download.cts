@@ -148,6 +148,13 @@ interface DownloadOptions {
   source: string | undefined;
   abortSignal: AbortSignal | undefined;
   headers: Record<string, string> | undefined;
+  /**
+   * 查询参数形态的鉴权（`query_api_key`）。
+   *
+   * 只拼到本次 fetch 的地址副本上：`url` 入参、请求记录与日志保持无凭证，
+   * 否则凭证会随 `writeHttpRequestRecord` 落进归档。
+   */
+  authQuery?: { name: string; value: string } | null;
   mediaDir: string | undefined;
   projectRef: string | undefined;
 }
@@ -195,6 +202,14 @@ async function downloadRemoteMediaToFiles(url: unknown, options: DownloadOptions
   }
 
   const maxMediaSize = getEffectiveMaxMediaSize();
+  // 查询参数鉴权只进本次 fetch 的地址副本；下面所有记录/日志仍用无凭证的 trimmed。
+  const authQuery = options.authQuery ?? null;
+  let fetchUrl = targetUrl;
+  if (authQuery !== null && authQuery.name.length > 0) {
+    const authenticated = new URL(targetUrl.toString());
+    authenticated.searchParams.set(authQuery.name, authQuery.value);
+    fetchUrl = authenticated;
+  }
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   if (abortSignal) {
@@ -232,7 +247,7 @@ async function downloadRemoteMediaToFiles(url: unknown, options: DownloadOptions
       signal: controller.signal,
       dispatcher: getFetchDispatcher(),
     };
-    const resp = await fetch(targetUrl.toString(), fetchOptions);
+    const resp = await fetch(fetchUrl.toString(), fetchOptions);
 
     try {
       const headers: Record<string, string> = {};

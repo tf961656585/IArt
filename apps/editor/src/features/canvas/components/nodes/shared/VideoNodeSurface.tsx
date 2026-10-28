@@ -8,9 +8,12 @@ import {
   useState,
   useRef,
   type DragEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type RefObject,
   type SyntheticEvent,
 } from 'react';
+import { IconPlayerPlay } from '@tabler/icons-react';
 import { RawImage } from "./RawImage";
 import { cn } from '@/lib/utils';
 import { useCanvasStore } from '../../../store/canvasStore';
@@ -22,6 +25,7 @@ import { useVideoThumbnail } from './useVideoThumbnail';
 import { resolveRenderableMediaUrl } from '../../../utils/mediaUrl';
 import type { MediaPresentation } from '../../../services/mediaPresentation';
 import { reportThumbnailRenderFailure } from '../../../services/thumbnailHealthReporter';
+import { claimInlinePlayback, releaseInlinePlayback, type InlinePlaybackHandle } from './inlinePlaybackCoordinator';
 
 export const DEFAULT_VIDEO_ASPECT_RATIO = 16 / 9;
 
@@ -64,10 +68,22 @@ export interface VideoNodeSurfaceProps {
    *   的尺寸由 Layout Model 媒体尺寸层全权派生，Surface 只填充不推导。
    */
   fill?: boolean | undefined;
-  onDropFile: (file: File) => void | undefined;
-  onLoadedMeta: (meta: VideoMeta) => void | undefined;
+  onDropFile?: ((file: File) => void) | undefined;
+  onLoadedMeta?: ((meta: VideoMeta) => void) | undefined;
   /** 预解析的媒体展示信息，提供时优先使用其中的 URL 决策 */
   presentation: MediaPresentation | null | undefined;
+  /**
+   * 点击播放模式（资产节点，docs/editor/画布资产节点媒体播放-design.md §3.1）：
+   * 常驻播放钮、点击原地播放（原生控件、有声）；播放态显示控件、暂停后回到播放钮。
+   * 缺省 false = 素材节点现有的 hover 激活形态，行为不变。
+   */
+  clickToPlay?: boolean | undefined;
+  /** 播放钮无障碍名称（缺省「播放」） */
+  playLabel?: string | undefined;
+  /** 双击激活（点击播放模式下由资产节点传入「打开放大预览」） */
+  onOpenPreview?: (() => void) | undefined;
+  /** 暴露视频元素（进度接力：预览打开时读取 / 关闭时写回 currentTime） */
+  mediaElementRef?: RefObject<HTMLVideoElement | null> | undefined;
 }
 
 /**
@@ -95,13 +111,30 @@ export const VideoNodeSurface = memo(function VideoNodeSurface({
   onDropFile,
   onLoadedMeta,
   presentation,
+  clickToPlay = false,
+  playLabel,
+  onOpenPreview,
+  mediaElementRef,
 }: VideoNodeSurfaceProps) {
   const isCanvasInteracting = useCanvasStore((state) => state.isCanvasInteracting);
   const [isDragOver, setIsDragOver] = useState(false);
   const [measuredAspect, setMeasuredAspect] = useState<number | null>(null);
   const [videoLoadFailed, setVideoLoadFailed] = useState(false);
   const [thumbnailLoadFailed, setThumbnailLoadFailed] = useState(false);
+  const [inlinePlaying, setInlinePlaying] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const inlineMode = clickToPlay;
+  const playbackHandle = useMemo<InlinePlaybackHandle>(
+    () => ({ pause: () => videoRef.current?.pause() }),
+    [],
+  );
+  const setVideoElement = useCallback(
+    (element: HTMLVideoElement | null) => {
+      videoRef.current = element;
+      if (mediaElementRef) mediaElementRef.current = element;
+    },
+    [mediaElementRef],
+  );
   const resolvedVideoUrl =
     typeof videoUrl === 'string' && videoUrl.trim().length > 0 ? videoUrl : undefined;
 
@@ -111,7 +144,11 @@ export const VideoNodeSurface = memo(function VideoNodeSurface({
   const presentationThumbnailReady = (presentation !== null && presentation !== undefined ? presentation.thumbnailStatus : undefined) === 'ready';
 
   // legacy 模式：内部通过 hook 解析
-  const thumbnail = useVideoThumbnail(presentation ? undefined : resolvedVideoUrl, !presentation);
+  // inline 模式（资产节点）不生成缩略图：直接以视频首帧呈现，播放钮由本组件承担。
+  const thumbnail = useVideoThumbnail(
+    presentation || inlineMode ? undefined : resolvedVideoUrl,
+    !presentation && !inlineMode,
+  );
   const thumbnailUrl =
     thumbnail !== null && thumbnail !== undefined && thumbnail.kind === 'thumbnail'
       ? thumbnail.url
@@ -154,9 +191,55 @@ export const VideoNodeSurface = memo(function VideoNodeSurface({
     (controlsVisibility === 'always' || (controlsVisibility === 'hover' && (isHovered || controlsActive)));
 
   const dormantFallbackToVideo = !renderableThumbnailUrl;
-  const shouldRenderVideo = Boolean(renderableVideoUrl) && !videoLoadFailed && (isActive || dormantFallbackToVideo);
-  const shouldShowThumbnail = Boolean(renderableVideoUrl) && isDormant && Boolean(renderableThumbnailUrl);
+  const shouldRenderVideo =
+    Boolean(renderableVideoUrl) && !videoLoadFailed && (inlineMode || isActive || dormantFallbackToVideo);
+  const shouldShowThumbnail =
+    !inlineMode && Boolean(renderableVideoUrl) && isDormant && Boolean(renderableThumbnailUrl);
   const shouldShowPlaceholder = Boolean(renderableVideoUrl) && !shouldRenderVideo && !shouldShowThumbnail;
+  /* inline 模式：播放中显示原生控件；暂停后控件隐藏、中央播放钮恢复。
+     非 inline 模式维持既有 hover / active 口径。 */
+  const resolvedControls = inlineMode
+    ? inlinePlaying && !isCanvasInteracting
+    : shouldShowControls && !isCanvasInteracting;
+
+  useEffect(() => {
+    return () => {
+      releaseInlinePlayback(playbackHandle);
+    };
+  }, [playbackHandle]);
+
+  /* 画布平移 / 缩放 / 拖拽期间暂停播放（§3.3）：交互期画面不可辨且声音干扰构图。 */
+  useEffect(() => {
+    if (inlineMode && isCanvasInteracting && inlinePlaying) {
+      videoRef.current?.pause();
+    }
+  }, [inlineMode, isCanvasInteracting, inlinePlaying]);
+
+  const handleInlinePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    claimInlinePlayback(playbackHandle);
+    video.muted = false;
+    if (video.ended) video.currentTime = 0;
+    // jsdom 的 HTMLMediaElement.play 返回 undefined（not implemented）；仅真机返回 Promise。
+    const attempt = video.play() as Promise<void> | undefined;
+    if (attempt && typeof attempt.catch === 'function') {
+      attempt.catch((error: unknown) => {
+        console.warn('[VideoNodeSurface] inline play failed', error);
+      });
+    }
+  }, [playbackHandle]);
+
+  const handleDoubleClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (!inlineMode || !onOpenPreview) return;
+      if (event.target instanceof Element && event.target.closest('button')) return;
+      event.stopPropagation();
+      event.preventDefault();
+      onOpenPreview();
+    },
+    [inlineMode, onOpenPreview],
+  );
 
   useEffect(() => {
     setVideoLoadFailed(false);
@@ -254,21 +337,27 @@ export const VideoNodeSurface = memo(function VideoNodeSurface({
       onDrop={handleDrop}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
+      onDoubleClick={inlineMode && onOpenPreview ? handleDoubleClick : undefined}
     >
       {renderableVideoUrl ? (
         <>
           {shouldRenderVideo ? (
+            // 生成/导入的媒体没有字幕轨，与 AssetNode 预览视频同一口径。
+            // eslint-disable-next-line jsx-a11y/media-has-caption
             <video
-              ref={videoRef}
+              ref={setVideoElement}
               src={renderableVideoUrl}
-              controls={shouldShowControls && !isCanvasInteracting}
-              muted
+              controls={resolvedControls}
+              muted={inlineMode ? !inlinePlaying : true}
               playsInline
               preload={preload}
               className={cn(
                 'h-full w-full',
                 objectFit === 'contain' ? 'object-contain' : 'object-cover',
                 shouldShowThumbnail && 'opacity-0 pointer-events-none',
+                // 播放态让原生控件优先：原生控件在 closed shadow DOM 内，无法只排除
+                // 底部控件条，整块挂 nodrag，暂停后再恢复节点可拖（§3.3）。
+                inlineMode && inlinePlaying && 'nodrag',
               )}
               onLoadedMetadata={handleLoadedMeta}
               onError={(event) => {
@@ -285,9 +374,24 @@ export const VideoNodeSurface = memo(function VideoNodeSurface({
                   readyState: target?.readyState,
                 });
               }}
-              onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
-              onEnded={() => setPlaying(false)}
+              onPlay={() => {
+                setPlaying(true);
+                if (inlineMode) setInlinePlaying(true);
+              }}
+              onPause={() => {
+                setPlaying(false);
+                if (inlineMode) {
+                  setInlinePlaying(false);
+                  releaseInlinePlayback(playbackHandle);
+                }
+              }}
+              onEnded={() => {
+                setPlaying(false);
+                if (inlineMode) {
+                  setInlinePlaying(false);
+                  releaseInlinePlayback(playbackHandle);
+                }
+              }}
             />
           ) : null}
           {shouldShowThumbnail ? (
@@ -313,6 +417,24 @@ export const VideoNodeSurface = memo(function VideoNodeSurface({
           {videoUrl ? <VideoPlaceholder className="h-full w-full" label={undefined} /> : placeholder}
         </div>
       )}
+
+      {/* 点击播放模式：播放钮常驻（不依赖 hover），点击原地播放。 */}
+      {inlineMode && renderableVideoUrl && !videoLoadFailed && !inlinePlaying && !disabled && !isLoading ? (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <button
+            type="button"
+            className="nodrag pointer-events-auto inline-flex h-[34px] w-[34px] cursor-pointer items-center justify-center rounded-full border border-white/35 bg-[var(--scrim-55)] p-0 text-[var(--scrim-text)] transition-[background-color,transform] hover:scale-105 hover:bg-[var(--scrim-70)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--select-ring)]"
+            aria-label={playLabel ? `播放 ${playLabel}` : '播放'}
+            title="播放"
+            onClick={(event) => {
+              event.stopPropagation();
+              handleInlinePlay();
+            }}
+          >
+            <IconPlayerPlay size={14} />
+          </button>
+        </div>
+      ) : null}
 
       {overlay}
 

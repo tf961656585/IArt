@@ -206,10 +206,19 @@ const resolveMediaSourceValue = (
   );
 };
 
+type MediaInputIdentity = {
+  assetId: string | undefined;
+  slotId: string | undefined;
+};
+
 const projectResolvedMediaSourceForDraft = (
   source: ResolvedMediaSource, mediaKind: string, filename: unknown,
-  mimeType: unknown,
+  mimeType: unknown, identity: MediaInputIdentity,
 ): unknown => {
+  const identityFields = {
+    ...(identity.assetId ? { assetId: identity.assetId } : {}),
+    ...(identity.slotId ? { slotId: identity.slotId } : {}),
+  };
   if (source.kind === "url") {
     return {
       media_kind: mediaKind,
@@ -217,6 +226,7 @@ const projectResolvedMediaSourceForDraft = (
       mime_type: normalizeString(mimeType),
       filename: normalizeString(filename),
       owner: "backend",
+      ...identityFields,
     };
   }
   return {
@@ -227,6 +237,7 @@ const projectResolvedMediaSourceForDraft = (
       normalizeString(mimeType) ||
       "application/octet-stream",
     filename: normalizeString(filename),
+    ...identityFields,
   };
 };
 
@@ -329,6 +340,10 @@ const normalizeMediaInputBuckets = async (
         mediaKind,
         mediaInput.filename,
         mediaInput.mime_type,
+        {
+          assetId: normalizeString(mediaInput.asset_id) || undefined,
+          slotId: normalizeString(mediaInput.slot_id) || undefined,
+        },
       ),
     );
     loggingModule.logDebug("[request-assembler-runtime] normalizeMediaInputBuckets: media input bucketed", { mediaKind, fieldKey, sourceKind });

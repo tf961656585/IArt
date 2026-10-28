@@ -10,15 +10,22 @@ import type { AddReferencesResult } from './referenceOps';
  * 产物「用作参考」共用本模块的 toast（单点动作，短反馈在画布上没有承载行）。
  *
  * 口径：仅全无新增时反馈（`duplicate` / `rejected` 变体）；部分成功（`added` 变体，同批含
- * 重复 / 不符项）静默——chip 数量变化即反馈。文案与触发顺序沿用底栏原实现逐字一致。
+ * 重复 / 不符项）静默——chip 数量变化即反馈。**容量不足是唯一例外**：用户会以为整批都加进去了，
+ * 必须点名「超量的那几张去哪了」。文案与触发顺序沿用底栏原实现逐字一致。
  */
 export function announceReferenceAddResult(result: AddReferencesResult): void {
-  if (result.kind === 'added') return;
+  if (result.kind === 'added') {
+    const capacityRejection = result.rejected.find(
+      (rejected) => rejected.kind === 'slot-capacity-exceeded',
+    );
+    if (capacityRejection !== undefined) toast.warning(capacityRejection.reason);
+    return;
+  }
   if (result.duplicates > 0) {
     toast.info(
       result.duplicates === 1
-        ? '这张图片已经在参考里了'
-        : `${result.duplicates} 张图片已经在参考里了`,
+        ? '这项素材已经在参考里了'
+        : `${result.duplicates} 项素材已经在参考里了`,
     );
   }
   if (result.rejected.length > 0) {

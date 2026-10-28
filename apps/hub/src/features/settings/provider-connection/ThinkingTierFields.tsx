@@ -43,8 +43,8 @@ import { InfoHint } from './InfoHint';
  * 删除是池子级的（会级联摘掉其他正在用它的模型），所以只对自定义档位出现、且要先由调用方确认；
  * 已启用的档位不在「可添加」里，也就不在这里被删——先把它从本模型移除，再删出池子。
  *
- * 自定义档位只在档位字段接受自由字符串的接口类型上可添加，其余接口类型下说明原因；
- * 接口类型还没选时是另一种原因（还没法判断）——让用户在配置时就看见约束，而不是发出去才失败。
+ * 自定义档位只在档位字段接受自由字符串的接口格式上可添加，其余接口格式下说明原因；
+ * 接口格式还没选时是另一种原因（还没法判断）——让用户在配置时就看见约束，而不是发出去才失败。
  */
 
 /** 一个接入上的档位选择：顺序即创作面展示顺序，默认档位是其中一个（或没有）。 */
@@ -58,7 +58,7 @@ export interface ThinkingTierChoice {
 /** 档位选择区的输入面：候选池、可表达性判定源、当前选择与各动作。 */
 export interface ThinkingTierSelection {
   pool: ThinkingTierPool;
-  /** 该连接接口类型（自定义档位可表达性的唯一判定源）；适配器缺失时为 null */
+  /** 该连接接口格式（自定义档位可表达性的唯一判定源）；适配器缺失时为 null */
   adapter: ProtocolAdapter | null;
   choice: ThinkingTierChoice;
   /** 池子读不到。与「池子里没有可加的档位」必须给不同文案，不允许混为一谈。 */
@@ -75,7 +75,7 @@ export interface ThinkingTierSelection {
   onDeleteCustom: (tier: string) => void;
 }
 
-/** 当前接口类型能否承载自定义档位（spec 37：只有档位字段接受自由字符串的协议可以）。 */
+/** 当前接口格式能否承载自定义档位（spec 37：只有档位字段接受自由字符串的协议可以）。 */
 export const adapterAllowsCustomTiers = (adapter: ProtocolAdapter | null): boolean =>
   adapter?.supports_custom_thinking_tiers === true;
 
@@ -203,7 +203,7 @@ export function ThinkingTierFields({ idPrefix, selection }: { idPrefix: string; 
                         <button
                           type="button"
                           aria-label={`删除档位「${tier}」`}
-                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
+                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-destructive"
                           onClick={() => onDeleteCustom(tier)}
                         >
                           <X className="h-3.5 w-3.5" aria-hidden="true" />
@@ -217,8 +217,8 @@ export function ThinkingTierFields({ idPrefix, selection }: { idPrefix: string; 
             {blockedCustom.length > 0 ? (
               <p className="text-2xs text-muted-foreground">
                 {adapter === null
-                  ? '先选好接口类型，再看能不能加自定义档位。'
-                  : '当前接口类型不支持自定义档位。'}
+                  ? '先选好接口格式，再看能不能加自定义档位。'
+                  : '当前接口格式不支持自定义档位。'}
               </p>
             ) : null}
           </div>

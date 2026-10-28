@@ -169,13 +169,8 @@ describe('nodeMediaUrlRegistry 素材节点提取器', () => {
     lastSourcePortId: undefined,
     valueSource: undefined,
     mediaError: undefined,
-    derivedFromNodeId: undefined,
-    derivedOp: undefined,
     taskInfo: undefined,
     cachedContent: undefined,
-    originalImageMeta: undefined,
-    resizePercent: undefined,
-    outpaintModelId: undefined,
   });
 
   const buildVideoInputData = (videoUrl: string): VideoInputNodeData => ({
@@ -187,8 +182,6 @@ describe('nodeMediaUrlRegistry 素材节点提取器', () => {
     videoMeta: undefined,
     valueSource: undefined,
     mediaError: undefined,
-    derivedFromNodeId: undefined,
-    derivedOp: undefined,
     lastExecutionId: undefined,
     lastSourceNodeId: undefined,
     lastSourcePortId: undefined,

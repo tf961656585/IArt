@@ -5,10 +5,10 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
-  ADAPTER_REGISTRY,
   GENERATION_FAMILY_ADAPTER_IDS,
   GENERATION_MEDIA_SLOT_IDS,
 } from '@iart/contracts';
+import { getInterfaceFormat } from '../interface-format/registry.cts';
 import {
   clearCacheForTest as clearActiveRouteCache,
   getActiveDeploymentId,
@@ -27,7 +27,7 @@ import {
   LEGACY_DEPLOYMENT_MODEL_CAPABILITIES,
   resolveLegacyDeploymentModelCapability,
 } from '../provider-connection/deployment-to-generation-model-migration.cts';
-import { GENERATION_FAMILY_TEMPLATE_REGISTRY } from '../generation-family-templates.registry.cts';
+import { requireFamilyTemplate } from '../generation-family-templates.registry.cts';
 
 /**
  * 存量接入载体（`ModelDeployment`，已退场）→ 用户生成模型记录 的一次性迁移（spec 03 §11「升级约束：一次性换轨」，
@@ -260,7 +260,13 @@ void test('迁移：active-routes.json 零改动，迁移后仍解析到同一�
   const snapshot = buildExecutionSnapshot({ modelId: ACTIVE_MODEL_ID });
   assert.equal(snapshot.ok, true, `迁移后仍应能建立执行快照: ${snapshot.ok ? '' : snapshot.message}`);
   if (!snapshot.ok) return;
-  assert.equal(snapshot.snapshot.adapter_id, 'openai-image-v1');
+  const frozen = snapshot.snapshot.protocol;
+  assert.equal(frozen?.kind, 'generation_format', '快照必须冻结接口格式身份');
+  assert.equal(
+    frozen?.kind === 'generation_format' ? frozen.format_id : undefined,
+    'openai-image-v1',
+    '迁移后的记录按自带 family_adapter_id 冻结格式',
+  );
   assert.equal(snapshot.snapshot.connection_id, CONNECTION_ID);
   assert.equal(snapshot.snapshot.remote_model_id, 'gpt-image-2');
   assert.equal(snapshot.snapshot.deployment_id, ACTIVE_DEPLOYMENT_ID);
@@ -419,23 +425,23 @@ void test('换算表：覆盖升级前全部有族 model_id，且每个条目与
   for (const modelId of familyModelIdsAtSwitch) {
     const capability = resolveLegacyDeploymentModelCapability(modelId);
     assert.ok(capability, `${modelId} 必须有换算条目`);
-    // ① 族与「升级前实际执行所用的适配器」一致（升级不改变协议语义）。
+    // ① 换算表的族 id 必须指向一个**已就绪的接口格式实体**（2026-10-27 起生成侧无代码适配器）。
     //
     // 这条校验原本靠与封闭族正则（`resolveClosedFamilyAdapter`）逐条比对来钉住——那个注册表随
-    // 部署载体一并删除后，改用契约里同一份「族 → ProtocolAdapter」的静态映射（`ADAPTER_REGISTRY`）
-    // 校验换算表的族 id 确实指向一个已登记、family='generation' 的真实适配器。
+    // 部署载体一并删除后曾改用 `ADAPTER_REGISTRY`；生成侧适配器退场后，等价保证是「迁移写出的
+    // 族 id 能被运行时合成」：格式实体存在且 ready。
     //
     // 语义差别说清：①不再有「7 条正则」这一层可供对照，本表因此是那段历史能力的**唯一留存载体**
     // （升级后软件不再按名称推断族，表也不会跟着活注册表演进——它描述升级前那一刻的包）；
-    // ②能钉住的仍是最关键的一条：每个换算条目都必须落在现役协议族里，否则迁移会写出一个执行链
+    // ②能钉住的仍是最关键的一条：每个换算条目都必须落在现役接口格式里，否则迁移会写出一个执行链
     // 认不出的族，用户模型升级后发不出去。表内 model_id → 族的对应关系本身已冻结，不随族口径变化。
     assert.equal(
-      ADAPTER_REGISTRY[capability.familyAdapterId].family,
-      'generation',
-      `${modelId} 的换算族必须是已登记的生成协议适配器`,
+      getInterfaceFormat(capability.familyAdapterId).kind,
+      'ready',
+      `${modelId} 的换算族必须是一个已就绪的接口格式`,
     );
     // ② 素材位必须是该族模板能表达的范围内——否则记录写入侧守卫会拒、投影侧会静默过滤。
-    const familyEntry = GENERATION_FAMILY_TEMPLATE_REGISTRY[capability.familyAdapterId];
+    const familyEntry = requireFamilyTemplate(capability.familyAdapterId);
     const supported = new Set<string>(familyEntry.supportsMediaSlots);
     const outOfFamily = capability.acceptedMediaSlots.filter((slot) => !supported.has(slot));
     assert.deepEqual(outOfFamily, [], `${modelId} 的素材位超出该族模板能力: ${outOfFamily.join('、')}`);

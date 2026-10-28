@@ -1,4 +1,5 @@
 import {
+  isTaskFailureStage,
   runtimeTaskRowToView,
   UNIFIED_GENERATION_STATUS_SET,
 } from '@iart/contracts';
@@ -58,6 +59,7 @@ interface RawTaskError {
   details: unknown | undefined;
   detail: unknown | undefined;
   cause: unknown | undefined;
+  stage: unknown | undefined;
 }
 
 interface RawTaskErrorCause {
@@ -167,6 +169,7 @@ const normalizeRuntimeTaskFailure = (errorInput: unknown): RuntimeTaskFailure | 
     details: undefined,
     detail: undefined,
     cause: undefined,
+    stage: undefined,
   });
   const cause = asPlainObject<RawTaskErrorCause>(error.cause, {
     code: undefined,
@@ -201,6 +204,8 @@ const normalizeRuntimeTaskFailure = (errorInput: unknown): RuntimeTaskFailure | 
     '任务执行失败';
   const backendMessage = optionalString(error.backendMessage) ?? (rawMessage || null);
   const retryable = typeof error.retryable === 'boolean' ? error.retryable : null;
+  // 失败阶段只接受枚举成员；缺失或非法一律 null（旧记录兼容，重新查询资格据此判否）。
+  const stage = isTaskFailureStage(error.stage) ? error.stage : null;
   if (!code && !message && !backendMessage && !details) return null;
   return {
     code,
@@ -209,6 +214,7 @@ const normalizeRuntimeTaskFailure = (errorInput: unknown): RuntimeTaskFailure | 
     backendMessage,
     retryable,
     details,
+    stage,
   };
 };
 

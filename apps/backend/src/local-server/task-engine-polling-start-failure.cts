@@ -9,6 +9,8 @@ type AsyncPollingStartFailureInput = {
   reason: unknown | undefined;
   submitResponseIdPath: unknown | undefined;
   responsePayload: unknown | undefined;
+  /** 运行时给出的具体拒绝原因（仅 `invalid_polling_request` 携带）。 */
+  message?: unknown | undefined;
 };
 
 const normalizePollingStartFailureReason = (value: unknown) =>
@@ -24,6 +26,7 @@ const buildAsyncPollingStartFailureError = (
     return {
       code: ERROR_CODES.ASYNC_POLLING_REMOTE_REQUEST_ID_MISSING,
       message: "异步任务无法启动轮询",
+      stage: "recovery",
       detail: {
         reason,
         message:
@@ -35,9 +38,12 @@ const buildAsyncPollingStartFailureError = (
   return {
     code: ERROR_CODES.ASYNC_POLLING_REQUEST_INVALID,
     message: "异步任务无法启动轮询",
+    stage: "recovery",
     detail: {
       reason,
-      message: "轮询请求缺少有效的 polling_strategy.request.url_template",
+      message:
+        normalizeString(input.message) ||
+        "轮询请求缺少有效的 polling_strategy.request.url_template",
       submitResponseIdPath,
     },
   } as PlainObject;
@@ -48,6 +54,7 @@ const buildAsyncPollingStartFailureArchiveDetail = (
 ) => ({
   phase: "polling_start_failed",
   reason: normalizePollingStartFailureReason(input.reason),
+  message: normalizeString(input.message) || null,
   submitResponseIdPath: normalizeString(input.submitResponseIdPath) || null,
   response: summarizeArchiveResponse(input.responsePayload),
 });

@@ -1,159 +1,49 @@
-import fs from "node:fs";
-import {
-  isMediaRefPlaceholder,
-  type MediaRefSource,
-  parseDataUrlSource,
-  type SerializedFormDataBody,
-} from "@iart/contracts";
-import {
-  isPlainObject,
-  looksLikeRemoteUrl,
-  normalizeString,
-  type DynamicObject,
-  writeField,
-} from "./model-input-source.cts";
-import { joinPublicUrlChildPath } from "./model-input-policy.cts";
-import { resolveImageProcessingSource } from "../image-processing-source-resolver.cts";
+import type { SerializedFormDataBody } from "@iart/contracts";
+import { isPlainObject, type DynamicObject } from "./model-input-source.cts";
 
-type AtomPreparationResult =
-  | { ok: true; value: unknown }
-  | { ok: false; code: string; message: string };
-
-type MultipartFilePreparationContext = {
-  projectPath: unknown;
+/**
+ * multipart 文件值的审计外壳。
+ *
+ * 物化只负责把占位符变成字节；但「这张字节来自哪个资产、原本是什么媒体类型」在变成
+ * 裸 Buffer 后就丢了，序列化只能写出通用的 `file` / `application/octet-stream`。
+ * 这层外壳把来源描述挂在字节旁边：`buffer` 照旧进出网，其余字段只进文件描述（审计）。
+ * 出网形态由序列化器固定写出，不受这些字段影响。
+ */
+const MULTIPART_FILE_MARKER = "__multipart_file__" as const;
+type MultipartFileValue = {
+  __multipart_file__: typeof MULTIPART_FILE_MARKER;
+  buffer: Buffer;
+  /** 占位符携带的来源文件名（未带时为 undefined）。 */
+  sourceFilename?: string;
+  /** 占位符携带的真实媒体类型。 */
+  mimeType?: string;
+  /** 提交面显式给出的资产身份与素材位标识。 */
+  assetId?: string;
+  slotId?: string;
 };
 
-type MultipartResolveError = {
-  ok: false;
-  reason: string;
-  sourceKind: string;
+const isMultipartFileValue = (value: unknown): value is MultipartFileValue => {
+  if (!isPlainObject(value)) return false;
+  const record = value as { __multipart_file__?: unknown; buffer?: unknown };
+  return record.__multipart_file__ === MULTIPART_FILE_MARKER && Buffer.isBuffer(record.buffer);
 };
 
-const parseDataUrlToBuffer = (value: string): Buffer | null => {
-  const parsed = parseDataUrlSource(value);
-  if (parsed === null) return null;
-  try {
-    return Buffer.from(parsed.data, "base64");
-  } catch (_error: unknown) {
-    return null;
-  }
-};
-
-const resolveMultipartFileBuffer = (
-  source: MediaRefSource,
-  projectPath: unknown,
-): Buffer | MultipartResolveError => {
-  if (source.kind === "inline_data") {
-    if (!source.data) {
-      return { ok: false, reason: "inline_data source has empty data field", sourceKind: "inline_data" };
-    }
-    try {
-      return Buffer.from(source.data, "base64");
-    } catch (error: unknown) {
-      return {
-        ok: false,
-        reason: `inline_data base64 decode failed: ${error instanceof Error && error.message ? error.message : "unknown error"}`,
-        sourceKind: "inline_data",
-      };
-    }
-  }
-  if (source.kind === "url") {
-    if (!source.url) {
-      return { ok: false, reason: "url source has empty url field", sourceKind: "url" };
-    }
-    const normalizedProjectPath = normalizeString(projectPath);
-    if (!normalizedProjectPath) {
-      return { ok: false, reason: "projectPath is empty for url source resolution", sourceKind: "url" };
-    }
-    if (looksLikeRemoteUrl(source.url)) {
-      return { ok: false, reason: `remote URL cannot be resolved to local file: ${source.url}`, sourceKind: "url" };
-    }
-    try {
-      const resolved = resolveImageProcessingSource(normalizedProjectPath, source.url);
-      const filePath = resolved.sourceFilePath;
-      if (!filePath || !fs.existsSync(filePath)) {
-        return { ok: false, reason: `local file not found for url source: ${source.url}`, sourceKind: "url" };
-      }
-      if (!fs.statSync(filePath).isFile()) {
-        return { ok: false, reason: `resolved path is not a file: ${filePath}`, sourceKind: "url" };
-      }
-      return fs.readFileSync(filePath);
-    } catch (error: unknown) {
-      return {
-        ok: false,
-        reason: `failed to read local file for url source ${source.url}: ${error instanceof Error && error.message ? error.message : "unknown error"}`,
-        sourceKind: "url",
-      };
-    }
-  }
-  return { ok: false, reason: "unsupported source kind", sourceKind: "unknown" };
-};
-
-const prepareMultipartFileSubtree = async (
-  context: MultipartFilePreparationContext,
-  value: unknown,
-  fieldPath: string,
-): Promise<AtomPreparationResult> => {
-  if (value === undefined || value === null || value === "") {
-    return { ok: true, value };
-  }
-
-  // 检测 MediaRefPlaceholder 对象
-  const isPlaceholder = isMediaRefPlaceholder(value);
-  if (isPlaceholder) {
-    const bufferOrError = resolveMultipartFileBuffer(value.source, context.projectPath);
-    if (bufferOrError instanceof Buffer) {
-      return { ok: true, value: bufferOrError };
-    }
-    if ("ok" in bufferOrError && bufferOrError.ok === false) {
-      return {
-        ok: false,
-        code: "multipart_file_resolve_failed",
-        message: `Failed to resolve multipart file: ${bufferOrError.reason}`,
-      };
-    }
-    return {
-      ok: false,
-      code: "multipart_file_resolve_failed",
-      message: "Failed to resolve multipart file: unknown error",
-    };
-  }
-
-  if (typeof value === "string") {
-    const parsed = parseDataUrlToBuffer(value);
-    if (parsed !== null) {
-      return { ok: true, value: parsed };
-    }
-    return { ok: true, value };
-  }
-  if (Array.isArray(value)) {
-    const results: unknown[] = [];
-    for (const [index, item] of value.entries()) {
-      const prepared = await prepareMultipartFileSubtree(
-        context,
-        item,
-        joinPublicUrlChildPath(fieldPath, index),
-      );
-      if (!prepared.ok) return prepared;
-      results.push(prepared.value);
-    }
-    return { ok: true, value: results };
-  }
-  if (isPlainObject(value)) {
-    const preparedObject: DynamicObject = {};
-    for (const [key, item] of Object.entries(value)) {
-      const prepared = await prepareMultipartFileSubtree(
-        context,
-        item,
-        joinPublicUrlChildPath(fieldPath, key),
-      );
-      if (!prepared.ok) return prepared;
-      writeField(preparedObject, key, prepared.value);
-    }
-    return { ok: true, value: preparedObject };
-  }
-  return { ok: true, value };
-};
+const wrapMultipartFile = (
+  buffer: Buffer,
+  metadata: {
+    sourceFilename?: string | undefined;
+    mimeType?: string | undefined;
+    assetId?: string | undefined;
+    slotId?: string | undefined;
+  } = {},
+): MultipartFileValue => ({
+  __multipart_file__: MULTIPART_FILE_MARKER,
+  buffer,
+  ...(metadata.sourceFilename ? { sourceFilename: metadata.sourceFilename } : {}),
+  ...(metadata.mimeType ? { mimeType: metadata.mimeType } : {}),
+  ...(metadata.assetId ? { assetId: metadata.assetId } : {}),
+  ...(metadata.slotId ? { slotId: metadata.slotId } : {}),
+});
 
 const collectFormDataEntries = (
   value: unknown,
@@ -163,6 +53,10 @@ const collectFormDataEntries = (
   isTopLevel: boolean,
 ) => {
   if (value === undefined || value === null) return;
+  if (isMultipartFileValue(value)) {
+    entries.push({ key: parentKey, value });
+    return;
+  }
   if (Buffer.isBuffer(value)) {
     entries.push({ key: parentKey, value });
     return;
@@ -198,9 +92,31 @@ const convertBodyToSerializedFormData = (
     collectFormDataEntries(item, key, entries, repeatedTopLevelKeys, true);
   }
   const fields: Array<{ name: string; value: string }> = [];
-  const files: Array<{ name: string; dataBase64: string; contentType: string; filename: string }> = [];
+  const files: Array<{
+    name: string;
+    dataBase64: string;
+    contentType: string;
+    filename: string;
+    sourceFilename?: string;
+    mimeType?: string;
+    assetId?: string;
+    slotId?: string;
+  }> = [];
   for (const entry of entries) {
-    if (Buffer.isBuffer(entry.value)) {
+    if (isMultipartFileValue(entry.value)) {
+      // 出网值与裸 Buffer 路径保持完全一致（file / application/octet-stream）；
+      // 来源描述只写进审计字段，发送链读不到也用不到它们。
+      files.push({
+        name: entry.key,
+        dataBase64: entry.value.buffer.toString("base64"),
+        contentType: "application/octet-stream",
+        filename: "file",
+        ...(entry.value.sourceFilename ? { sourceFilename: entry.value.sourceFilename } : {}),
+        ...(entry.value.mimeType ? { mimeType: entry.value.mimeType } : {}),
+        ...(entry.value.assetId ? { assetId: entry.value.assetId } : {}),
+        ...(entry.value.slotId ? { slotId: entry.value.slotId } : {}),
+      });
+    } else if (Buffer.isBuffer(entry.value)) {
       files.push({
         name: entry.key,
         dataBase64: entry.value.toString("base64"),
@@ -220,7 +136,8 @@ const convertBodyToSerializedFormData = (
 };
 
 export {
-  type MultipartFilePreparationContext,
+  type MultipartFileValue,
   convertBodyToSerializedFormData,
-  prepareMultipartFileSubtree,
+  isMultipartFileValue,
+  wrapMultipartFile,
 };

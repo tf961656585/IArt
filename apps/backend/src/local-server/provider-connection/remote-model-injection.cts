@@ -1,11 +1,14 @@
 import {
   isSerializedFormDataBody,
+  parseInterfaceFormatRuleTarget,
   type ExecutionSnapshot,
-  type ProtocolAdapterId,
   type SerializedFormDataBody,
   type SerializedFormDataField,
 } from '@iart/contracts';
+import { getInterfaceFormat } from '../interface-format/registry.cts';
+import { resolveSnapshotProtocol } from './snapshot-protocol.cts';
 import { isPlainObject } from '../utils.cts';
+import { setQueryParamValue } from '../request-wire-utils.cts';
 import * as loggingModule from '../logging.cts';
 
 /**
@@ -13,81 +16,132 @@ import * as loggingModule from '../logging.cts';
  *
  * - remote_model_id 是 Provider 原生模型 ID，只在该 Deployment 内有意义，绝不能替代产品 model_id；
  *   它只在任务实际派发前按 ExecutionSnapshot 注入实际请求，不写回能力包 payload 语义。
- * - 五类 adapter 的注入位置（docs/provider-remote-apis/README.md + 02..07 主口径）：
- *   - openai-image-v1：请求模型字段 = remote_model_id。JSON body（t2i /v1/images/generations）
- *     注入顶层 `model` 属性；i2i multipart body（SerializedFormDataBody，/v1/images/edits）
- *     注入 `__formData.fields` 中 name="model" 的表单字段——multipart 上 wire 的表单字段
- *     完全由 fields 承载（buildRequestBody 的 multipart 分支只读 __formData，忽略顶层属性），
- *     该字段由 payload_rules `body.model` 字面量展平而来，值是产品 model_id，必须替换。
- *   - veo-v1：URL 模板 `{model}` 占位替换为 remote_model_id
- *     （按上游规则 URL 编码）。
- *   - gemini-image-interactions-v1：请求体顶层 `model` = remote_model_id
- *     （Interactions API 端点 `/v1beta/interactions` 无 `{model}` 占位符）。
- *   - seedance-2-0-v1：请求 body 顶层 `model` = remote_model_id（Seedance 2.0 创建任务契约 §6）。
- *   - kling-text2video-v1 / kling-image2video-v1 / kling-omni-video-v1（可灵官方**新设计
- *     标准**，2026-10-19 起按三个提交端点拆成三个适配器）：模型身份由 URL path 承载，
- *     请求体**没有**任何模型字段（无 `model_name`、无 `model`），因此归 URL 模板类而非
- *     body 类。归入 body 类会向可灵上游注入一个其契约未定义的顶层 `model` 字段。
- *     注意当前口径：可灵新标准把模型版本写死在 path 段（`/text-to-video/kling-3.0`、
- *     `/image-to-video/kling-3.0`、`/omni-video/kling-3.0-omni`，见
- *     docs/provider-remote-apis/07-Kling-视频生成接口.md §5），所以已声明的这些相对路径**不含**
- *     `{model}` 占位符，替换在今天是惰性的——本条目表达的是「模型身份在 URL 而非 body」这一
- *     分类事实；若后续引入 `/text-to-video/{model}` 形态，替换会立即生效。
+ * - 注入位置由**接口格式实体的请求规则树**裁定，不再由本文件维护适配器清单或「只认 body.model」：
+ *   在 `transport.payload_rules` 里找值为 `{{model_id}}` 字面量的规则，按 target 解析成：
+ *   - `body.<path>` → 请求体字段（支持嵌套路径，如 `config.model`）。JSON body 写嵌套属性；
+ *     multipart 的 serialized 表单字段按同一路径的展平名（点号连接）替换；缺失时补插；
+ *   - `api.query.<name>` → 查询参数（同名替换，不存在则追加，值用 URLSearchParams 编码）；
+ *   - 地址路径里的 `{model}` 占位 → 路径段替换（沿用既有口径）。
+ *
+ * 规则树里没有 `{{model_id}}` 规则（如可灵把模型版本写死在 path 段）时，URL 里也没有 `{model}`，
+ * 三处替换都是惰性的。
+ *
+ * 分类的唯一入口是 `resolveModelInjectionMode`：它按格式实体的请求规则派生注入落点，
+ * 不在本文件维护第二份格式 id 清单。
  *
  * 注入只做协议字段替换，不修改能力包 payload 规则、不做 endpoint/body/auth/polling 覆盖。
  * 本文件是 remote_model_id 注入的单一事实源落点，禁止在轮询/取消/组装层再各自复制注入规则。
  */
 
-const ADAPTER_IDS_WITH_BODY_MODEL: ReadonlySet<ProtocolAdapterId> = new Set([
-  'openai-image-v1',
-  'seedance-2-0-v1',
-  // Gemini Images Interactions API 的端点 `/v1beta/interactions` 不含 `{model}` 占位符，
-  // 产品模型身份由请求体顶层 `model` 承载，因此归 body 注入而非 URL 模板注入。
-  'gemini-image-interactions-v1',
-]);
+/** 请求规则值里代表「这里发模型标识」的占位（实体 → 规则树的唯一编码）。 */
+const MODEL_ID_RULE_VALUE = '{{model_id}}';
 
-const ADAPTER_IDS_WITH_URL_MODEL_TEMPLATE: ReadonlySet<ProtocolAdapterId> = new Set([
-  'veo-v1',
-  // 可灵新标准三个端点：模型身份在 URL path，请求体无模型字段（spec 07 §5 / §7.1）。
-  // 三个条目必须同时在此集合内——分类事实是「模型身份在 URL 而非 body」，与路径当前是否
-  // 含 `{model}` 占位符无关（不含时替换惰性，但绝不能落到 body 类去多注入一个字段）。
-  'kling-text2video-v1',
-  'kling-image2video-v1',
-  'kling-omni-video-v1',
-]);
+/**
+ * 模型身份的注入落点（`resolveModelInjectionMode` 的返回形状）。
+ *
+ * `bodyPaths` / `queryNames` 都来自格式实体的 `payload_rules`；空数组 = 该位置不注入。
+ */
+export type ModelInjectionTargets = {
+  bodyPaths: string[];
+  queryNames: string[];
+};
+
+const EMPTY_TARGETS: ModelInjectionTargets = { bodyPaths: [], queryNames: [] };
+
+/**
+ * 动态请求体对象（键由接口格式的请求体路径决定，属开放结构）。
+ *
+ * 模型注入只按规则树里声明的路径写值，不拥有整棵请求体的固定字段形状；
+ * 用 `Dynamic*` 命名把这条边界写在类型上。
+ */
+type DynamicBodyObject = Record<string, unknown>;
+
+const isModelIdLiteralRule = (rule: unknown): boolean =>
+  isPlainObject(rule) &&
+  Reflect.get(rule, 'kind') === 'literal' &&
+  Reflect.get(rule, 'value') === MODEL_ID_RULE_VALUE;
+
+/**
+ * 按接口格式实体派生 remote_model_id 的注入落点（**唯一分类入口**）。
+ *
+ * 格式未登记 / 未就绪 → 空落点（对话族没有接口格式实体，走 adapter 自身路径）。
+ * 规则只按「值是不是 `{{model_id}}`」识别，因此新增落点（body 嵌套路径 / query）无需改本函数。
+ */
+export const resolveModelInjectionMode = (protocolId: string): ModelInjectionTargets => {
+  const lookup = getInterfaceFormat(protocolId);
+  if (lookup.kind !== 'ready') return EMPTY_TARGETS;
+  const payloadRules = lookup.format.transport.payload_rules;
+  const bodyPaths: string[] = [];
+  const queryNames: string[] = [];
+  for (const [target, rule] of Object.entries(payloadRules)) {
+    if (!isModelIdLiteralRule(rule)) continue;
+    const parsed = parseInterfaceFormatRuleTarget(target);
+    if (parsed.kind === 'body_field') {
+      bodyPaths.push(parsed.path);
+      continue;
+    }
+    if (parsed.kind === 'query') {
+      queryNames.push(parsed.name);
+    }
+  }
+  return bodyPaths.length === 0 && queryNames.length === 0
+    ? EMPTY_TARGETS
+    : { bodyPaths, queryNames };
+};
 
 type InjectBodyResult =
   | { ok: true; body: unknown }
   | { ok: false; code: string; message: string };
 
-const MODEL_BODY_FIELD = 'model';
+/** 按点号路径写嵌套属性（中间层不存在时创建对象）。 */
+const setNestedBodyValue = (body: unknown, path: string, value: unknown): unknown => {
+  const segments = path.split('.').filter((segment) => segment.length > 0);
+  if (segments.length === 0) return body;
+  if (!isPlainObject(body)) return body;
+  const root: DynamicBodyObject = { ...body };
+  let current: DynamicBodyObject = root;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    if (segment === undefined) return root;
+    const existing = current[segment];
+    const next: DynamicBodyObject = isPlainObject(existing) ? { ...existing } : {};
+    current[segment] = next;
+    current = next;
+  }
+  const last = segments[segments.length - 1];
+  if (last !== undefined) current[last] = value;
+  return root;
+};
 
 /**
- * 对 i2i multipart body（SerializedFormDataBody）注入 model 表单字段。
+ * multipart serialized 表单字段注入。
  *
- * multipart 上 wire 的表单字段完全来自 `__formData.fields`：其中 name="model" 的字段
- * 由 payload_rules `body.model` 字面量（产品 model_id）展平而来，必须替换为
- * remote_model_id；只改外层 plain object 顶层属性会被 buildRequestBody 的 multipart
- * 分支静默丢弃，远端收到的仍是产品 model_id。替换保持原字段位置，缺失时补插。
+ * multipart 上 wire 的表单字段完全来自 `__formData.fields`，嵌套字段按点号展平
+ * （序列化器：`config.model`）。替换保持原字段位置，缺失时补插；只改外层 plain object
+ * 顶层属性会被 buildRequestBody 的 multipart 分支静默丢弃。
  */
 const injectRemoteModelIdIntoSerializedForm = (
+  bodyPaths: readonly string[],
   remoteModelId: string,
   body: SerializedFormDataBody,
 ): SerializedFormDataBody => {
-  const modelField: SerializedFormDataField = { name: MODEL_BODY_FIELD, value: remoteModelId };
+  if (bodyPaths.length === 0) return body;
+  const targetNames = new Set(bodyPaths);
   const sourceFields = Array.isArray(body.__formData.fields) ? body.__formData.fields : [];
-  let replaced = false;
+  const seen = new Set<string>();
   const fields: SerializedFormDataField[] = [];
   for (const field of sourceFields) {
-    if (isPlainObject(field) && field.name === MODEL_BODY_FIELD) {
-      replaced = true;
-      fields.push(modelField);
+    const fieldName = isPlainObject(field) && typeof field.name === 'string' ? field.name : '';
+    if (fieldName && targetNames.has(fieldName)) {
+      seen.add(fieldName);
+      fields.push({ ...field, value: remoteModelId });
       continue;
     }
     fields.push(field);
   }
-  if (!replaced) {
-    fields.unshift(modelField);
+  for (const path of bodyPaths) {
+    if (seen.has(path)) continue;
+    fields.unshift({ name: path, value: remoteModelId });
   }
   return {
     ...body,
@@ -99,93 +153,115 @@ const injectRemoteModelIdIntoSerializedForm = (
 };
 
 /**
- * 按 adapter 协议注入 body 顶层 `model` 字段。
+ * 按规则树声明的 body 路径注入 remote_model_id。
  *
- * - SerializedFormDataBody（openai edits 的 i2i multipart 形态）注入 `__formData.fields`
- *   中的 model 表单字段（见 injectRemoteModelIdIntoSerializedForm）。
- * - plain object body 注入顶层 `model` 属性（JSON body，t2i 与 Seedance 2.0 路径）。
+ * - SerializedFormDataBody（multipart 预处理产物）注入 `__formData.fields`（见上）；
+ * - plain object body 按嵌套路径写入（`config.model` 等）；
  * - 其余无效形态返回失败并留痕，调用方据此阻断而非静默降级（AGENTS.md 条件跳过留痕）。
  */
 const injectRemoteModelIdIntoBody = (
-  adapterId: ProtocolAdapterId,
+  targets: ModelInjectionTargets,
   remoteModelId: string,
   body: unknown,
 ): InjectBodyResult => {
-  if (!ADAPTER_IDS_WITH_BODY_MODEL.has(adapterId)) {
+  if (targets.bodyPaths.length === 0) {
     return { ok: true, body };
   }
   if (isSerializedFormDataBody(body)) {
-    return { ok: true, body: injectRemoteModelIdIntoSerializedForm(remoteModelId, body) };
+    return { ok: true, body: injectRemoteModelIdIntoSerializedForm(targets.bodyPaths, remoteModelId, body) };
   }
   if (!isPlainObject(body)) {
     loggingModule.logDebug('[remote-model-injection] body is not a plain object, cannot inject model', {
-      adapterId,
+      bodyPaths: targets.bodyPaths,
       bodyType: typeof body,
     });
     return {
       ok: false,
       code: 'remote_model_injection_invalid_body',
-      message: `adapter ${adapterId} requires a JSON object body to inject remote_model_id`,
+      message: 'interface format requires a JSON object body to inject remote_model_id',
     };
   }
-  return { ok: true, body: { ...body, model: remoteModelId } };
+  let next: unknown = body;
+  for (const path of targets.bodyPaths) {
+    next = setNestedBodyValue(next, path, remoteModelId);
+  }
+  return { ok: true, body: next };
 };
 
-type InjectUrlResult =
-  | { ok: true; url: string }
-  | { ok: false; code: string; message: string };
-
 /**
- * 按 adapter 协议替换 URL 模板 `{model}` 占位符。
+ * 替换 URL 模板 `{model}` 占位符（路径段编码；不含占位时原样返回）。
  *
- * - 占位符替换使用 encodeURIComponent（URL 路径段编码），避免把上游路径语义破坏。
- * - 不含 `{model}` 占位时原样返回（Gemini 与可灵三个端点的轮询路径不含 {model}，不注入）。
+ * 历史口径保留：无论格式的模型落点是 body 还是 URL，只要地址里写了 `{model}` 就替换。
  */
-const injectRemoteModelIdIntoUrl = (
-  adapterId: ProtocolAdapterId,
+const injectRemoteModelIdIntoUrl = (remoteModelId: string, url: string): string => {
+  if (!url.includes('{model}')) return url;
+  const encoded = encodeURIComponent(remoteModelId);
+  return url.split('{model}').join(encoded);
+};
+
+const injectRemoteModelIdIntoQuery = (
+  targets: ModelInjectionTargets,
   remoteModelId: string,
   url: string,
-): InjectUrlResult => {
-  if (!ADAPTER_IDS_WITH_URL_MODEL_TEMPLATE.has(adapterId)) {
-    return { ok: true, url };
+): string => {
+  let next = url;
+  for (const name of targets.queryNames) {
+    next = setQueryParamValue(next, name, remoteModelId);
   }
-  if (!url.includes('{model}')) {
-    return { ok: true, url };
-  }
-  const encoded = encodeURIComponent(remoteModelId);
-  const next = url.split('{model}').join(encoded);
-  if (!next.trim()) {
-    return { ok: false, code: 'remote_model_injection_invalid_url', message: 'remote_model_id URL template replacement produced an empty URL' };
-  }
-  return { ok: true, url: next };
+  return next;
 };
 
 export type RemoteModelInjection = {
-  adapterId: ProtocolAdapterId;
+  /** 协议标识：生成 = 接口格式 id，对话 = 协议适配器 id。 */
+  protocolId: string;
   remoteModelId: string;
 };
 
 /**
- * 对任务实际请求做 remote_model_id 注入（body 与 URL 模板两个正交维度）。
+ * 对任务实际请求做 remote_model_id 注入（URL 路径 / 查询参数 / 请求体三个正交维度）。
  *
  * snapshot 必须在远端请求开始前冻结（spec 45 §5.2）；调用方保证 finalTargetUrl 的 origin
  * 来自 snapshot.base_url，本函数不重算 origin。
+ *
+ * 协议标识从快照冻结值取（旧快照按 adapter_id 回退解析）；解析不到协议时不注入——
+ * 这类快照在派发阶段已被执行快照构建阻断，本函数只是不制造第二个失败点。
+ *
+ * 注入必须发生在 `buildRequestBody` 之前：表单正文一旦编码成字符串，body 路径上的
+ * `{{model_id}}` 就再也改不动了。
  */
 export const applyRemoteModelInjection = (params: {
   snapshot: ExecutionSnapshot;
   url: string;
   body: unknown;
+  /**
+   * 是否注入请求体（缺省 true）。
+   *
+   * 派发早期只解析地址时传 false：此时 body 可能还是未预处理的文本/占位形态，
+   * 提前要求它是对象会让「模型只落在 URL/query」的格式被误判为无效请求。
+   */
+  injectBody?: boolean;
 }): { url: string; body: unknown } => {
   const { snapshot, url, body } = params;
-  const urlResult = injectRemoteModelIdIntoUrl(snapshot.adapter_id, snapshot.remote_model_id, url);
-  if (!urlResult.ok) {
-    throw new Error(urlResult.message);
+  const resolved = resolveSnapshotProtocol(snapshot);
+  const protocolId = resolved === null
+    ? ''
+    : resolved.kind === 'generation_format'
+      ? resolved.format_id
+      : resolved.adapter_id;
+  const targets = resolveModelInjectionMode(protocolId);
+  const urlWithModelPath = injectRemoteModelIdIntoUrl(snapshot.remote_model_id, url);
+  const urlResult = injectRemoteModelIdIntoQuery(targets, snapshot.remote_model_id, urlWithModelPath);
+  if (!urlResult.trim()) {
+    throw new Error('remote_model_id injection produced an empty URL');
   }
-  const bodyResult = injectRemoteModelIdIntoBody(snapshot.adapter_id, snapshot.remote_model_id, body);
+  if (params.injectBody === false) {
+    return { url: urlResult, body };
+  }
+  const bodyResult = injectRemoteModelIdIntoBody(targets, snapshot.remote_model_id, body);
   if (!bodyResult.ok) {
     throw new Error(bodyResult.message);
   }
-  return { url: urlResult.url, body: bodyResult.body };
+  return { url: urlResult, body: bodyResult.body };
 };
 
 export {

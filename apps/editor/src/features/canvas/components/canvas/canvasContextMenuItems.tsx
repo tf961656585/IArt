@@ -29,8 +29,14 @@ import {
   UserPlus,
   PackagePlus,
 } from 'lucide-react';
+import { IconTool } from '@tabler/icons-react';
 
-import type { ContextMenuItem, ContextMenuTarget } from '../../types/clipboard';
+import type {
+  ContextMenuItem,
+  ContextMenuSubmenuRow,
+  ContextMenuSubmenuTrigger,
+  ContextMenuTarget,
+} from '../../types/clipboard';
 import type { GraphNode, ImageInputNodeData, NodeTaskInfo } from '../../types';
 import type { GroupNodeData } from '../../types/node';
 import type { AlignmentMode } from '../../layout/alignment';
@@ -42,6 +48,9 @@ import { getGroupMembers, isContainerCollapsed, isContainerNode } from '../../se
 import { collectFailedTaskNodeIds } from '../../utils/failedTaskNodes';
 import { readNodeAssetId } from '../../utils/nodeAssetId';
 import { GROUP_PALETTE_COLORS } from '../../services/groupPalette';
+import { topToolGroupsFor, type MediaChromeToolId } from '../chrome/chromeModel';
+import { MEDIA_TOOL_ICONS } from '../chrome/mediaToolIcons';
+import { resolveChromeSubject } from '../chrome/mediaNodeModel';
 import type { useCanvasContextMenuActions } from './useCanvasContextMenuActions';
 import { resolveContainerObjectWord } from './useCanvasContextMenuActions';
 
@@ -141,6 +150,8 @@ export function buildCanvasContextMenuItems({
     handleDeleteGroupWithMembers,
     handleDeleteFailedNodes,
     handleAddToPackageArea,
+    handleRunMediaDirectTool,
+    handleOpenMediaToolDialog,
     mediaAssets,
     onClose,
   } = actions;
@@ -404,7 +415,54 @@ export function buildCanvasContextMenuItems({
               action: handleCopyAssetId,
             }
           : null;
+      // 「加工」子菜单（spec：docs/editor/媒体工具加工.md「入口表面」/ 画布对象右键菜单.md §7.1）：
+      // 只作用于单节点目标的可加工媒体主体——多选不出现（工具只作用单资产），
+      // 主体不可访问（资产缺失）也不出现（入口可用性与资产存在性对齐）。
+      // 子菜单按 chrome 的同一工具分组（topToolGroupsFor）生成，直接变换点即执行；
+      // 弹窗工具只登记打开请求，弹窗渲染与执行归 MediaToolDialogHost（与工具栏同一份）。
+      const mediaToolsItem: ContextMenuSubmenuTrigger | null = (() => {
+        if (target.type !== 'node') return null;
+        const node = singleTargetNode;
+        if (node === undefined) return null;
+        const subject = resolveChromeSubject(node, mediaAssets);
+        if (subject === null || !subject.available) return null;
+        const groups = topToolGroupsFor(subject.mediaType);
+        if (groups.length === 0) return null;
+        const subjectNodeId = node.id;
+        const toolItems: ContextMenuSubmenuRow[] = groups.flatMap((group) =>
+          group.map((tool): ContextMenuSubmenuRow => {
+            const ToolIcon = MEDIA_TOOL_ICONS[tool.icon];
+            const toolId: MediaChromeToolId = tool.id;
+            const directToolId = tool.kind === 'direct' ? tool.id : null;
+            return {
+              id: `mediaTool-${tool.id}`,
+              kind: 'action',
+              label: tool.label,
+              shortcut: undefined,
+              icon: <ToolIcon size={16} />,
+              disabled: undefined,
+              destructive: undefined,
+              action: () => {
+                if (directToolId !== null) {
+                  handleRunMediaDirectTool(subjectNodeId, directToolId);
+                  return;
+                }
+                handleOpenMediaToolDialog(subjectNodeId, toolId);
+              },
+            };
+          }),
+        );
+        return {
+          id: 'mediaTools',
+          kind: 'submenu',
+          label: '加工',
+          icon: <IconTool size={16} />,
+          disabled: undefined,
+          items: toolItems,
+        };
+      })();
       const items: ContextMenuItem[] = [
+        ...(mediaToolsItem !== null ? [mediaToolsItem] : []),
         {
           id: 'exportSelection',
           kind: 'action',

@@ -136,8 +136,7 @@ const computeImportPositions = (kinds: readonly MediaFileKind[]): NodePosition[]
 // ---------------------------------------------------------------------------
 
 /**
- * 创建素材节点（addNode 既有 action）。data 形状对齐界面导入链路：assetId + 持久化 URL +
- * valueSource='upload'（图片另带 resizePercent/originalImageMeta 的初始语义）。
+ * 创建素材节点（addNode 既有 action）。data 形状对齐界面导入链路：assetId + 持久化 URL + valueSource='upload'。
  *
  * 音频时长：界面链路按浏览器 File 测量时长，CLI 通道不构造 File；本批按节点默认时长 0 落图。
  */
@@ -152,8 +151,6 @@ const createMediaNode = (
       assetId: imported.assetId,
       imageUrl: imported.persistentUrl,
       imageMeta: null,
-      originalImageMeta: null,
-      resizePercent: 100,
       valueSource: 'upload',
       lastExecutionId: undefined,
       lastSourceNodeId: undefined,

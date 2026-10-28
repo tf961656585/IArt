@@ -12,18 +12,16 @@ description: |
 
 # IARTStudio CLI 使用指南
 
-> **版本门槛**：本 skill 描述的命令面必须与**同车发布的应用版本**配套使用。本版新增
-> `canvas layout --plan`（一份计划文件一次完成多组网格 + 整版容器看板 + 显式坐标，
-> 一次撤销）、`canvas inspect` 的精简输出与 `--full` / `--group` / `--prompt-limit` / `--no-unplaced`、
-> `canvas layout` 的 `--gap`（all/group）与 `--order-mode`、`canvas nodes move --positions`、
-> 写命令的 `--dry-run` / `summary`（含 `cascaded`）/ `operation_id`、`canvas undo`、
-> `asset list --on-canvas`、`canvas node create`、两级名词 `--help`、`project list` 分页与
-> `canvas group rename`。**本版能力随下一版软件同车发布**——软件尚未升级到该版本时，新参数
-> 会以用法错误被拒绝；动手前以 `iart <命令短语> --help` 的运行时输出为准。
-> 判断版本是否匹配：`iart canvas inspect --help` 与 `iart canvas group --help` 都应正常输出；
-> 报「无法识别的命令」说明应用低于本 skill 描述的版本，请升级到最新版并重启应用。
-> 旧版本软件的 `iart` 还可能启动慢、偶发无输出崩溃、控制台中文乱码；遇到这类旧行为时
-> 请用户升级并重启——应用启动时会自动把命令入口修正到新形态，无需手动重新注册。
+> **版本门槛**：命令面以 **0.6.7 已发布版本**为基线（`canvas layout --plan`、`canvas inspect`
+> 精简输出与 `--full` / `--group` / `--prompt-limit` / `--no-unplaced`、`--gap`、`--order-mode`、
+> `canvas nodes move --positions`、位置类写命令与 `canvas node create` 的 `--dry-run` / `summary` / `operation_id`、`canvas undo`、
+> `asset list --on-canvas`、`canvas node create`、两级名词 `--help`、`project list` 分页、
+> `canvas group rename` 均已在该版本可用）。文中标注「0.6.8 起」的字段（`--ref` 用途容量、
+> 档案 `references.slot_id` / `field_key`、`task.request` 媒体摘要）只在 0.6.8 及以上存在；
+> 低于该版本的应用不会有这些键，其余命令照常可用。动手前以 `iart <命令短语> --help`
+> 的运行时输出为准：`iart canvas inspect --help` 与 `iart canvas group --help` 都应正常输出，
+> 报「无法识别的命令」说明应用低于 0.6.7，请升级并重启。0.6.7 之前的旧入口还可能启动慢、
+> 偶发无输出崩溃、控制台中文乱码；遇到时请用户升级并重启——应用启动时会自动修正入口。
 
 `iart` 是随 IARTStudio 分发的命令行入口，让 agent 驱动正在运行的应用。Agent 做的事
 与用户在界面上做的是同一套机制：生成提交走创作面提交主链，画布操作走既有编辑动作，
@@ -91,35 +89,36 @@ description: |
 |---|---|
 | `iart model list` | 可用模型目录；不可提交条目带失败原因码 |
 | `iart model get <model_id>` | 单模型详情，含 `parameter_schema`——**`--arg` 参数名的唯一合法依据** |
-| `iart asset list --project P [--query K] [--media-type image\|video\|audio] [--model M] [--on-canvas true\|false] [--limit N] [--offset O]` | 项目资产清单。`--query` 关键词搜索（命中素材原始文件名与生成产物的提交提示词；**只用于定位条目，输出不含提示词片段**——要看提示词全文用 `batch get`/`generation`）、`--media-type`/`--model` 过滤、`--on-canvas` 过滤是否已在画布上、`--limit`/`--offset` 分页；全不带参数=全量。条目 `source_file_name` 是导入素材的原始文件名；`source_summary` 是生成来源摘要，形如「任务 task_xxx」，空串 = 导入素材等非生成产物；`node_ids` 是引用该资产的画布节点（空数组 = 不在画布上，一个资产可被多个节点引用）；`batch_id` 是生成来源批次（导入素材为 null） |
+| `iart asset list --project P [--query K] [--media-type image\|video\|audio] [--model M] [--on-canvas true\|false] [--limit N] [--offset O]` | 项目资产清单。`--query` 关键词搜索（大小写不敏感，命中素材原始文件名与生成产物的提交提示词；**只用于定位条目，输出不含提示词片段**——要看提示词全文用 `batch get`/`generation`）、`--media-type`/`--model` 过滤、`--on-canvas` 过滤是否已在画布上、`--limit`/`--offset` 分页（过滤先于分页）；全不带参数=全量。条目 `source_file_name` **只在有原始文件名时出现（导入素材有；生成产物没有该键，不是 null）**；`source_summary` 是生成来源摘要，形如「任务 task_xxx」，空串 = 导入素材等非生成产物；`node_ids` 是引用该资产的画布节点（空数组 = 不在画布上，一个资产可被多个节点引用）；`batch_id` 是生成来源批次（导入素材为 null） |
 | `iart asset get <assetId> --project P` | 资产详情，必含本地媒体文件绝对路径；同内容存在其他资产 id 时输出 `equivalent_asset_ids`（同一内容的历史双身份，引用任一等效）。资产是生成产物时附 `generation` 生成档案（见下「生成档案」） |
 | `iart batch get <batchId> --project P` | 读取生成档案（见下「生成档案」）：一批次提交的完整意图——提示词**全文**、参数、参考资产、任务成员。批次不存在报 `batch_not_found` |
-| `iart canvas inspect --project P [--full] [--group <容器id>] [--prompt-limit N] [--no-unplaced]` | **画布场景图（一条命令看全）**，默认**精简输出**：节点（id、类型、显示名、位置、**宽高 `size`**、**包围盒 `bbox`**、组归属、批次、任务，节点级提示词预览 `prompt_preview`、原始文件名 `source_file_name`、创建时间 `created_at`）+ 容器（成员列表 + **渲染框** `position/size/bbox` + 是否折叠 + 最近邻 `nearest_neighbor`）+ 注释 `annotations[]` + 容器重叠对 `overlaps[]` + 容器最小间距 `min_gap`（负数=重叠）+ 未上画布资产清单。默认**不**内联每个资产的完整摘要（节点 `asset` 为 null）来控制上下文量。`--full` 返回嵌套资产摘要与完整提示词；`--group <容器id>` 只看该容器及其后代；`--prompt-limit N` 控制提示词预览长度（0=不输出）；`--no-unplaced` 省略未上画布资产。`fidelity` 说明几何来源：`exact` = 画布窗口打开、尺寸来自实际渲染；`derived` = 离线按同一套规则推算（此时 viewport 宽高与选中态为 null）。**整理画布、判断重叠、认节点身份，先跑它，不要逐个 `asset get`** |
-| `iart canvas nodes list --project P` | 画布节点轻量清单（节点 id、类型、显示名 `name`、位置、组归属、资产/任务引用）。人读每行 `node_id 类型 名称 @x,y [组 G] [资产 A]`，空画布输出明确空态。只给左上角坐标、没有宽高——需要尺寸/重叠判断用 `canvas inspect` |
-| `iart canvas group list --project P` | 画布组与 Agent 容器清单（组 id `group_node_id`、名称、类型 `group`/`agent_container`、成员数）。规划分组、生成前盘点、`generate --group` 前核对组名是否唯一都用它；项目未打开也可用 |
-| `iart task list --project P [--status S] [--since <ISO 时间>] [--request-id ID]` / `iart task get <taskId> --project P` | 任务状态。`--status` 按状态过滤，合法值只有七个：`submitting`/`generating`/`polling`/`downloading`/`succeeded`/`failed`/`cancelled`；`--since` 按创建时间下界过滤（ISO 8601，如 `2026-10-14T08:00:00Z`）、`--request-id` 按受理幂等键反查该次提交的全部任务（未命中=空列表且命令成功，见下「崩溃后对账」）；可组合。任务条目含 `progressPercent`（可空）。`task list` 不支持 `--limit/--offset`（传了会以用法错误退出 2）。`task get` 的 `--project` 必填。人读模式 `task get` 只输出一行（任务 + 状态 + 失败原因）——读字段结构必须 `--json` |
+| `iart canvas inspect --project P [--full] [--group <容器id>] [--prompt-limit N] [--no-unplaced]` | **画布场景图（一条命令看全）**，默认**精简输出**：`nodes[]`（`node_id`、`node_type`、`name`、`position`、**宽高 `size`**、**包围盒 `bbox`**、`group_id`、`batch_id`、`task_id`、节点级提示词预览 `prompt_preview`、原始文件名 `source_file_name`、创建时间 `created_at`）+ `containers[]`（`group_node_id`、`name`、`member_ids` + **渲染框** `position/size/bbox` + `collapsed` + 最近邻 `nearest_neighbor`）+ 注释 `annotations[]` + 容器重叠对 `overlaps[]` + 容器最小间距 `min_gap`（**JSON 是对象 `{a_id,b_id,gap}`，`gap` 为负表示重叠；不足两个顶层容器时为 `null`**；只有人读模式显示成单个数值）+ 未上画布资产清单 `assets_not_on_canvas[]`。默认**不**内联每个资产的完整摘要（节点 `asset` 为 null）来控制上下文量。`--full` 返回嵌套资产摘要与完整提示词；`--group <容器id>` 只看该容器及其后代，未知组报 `group_not_found`；`--prompt-limit N` 控制提示词预览长度（0=不输出）；`--no-unplaced` 清空未上画布清单（键保留）。`fidelity`：`exact` = 画布窗口打开且**每个节点与容器都拿到精确几何**（否则整体降为 `derived`）；`derived` 时 `viewport` 与 `selection` 整体为 null。**整理画布、判断重叠、认节点身份，先跑它，不要逐个 `asset get`** |
+| `iart canvas nodes list --project P` | 画布节点轻量清单（JSON 条目含 `node_id`、`node_type`、`name`、`position`、`group_id`、`asset_id`、`task_id`）。人读每行 `- <node_id> <node_type> <name> @ x,y [组 G] [资产 A]`，空画布输出明确空态。只给左上角坐标、没有宽高——需要尺寸/重叠判断用 `canvas inspect` |
+| `iart canvas group list --project P` | 画布组与 Agent 容器清单（条目含 `group_node_id`、`name`、`type`（`group`/`agent_container`）、`member_count`）。规划分组、生成前盘点、`generate --group` 前核对组名是否唯一都用它；项目未打开也可用 |
+| `iart task list --project P [--status S] [--since <ISO 时间>] [--request-id ID]` / `iart task get <taskId> --project P` | 任务状态。`--status` 按状态过滤，合法值只有七个：`submitting`/`generating`/`polling`/`downloading`/`succeeded`/`failed`/`cancelled`；`--since` 按创建时间下界过滤（ISO 8601，如 `2026-10-14T08:00:00Z`）、`--request-id` 按受理幂等键反查该次提交的全部任务（未命中=空列表且命令成功，见下「崩溃后对账」）；可组合。任务条目是运行域视图、**camelCase**（`taskId`、`status`、`projectPath`、`batchId`、`createdAt`/`updatedAt`、`progressPercent`（可空）等），与画布命令的 snake_case 投影不同。`task list` 不支持 `--limit/--offset`（传了会以用法错误退出 2）。`task get` 的 `--project` 必填。人读模式 `task get` 只输出一行（任务 + 状态 + 失败原因，另附画布节点/组与档案提示）——读字段结构必须 `--json` |
 
 ### 画布命令（必须项目已打开）
 
 | 命令 | 说明 |
 |---|---|
-| `iart asset import --file <路径> [--file ...] --project P` | 导入本地媒体文件（图片/视频/音频）：每个文件成为画布素材节点 + 项目资产，整批一个撤销步骤（界面可一步撤销）；返回每项的 `file_name`/`asset_id`/`node_id`/`media_type`。任一文件不存在/读不出（`file_not_found`）或类型不支持（`unsupported_file_type`）则**整批拒绝**、零副作用。路径用绝对路径；`--file` 可重复（值原样传入，不拆逗号）。重复导入同一文件会产生新素材节点（内容寻址不重复占盘） |
-| `iart canvas group create --name N [--members id1,id2] --project P` | 建组。**永远新建，不按名合并**；同名组会并存，后续 `generate --group` 命中多个同名组会 `group_name_ambiguous`。带 `--members`：建组并纳入成员（逗号分隔，可重复传参累积），成员已属其他组则改归属到新组；不带 `--members`：建**空组**（先规划分组、稍后让生成任务出生其内的标准动作，组框自动在画布空白处落位）；返回 `group_node_id` 与创建后实际在组内的 `member_ids`（空组为空数组）。要往已有组加成员用 `canvas group add`，不要再次 create；要改名用 `canvas group rename` |
+| `iart asset import --file <路径> [--file ...] --project P` | 导入本地媒体文件（图片/视频/音频）：每个文件成为画布素材节点 + 项目资产，整批一个撤销步骤（界面可一步撤销）；返回 `imported[]`，每项 `file_name`/`asset_id`/`node_id`/`media_type`（结果另可能带 `operation_id`）。任一文件不存在/读不出（`file_not_found`）或类型不支持（`unsupported_file_type`）则**整批拒绝**、零副作用。路径用绝对路径；`--file` 可重复（值原样传入，不拆逗号）。重复导入同一文件会产生新素材节点（内容寻址不重复占盘） |
+| `iart canvas group create --name N [--members id1,id2] --project P` | 建组。**永远新建，不按名合并**；同名组会并存，后续 `generate --group` 命中多个同名组会 `group_name_ambiguous`。带 `--members`：建组并纳入成员（逗号分隔，可重复传参累积），成员已属其他组则改归属到新组；不带 `--members`：建**空组**（先规划分组、稍后让生成任务出生其内的标准动作，组框自动在画布空白处落位）；返回 `group_node_id`、创建后实际在组内的 `member_ids`（空组为空数组）与 `operation_id`（创建类标识，`canvas undo` 对它返回 `command_rejected`）。要往已有组加成员用 `canvas group add`，不要再次 create；要改名用 `canvas group rename` |
 | `iart canvas group rename --group <组id> --name N --project P` | 重命名节点组（目标必须是普通节点组；Agent 容器标题由会话管理，`command_rejected`）。一次重命名=一条撤销记录；返回 `group_node_id`/`name`/`operation_id`（`operation_id` 恒为 `null`——非位置类不登记按操作撤销）。组不存在 `group_not_found` |
-| `iart canvas group add --group <组id> --members id1,id2 --project P` | 把成员加入目标组：未归属=加入，已在目标组=无操作，属于其他组=迁移；目标必须是普通节点组（Agent 容器不接受）。返回 `group_node_id`、`added_node_ids`、`moved_node_ids`、`unchanged_node_ids`；整批一条撤销记录。成员不存在 `node_not_found`、成员是组节点或目标不是节点组 `command_rejected` |
-| `iart canvas group remove --group <组id> --members id1,id2 --project P` | 把成员从目标组移出（保留原位、归属解除）；成员必须当前属于该组，否则整批 `command_rejected` 并点名。返回 `group_node_id`、`removed_node_ids`；整批一条撤销记录 |
-| `iart canvas group dissolve --group <容器id> --project P` | 解散容器（组或 Agent 容器）：组解散删除组节点、成员保留画布原位且归属解除；Agent 容器解散解除成员关系、头节点保留回落单节点形态、会话保留。**不提供连删**（连删是界面显式危险动作）。返回 `group_node_id` 与解散前 `member_ids`；目标不存在 `group_not_found`、目标非容器或 Agent 无成员 `command_rejected` |
+| `iart canvas group add --group <组id> --members id1,id2 --project P` | 把成员加入目标组：未归属=加入，已在目标组=无操作，属于其他组=迁移；目标必须是普通节点组（Agent 容器不接受）。返回 `group_node_id`、`added_node_ids`、`moved_node_ids`、`unchanged_node_ids`、`operation_id`（成员增删不支持按操作撤销，`canvas undo` 返回 `command_rejected`）；整批在画布撤销栈里是一条记录。成员不存在 `node_not_found`、成员是组节点或目标不是节点组 `command_rejected` |
+| `iart canvas group remove --group <组id> --members id1,id2 --project P` | 把成员从目标组移出（保留原位、归属解除）；成员必须当前属于该组，否则整批 `command_rejected` 并点名。返回 `group_node_id`、`removed_node_ids`、`operation_id`（`canvas undo` 不支持成员移出）；整批在画布撤销栈里是一条记录 |
+| `iart canvas group dissolve --group <容器id> --project P` | 解散容器（组或 Agent 容器）：组解散删除组节点、成员保留画布原位且归属解除；Agent 容器解散解除成员关系、头节点保留回落单节点形态、会话保留。**不提供连删**（连删是界面显式危险动作）。返回 `group_node_id`、解散前 `member_ids` 与 `operation_id`（`canvas undo` 不支持解散）；目标不存在 `group_not_found`、目标非容器或 Agent 无成员 `command_rejected` |
 | `iart canvas node move --node <id> --x N --y N [--dry-run] --project P` | 移动单个节点到目标画布坐标（可负、可小数）。**容器节点不能直接移动**（组位置由成员派生；整组平移用 `canvas group move`）；返回 `node_id`、最终 `position`、实际位移的 `moved_node_ids`、`summary`、`operation_id`。⚠ `canvas nodes list` 输出的容器 `position` 是**存储锚点**，不是渲染位置；判断视觉位置与重叠一律看 `canvas inspect` 的 `containers[].position/size/bbox` |
-| `iart canvas nodes move (--nodes id1,id2 --dx N --dy N \| --positions id1=x,y [--positions id2=x,y]) [--dry-run] --project P` | 批量移动，**两族互斥**。相对族 `--nodes … --dx/--dy`：全部节点按同一位移移动，可包含容器 id（按容器展开到全部成员，重复展开去重）。绝对族 `--positions <node_id>=<x>,<y>`：可重复传，每项把一个节点落到指定坐标；**只接受非容器节点**（容器请用 `canvas group move`，否则 `command_rejected`），同一 node_id 重复出现会被拒绝。两族同时给或都不给都会失败。**一条撤销记录**。返回 `positions`、`moved_node_ids`、`summary`、`operation_id` |
+| `iart canvas nodes move (--nodes id1,id2 --dx N --dy N \| --positions id1=x,y [--positions id2=x,y]) [--dry-run] --project P` | 批量移动，**两族互斥**。相对族 `--nodes … --dx/--dy`：全部节点按同一位移移动，可包含容器 id（按容器展开到全部成员，重复展开去重）。绝对族 `--positions <node_id>=<x>,<y>`：可重复传，每项把一个节点落到指定坐标；**只接受非容器节点**（容器请用 `canvas group move`，否则 `command_rejected`），同一 node_id 重复出现会被拒绝。两族同时给或都不给都会失败；任一节点不存在则整批 `node_not_found`、零改动。**一条撤销记录**。返回 `positions`、`moved_node_ids`、`summary`、`operation_id` |
 | `iart canvas group move --group <容器id> (--dx N --dy N \| --x N --y N) [--dry-run] --project P` | **整组平移**：相对位移（`--dx/--dy`）与绝对落点（`--x/--y`，渲染框左上角）二选一；未给的轴保持。组与 Agent 容器都接受；空容器直写自身位置。**一条撤销记录**，不要逐个移动成员。返回 `group_node_id`、`positions`（成员+容器）、`moved_node_ids`、`summary`、`operation_id` |
-| `iart canvas undo --operation <operationId> --project P` | **按操作撤销**：只回退命令行那一次位置类操作，不影响其间的用户手工编辑；撤销本身也可被 Cmd+Z 反悔。支持 `layout` / `node move` / `nodes move` / `group move`；建组、解散、删除、导入、重命名、节点创建不支持（`command_rejected`）。窗口重载后记录失效 → `operation_not_found` |
-| `iart canvas node create --asset <assetId> [--group <组id>] [--x N --y N] [--dry-run] --project P` | **把库里已有资产放回画布**，物化为「资产节点」并保留生成溯源（批次/任务/模型）。不给坐标时自动在空白处防重叠落位；`--x/--y` 必须同时给。重复放入允许（会产生多个节点）。素材节点仍只能经 `asset import` 创建，本命令不能建素材节点。一次一条撤销记录（不支持按操作撤销）；返回 `node_id`、`asset_id`、`position`、`group_id`、`dry_run`（dry-run 时 `node_id` 为 null） |
+| `iart canvas undo --operation <operationId> --project P` | **按操作撤销**：只回退命令行那一次位置类操作，不影响其间的用户手工编辑；撤销本身也可被 Cmd+Z 反悔。支持 `layout` / `node move` / `nodes move` / `group move`；建组、解散、成员加入/移出、删除、导入、重命名、节点创建不支持（`command_rejected`；这些命令响应里的非空 `operation_id` 只作操作留痕，不能传给本命令）。窗口重载后记录失效 → `operation_not_found` |
+| `iart canvas node create --asset <assetId> [--group <组id>] [--x N --y N] [--dry-run] --project P` | **把库里已有资产放回画布**，物化为「资产节点」并保留生成溯源（批次/任务/模型）。不给坐标时自动在空白处防重叠落位；`--x/--y` 必须同时给。重复放入允许（会产生多个节点）。素材节点仍只能经 `asset import` 创建，本命令不能建素材节点。一次一条画布撤销记录（CLI 的 `canvas undo` 不支持该操作）；返回 `node_id`、`asset_id`、`position`、`group_id`、`operation_id`、`dry_run`（dry-run 时 `node_id` 与 `operation_id` 为 null）。`--group` 只接受 `type=group` 的节点组，Agent 容器或普通节点会 `command_rejected` |
 | `iart canvas node delete --nodes id1,id2 [--yes] --project P` | 删除节点（与界面删除同一连带语义：删除组节点=解散、成员保留原位；Agent 节点删除会级联清除其会话且**不可恢复**）。请求集命中 Agent 节点时必须加 `--yes` 显式确认；**不提供连删**；返回实际删除的 `deleted_node_ids`（含连带级联）。删除后**不会自动紧凑重排**；需要时再跑 `canvas layout --scope group:<组id> --columns N` |
-| `iart canvas layout (--scope all\|group:<组id>\|containers [--columns N] [--order id1,id2] [--order-mode position\|created\|insertion] [--gap N] [--pack] \| --plan <计划文件>) [--dry-run] --project P` | 整理布局，两种模式二选一。**成员/容器模式**（`--scope` 必填）：`all`=整理画布自由散点（容器及其成员不动）；`group:<组id>`=整理该容器内成员；`containers`=只消除组与独立 Agent 容器之间的重叠（不重叠的容器保持原位，相交的容器整组让到最近空位）。**默认排序是视觉阅读序**（先按 y 分行、y 差 ≤1px 视为同一行、行内按 x，完全同坐标按插入序兜底）；要插入序用 `--order-mode insertion`，要按创建时间用 `--order-mode created`；显式 `--order` 永远优先。`--gap` 指定格子间距（缺省 120，0 合法），**`all`/`group` 都支持**，间距精确等于该值。**`containers --pack`=整版排布**：把顶层容器按行列看板重排（列数缺省 `ceil(sqrt(n))`，间距缺省 120，可 `--gap`/`--columns` 指定，`--order` 指定容器顺序）；旧 `containers` 路径不受 pack 影响。返回受影响节点的最终位置 + `summary{inspected,moved,cascaded,unchanged,skipped[]}` + 实际使用的 `columns`/`gap` + `content_reordered`/`order_changes` + `operation_id` + `dry_run`。`--columns` 缺省单列（spec 默认），多节点建议 `ceil(sqrt(n))`。`containers` 不带 `--pack` 时不要传 `--columns`/`--order`/`--order-mode`/`--gap`（会报 `command_rejected`）。**计划文件模式**（`--plan <路径>`，与 `--scope`/`--columns`/`--order`/`--order-mode`/`--gap`/`--pack` 互斥）：一份 JSON 里三段可选——`groups[]`（每个组一份网格，含 `group_id`/`columns`/`gap`/`order`/`order_mode`）、`containers`（整版容器看板，同上字段）、`positions`（非容器节点 → 绝对坐标 `{x,y}`）；执行序 `groups` → `containers` → `positions`，**全部合成一条撤销记录**；`--dry-run` 零写入零撤销；响应 `plan_applied: true`、`columns`/`gap` 为 null；`groups[].order` 的每个 id 必须是该组直接成员（不存在 `node_not_found`、非成员 `command_rejected`），`positions` 是 JSON 对象、同键重复以后出现者为准。`order_mode` 只支持 `position`/`insertion`（`created` 不支持）；显式坐标命中已被组或看板覆盖的节点/容器、计划文件非法 → `command_rejected`；未知组 `group_not_found`、未知节点 `node_not_found`；组目标必须是已存在的顶层容器，`group_id` 不能重复 |
+| `iart canvas layout (--scope all\|group:<组id> [--columns N] [--order id1,id2] [--order-mode position\|created\|insertion] [--gap N] \| --scope containers [--pack [--columns N] [--order id1,id2] [--order-mode position\|insertion] [--gap N]] \| --plan <计划文件>) [--dry-run] --project P` | 整理布局，两种模式二选一。**成员/容器模式**（`--scope` 必填）：`all`=整理画布自由散点（容器及其成员不动）；`group:<组id>`=整理该容器内成员（空组或折叠组会被 `command_rejected`——先加成员或展开）；`containers`=只消除组与独立 Agent 容器之间的重叠（不重叠的容器保持原位，相交的容器整组让到最近空位）。**默认排序是视觉阅读序**（先按 y 分行、y 差 ≤1px 视为同一行、行内按 x，完全同坐标按插入序兜底）；要插入序用 `--order-mode insertion`，要按创建时间用 `--order-mode created`；显式 `--order` 永远优先，且 `--order` 的 id 必须在该次整理范围内（`all` 仅未分组节点、`group:<id>` 仅该组直接成员、pack 仅顶层容器）；不存在报 `node_not_found`、越界报 `command_rejected`。`--gap` 指定格子间距（缺省 120，0 合法），**`all`/`group` 都支持**，间距精确等于该值。**`containers --pack`=整版排布**：把顶层容器按行列看板重排（列数缺省 `ceil(sqrt(n))`，间距缺省 120，可 `--gap`/`--columns` 指定，`--order` 指定容器顺序）；旧 `containers` 路径不受 pack 影响。`--pack` 只适用于 `--scope containers`（其他作用域带 `--pack` 直接 `command_rejected`）；pack 下 `--order-mode` 只支持 `position`/`insertion`，`created` 必须改用显式 `--order`。返回受影响节点的最终位置 + `summary{inspected,moved,cascaded,unchanged,skipped[]}` + 实际使用的 `columns`/`gap` + `content_reordered`/`order_changes` + `operation_id` + `dry_run`。`--columns` 缺省单列（spec 默认），多节点建议 `ceil(sqrt(n))`。`containers` 不带 `--pack` 时不要传 `--columns`/`--order`/`--order-mode`/`--gap`（会报 `command_rejected`）。**计划文件模式**（`--plan <路径>`，与 `--scope`/`--columns`/`--order`/`--order-mode`/`--gap`/`--pack` 互斥）：一份 JSON 里三段可选——`groups[]`（每个组一份网格，含 `group_id`/`columns`/`gap`/`order`/`order_mode`）、`containers`（整版容器看板，同上字段）、`positions`（非容器节点 → 绝对坐标 `{x,y}`）；执行序 `groups` → `containers` → `positions`，**全部合成一条撤销记录**；`--dry-run` 零写入零撤销；响应 `plan_applied: true`、`columns`/`gap` 为 null；`groups[].order` 的每个 id 必须是该组直接成员（不存在 `node_not_found`、非成员 `command_rejected`），`positions` 是 JSON 对象、同键重复以后出现者为准。`order_mode` 只支持 `position`/`insertion`（`created` 不支持）；显式坐标命中已被组或看板覆盖的节点/容器、计划文件非法 → `command_rejected`；未知组 `group_not_found`、未知节点 `node_not_found`；组目标必须是已存在的顶层容器，`group_id` 不能重复 |
 
 **画布写命令的共同返回**（`layout` / `node move` / `nodes move` / `group move`）：
 
-- `summary { inspected, moved, cascaded, unchanged, skipped[{node_id,reason}] }`——`moved=0` 且 `inspected>0` 表示**确实检查过、无需移动**，不是「什么都没做」；`moved` 是位移总数（含伴随/级联），`cascaded` 是其中不属于本次直接考察对象的伴随节点数；被跳过的对象带原因。
+- `layout` / `nodes move` / `group move` 返回 `positions`（节点 id → 坐标的对象）；`node move` 返回单数 `position`（`{x,y}`），没有 `positions` 键。
+- `summary { inspected, moved, cascaded, unchanged, skipped[{node_id,reason}] }`——`moved=0` 且 `inspected>0` 表示**确实检查过、无需移动**，不是「什么都没做」；`moved` 是位移总数（含伴随/级联），`cascaded` 是其中不属于本次直接考察对象的伴随节点数；被跳过的对象带原因。**例外：`layout --scope containers --pack` 的 `inspected`/`moved` 以容器为单位（`moved` = 被移动的容器数，`cascaded` 恒为 0），不是节点数。**
 - `operation_id`——可用于 `canvas undo --operation <id>` 精确回退这一次；`--dry-run` 时为 `null`（没有产生可撤销记录）。
 - `--dry-run`——零写入、零撤销记录，只返回计划位置；先把方案给用户看，确认后再执行。
 - **容器坐标**：这些响应里的容器 position 是**派生渲染框左上角**（与画布上看到的一致）；空容器与折叠容器回落存储 position。`canvas nodes list` 的容器 position 仍是存储锚点，不能用它判断视觉位置。
@@ -133,13 +132,13 @@ description: |
 | `iart task wait <taskId> [--timeout S] --project P` | 轮询至终态。默认不设时限；`--timeout` 到期只是本次命令以 `wait_timeout` 退出，任务继续跑 |
 
 `generate` 细节：
-- `--count` 缺省 1，范围 1–10。
+- `--count` 缺省 1，范围 1–10；越界由提交侧按业务拒绝（`command_rejected`，退出 1），不是用法错误。
 - `--ref` 引用**已存在**的资产（id 来源：`asset list`（可 `--query` 按文件名/提示词搜）、`canvas nodes list` 的 `asset_id`，或用户从画布右键菜单「复制素材 ID」贴给你的 id；同一内容出现多个 id 时任一等效，`asset get` 的 `equivalent_asset_ids` 可核对）。**本地文件路径不是合法输入**——本地文件需先导入成为素材才能引用：用 `iart asset import --file <绝对路径>` 导入（见 §1 与 R1.5），或由用户在画布中拖入。
-- `--ref` 可带用途后缀：`--ref <素材标识>:<用途>`，如 `--ref a:first_frame,b:last_frame`（可与不带用途的条目混写）。用途标识取 `iart model get <model_id> --json` 的 `media_slots[].slotId`，**不要猜**。省略用途时按模型能力自动归入：模型声明了可放多张的参考位（图像编辑类）→ 普通参考；只有单张位（图生视频的首帧/尾帧）→ 拒绝并列出可选用途，此时必须显式指定。
+- `--ref` 可带用途后缀：`--ref <素材标识>:<用途>`，如 `--ref a:first_frame,b:last_frame`（可与不带用途的条目混写）。用途标识取 `iart model get <model_id> --json` 的 `media_slots[].slotId`，**不要猜**。省略用途时按模型能力自动归入：模型声明了可放多张的参考位（图像编辑类）→ 普通参考；只有单张位（图生视频的首帧/尾帧）→ 拒绝并列出可选用途，此时必须显式指定。**（0.6.8 起）**每个用途有 `media_slots[].maxFiles` 张数上限，超出会在提交前以 `command_rejected` 拒绝并点名该用途（`该用途最多 N 个，当前给了 M 个`）——先按 `maxFiles` 分配条目，不要靠反复重试试上限。
 - `--arg` 的参数名与取值域以 `model get` 的 `parameter_schema` 为准，**不要猜**。
 - `--arg size=WxH` 是**请求值，不是保证值**。带参考图的编辑类模型、`auto`/档位式尺寸可能按服务商策略产出不同尺寸；终态以产物 `asset.original.width/height` 为准。`task wait`/`generate --wait` 的终态结果带 `warnings[]`：请求是字面量 WxH 且实际图片尺寸不同时给出 `requested_size_not_honored`（信息性，**不改变任务成功状态**）。
 - `--request-id` 受理幂等键（batch 级）：不传时 CLI 自动生成 uuid 并在受理回执回显；**重提时复用同一 request_id 即幂等**——命中已受理批次会原样返回既有批次与任务身份（`replayed: true`），不重复出图。
-- `--group <组名>` 出生组：唯一同名组 → 本批任务出生其内（组内按任务号网格续排）；没有同名组 → 受理成功后自动建组再出生；多个同名组 → 报 `group_name_ambiguous` 且不提交。指定后落位锚点改为组内续排（不再以参考资产旁为锚）。**先规划分组、再提交生成**的标准工作流见 R2。不指定时行为不变（`group_id` 为 null）。
+- `--group <组名>` 出生组：唯一同名组 → 本批任务出生其内（组内按任务号网格续排）；没有同名组 → 受理成功后自动建组再出生；多个同名组 → 报 `group_name_ambiguous` 且不提交。指定后落位锚点改为组内续排（不再以参考资产旁为锚）。**先规划分组、再提交生成**的标准工作流见 R2。匹配只针对 `type=group` 的节点组，Agent 容器不参与——若画布上只有同名 Agent 容器，会按「没有同名组」自动新建一个同名节点组。不指定时行为不变（`group_id` 为 null）。
 - `--wait` 先在 stderr 即时输出受理回执（批次与任务标识与幂等键回显，见下），再轮询到全部任务终态，
   逐任务输出终态与产物（失败任务附失败原因）；等待中途进程死亡时凭回执改用 `task wait` 恢复观测。
   `generate --wait` **没有 `--timeout`**：需要等待上限时，先不带 `--wait` 提交，再用 `task wait --timeout` 等待。
@@ -161,7 +160,8 @@ iart task list --request-id <回执里的幂等键> --project P --json
 - 需要项目上下文的命令必须显式 `--project <路径或名称>`；CLI 无隐式会话状态
   （没有 `use` 类命令），多条命令可并行作用于不同项目。
 - 按项目名解析命中多个同名项目时报 `project_name_ambiguous`，改用绝对路径。
-- 列表类命令默认输出完整集合；集合可能无限增长的列表命令可分页（`asset list` / `project list`）；`task list` 不接受 `--limit/--offset`（传了会以用法错误退出 2）。
+- 列表类命令默认输出完整集合；集合可能无限增长的列表命令可分页（`asset list` / `project list`）；`task list` 不接受 `--limit/--offset`（传了会以用法错误退出 2）。`--since` 不是可解析时间时由执行侧以 `command_rejected` 失败（退出 1，不是用法错误 2）。
+- `task cancel` 走运行域取消端点，项目未打开也可执行；不必为了取消任务先 `project open`（会多弹一次窗口、抢焦点）。
 - 帮助分三层：`iart --help`（顶层用法表）、`iart <名词> --help`（该名词下的子命令摘要，
   如 `iart model --help`、`iart canvas nodes --help`）、`iart <命令短语> --help`（该命令的参数说明，含必填项与默认值，
   如 `iart task list --help`）。名词级支持两级名词：`iart canvas --help` / `iart canvas nodes --help` /
@@ -174,6 +174,7 @@ iart task list --request-id <回执里的幂等键> --project P --json
 | 主题 | 事实 | agent 该怎么做 |
 |---|---|---|
 | 请求尺寸 | `--arg size=WxH` 是请求值，不保证精确尺寸；带参考图的编辑类模型可能改变尺寸 | 终态用 `asset.original.width/height` 核对；读 `warnings[]`，不要当作失败 |
+| 透明背景/免抠 | `format=png` 只决定文件格式，不保证背景透明（alpha 可以全不透明）；内置图像模板没有背景/透明参数 | 免抠意图必须显式声明：先 `model get` 看有无背景/透明字段（有就传），提示词写清「全透明背景、禁止背景元素」，终态核验 alpha；非透明不得宣告完成。完整配方见 R1.6 |
 | 失败与重试 | `retryable` 只是信息字段；CLI 不自动重试；失败任务已落库 | 同 `--request-id` 重提只重放失败批次；真正重试用新提交或调整参数 |
 | 「网络连接失败」 | 可能是上游长时间无响应后断开，不等于本地断网 | 结合 `failure.message`、`startedAt/finishedAt` 判断；不要只让用户查网络 |
 | `canvas group create` | 永远新建，不按名合并；组名不是唯一键 | 组名取唯一；要加成员用 `canvas group add` |
@@ -197,8 +198,9 @@ iart task list --request-id <回执里的幂等键> --project P --json
 ⚠ 任务失败不是命令失败：`task wait`/`generate --wait` 对 `failed`/`cancelled` 任务仍返回退出码 0
 （`ok:true`），必须逐项读 `task.status`/`task.failure`。
 
-读结果一律加 `--json`（输出为机器可读 JSON，错误形如
-`{"ok":false,"error":{"code":"...","message":"..."}}`）：
+读结果一律加 `--json`（成功输出为机器可读 JSON；**已进入执行链的失败**形如
+`{"ok":false,"error":{"code":"...","message":"..."}}`。本地用法错误——未知命令、非法 flag、缺参——
+退出 2、stdout 为空，只往 stderr 写一行纯文本，不产出 JSON 信封）：
 
 - **受理回执**（generate 不带 `--wait`；`--wait` 时也先经 **stderr** 即时输出一次再开始等待）：
   `{ ok, batch_id, tasks: [{task_id, task_index, node_id, group_id}], client_request_id, replayed }`（响应还含 `command` 与 `task_results: []`）——`client_request_id`
@@ -218,16 +220,23 @@ iart task list --request-id <回执里的幂等键> --project P --json
 - **任务字段结构**（`task get --json` 的 `task`）：`taskId`、`status`、`batchId`（所属批次，
   可反查档案）、`createdAt`/`updatedAt`（Unix 毫秒）、`progressPercent`/`progressMessage`（可空）、
   `progressPhase`（status 的从属阶段；failed/cancelled 恒为 null）、`startedAt`/`finishedAt`
-  （执行真实开始/结束时刻，可空）、`errorMessage`/`errorCode`/`failure`、`metadata`。
-  ⚠ `metadata` 里的提示词是 **512 字符截断预览摘要，不是全文**——全文一律看 `generation.prompt`。
+  （执行真实开始/结束时刻，可空）、`errorMessage`/`errorCode`/`failure`、`metadata`、`request`。
+  ⚠ `metadata` **顶层没有提示词字段**：提交请求摘要在 `metadata.taskExecutionPlan.submit_request(_summary).body`，
+  长文本是 `{kind:"omitted_text",size,preview}` 对象（`preview` 才是截断摘要）；全文一律看 `generation.prompt`。
+- **任务请求摘要**（`task.request.body`，0.6.8 起）：`__formData` 除 `fields` 外给出 `fileCount` 与
+  `files[]`；每个文件条目同时有**出网值**（`filename`/`contentType`）与**来源描述**
+  （`sourceFilename`/`mimeType`/`assetId`/`slotId`），`dataBase64` 省略为 `{kind:"omitted_base64",size}`。
+  用它自证「实际出网带了几张图、分别是哪张资产、用在哪个用途」。
 - **字段命名**：CLI 自建投影用 snake_case（`node_id`、`asset_id`、`group_id`、`group_node_id`）；
   内嵌运行域对象保持 camelCase（`asset get` 的 `asset`、`task get`/`task wait` 的 `task`、
-  `assets[].asset`）。读字段前先看对象层级——`canvas nodes list` 的组归属是 `group_id`，
+  `assets[].asset`、`task list` 的 `tasks[]` 条目）。读字段前先看对象层级——`canvas nodes list` 的组归属是 `group_id`，
   `canvas group list` 的组自身 id 是 `group_node_id`，两者不是同一个字段；`task get` 响应里的
   `node_id`/`group_id` 也在顶层、与 `task` 同级，不在 `task` 内。
-- **画布写命令结果**（`layout` / `node move` / `nodes move` / `group move`）：`positions`、
-  `moved_node_ids`、`summary{inspected,moved,cascaded,unchanged,skipped[]}`、`operation_id`、
-  `dry_run`。`layout` 另回传实际使用的 `columns` / `gap`（`--plan` 模式可混合多段，二者为 null），
+- **画布写命令结果**（`layout` / `node move` / `nodes move` / `group move`）：`layout` / `nodes move` /
+  `group move` 带 `positions`（节点 id → 坐标对象），`node move` 只有单数 `position`（`{x,y}`）；
+  另带 `moved_node_ids`、`summary{inspected,moved,cascaded,unchanged,skipped[]}`、`operation_id`、
+  `dry_run`。`layout --scope containers --pack` 的 `inspected`/`moved` 以**容器**为单位（`moved` = 被移动容器数，
+  `cascaded` 恒 0）。`layout` 另回传实际使用的 `columns` / `gap`（`--plan` 模式可混合多段，二者为 null），
   以及 `content_reordered`（本次是否改变了顺序）与 `order_changes[{node_id, from_slot, to_slot}]`
   （无重排为 `false` / `[]`）。`layout` 结果的可选字段 `plan_applied`：`true` = 本次是 `--plan`
   计划文件模式（人读输出「已按计划整理 N 个节点」，`columns`/`gap` 为 null）；省略 = 普通 `--scope`
@@ -239,19 +248,22 @@ iart task list --request-id <回执里的幂等键> --project P --json
   这些响应里的容器 `position` 是派生渲染框左上角（空/折叠容器回落存储 position）。
 - **`canvas inspect` 结果**：默认精简——节点 `asset` 为 null，节点级给 `prompt_preview` /
   `source_file_name` / `created_at`，资产节点的 `batch_id` / `task_id` 同样补齐（导入素材为 null）；
-  容器带 `nearest_neighbor`；顶层另有 `annotations[]`、`overlaps[]`、`min_gap`（负数=重叠）。
+  容器带 `nearest_neighbor`；顶层另有 `annotations[]`、`overlaps[]`、`min_gap`
+  （**对象 `{a_id,b_id,gap}`；`gap` 为负表示重叠；不足两个顶层容器时为 `null`**）。
   `--full` 才内联资产摘要与完整提示词；`--prompt-limit` 控制预览长度（0=不输出）。
 - **生成档案**（`batch get` 的 `generation`；`asset get`/`task get` 内联的同名 `generation`
   字段，三者同一形状）：`{ batch_id, model_id, prompt（提示词全文）, params（提交参数）,
-  references: [{ asset_id, media_kind?, file_key?, local_file_path? }]（参考资产引用，实体可查
-  才带媒体类型/文件键/路径）, task_ids, created_at }`。资产是生成产物且批次快照可读时
+  references: [{ asset_id, media_kind?, file_key?, local_file_path?, slot_id?, field_key? }],
+  task_ids, created_at }`。其中 `references` 是参考资产引用：`slot_id`/`field_key` 是提交时绑定的
+  用途与执行层字段键（**0.6.8 起**输出），其余字段实体可查才带。`params` 会剥离确实被媒体占用
+  （`media_refs` 绑定）的字段键，未绑定的媒体位保持原样。资产是生成产物且批次快照可读时
   `asset get` 附 `generation`；任务属于某批次且批次快照可读时 `task get` 带出同一档案；
   快照缺失时该字段缺省，资产详情与任务状态照常输出。
 - `--version`：`iart --version` 输出发现文件里的版本（`--json` 为 `{ "version": "..." }`）。
   **它只读发现文件、不验证应用是否在役**：文件存在但进程已退出时会输出旧版本（甚至 `39.x`
   的 Electron 版本）。不要把它当作版本门槛的唯一判据，优先用 `iart --help` 是否列出
   `canvas group add/remove` 与 `layout ... containers` 核对。若输出 `39.x`，先确认应用已升级
-  到 0.6.5+ 并重启；仅重启旧版不会改变输出。
+  到 0.6.7+ 并重启；仅重启旧版不会改变输出。
 - ⚠ 人读（默认）模式下等待类输出只报条数、**不含产物路径**——要拿路径必须 `--json`。
 - `model get` 的 `model.parameter_schema.fields[]` 中 `fieldKey / required / enumOptions /
   defaultValue` 是构造 `--arg` 的依据；`model.deployment.deployable=false` 时读 `failure_code`。
@@ -280,7 +292,7 @@ iart task list --request-id <回执里的幂等键> --project P --json
 | `model_not_available` | 模型不在可用模型目录，或当前不可提交 | 读 `failure_code`：模型尚未添加到服务商、连接不可用或缺凭证等，引导用户到设置页「服务商与模型」配置；刚在设置页添加过模型仍报此错，请用户重开项目后重试 |
 | `task_not_found` | 任务标识不存在 | `task list` 核对 id |
 | `wait_timeout` | `--timeout` 到期 | 任务仍在跑：去掉 `--timeout` 重等，或改用 `task get` 轮询 |
-| `command_rejected` | 画布侧前置校验拦截（含 group add/remove 目标不是节点组、remove 成员不属于目标组、参考图用途未指定或用途不属当前模型等） | 读 message 中的定位信息修正输入后重试；参考图用途类问题按 message 列出的可选用途用 `--ref <素材标识>:<用途>` 重提 |
+| `command_rejected` | 画布侧或提交预检拦截（含 group add/remove 目标不是节点组、remove 成员不属于目标组、参考图用途未指定/不属当前模型、单用途超出 `maxFiles` 上限（0.6.8 起）、`--pack` 与非 containers 作用域组合、`--order` 越出整理范围等） | 读 message 中的定位信息修正输入后重试；参考图问题按 message 列出的用途/上限调整 `--ref` 条目；不要原样重试 |
 | `internal_error` | 未归类内部错误 | 原样转告用户，附诊断线索 |
 
 ---
@@ -327,6 +339,41 @@ iart generate --prompt "<提示词>" --model <model_id> --ref <asset_id> --wait 
 
 - 路径用绝对路径；多个文件重复传 `--file`（整批一次导入、一个撤销步骤）。
 - 导入是画布写操作，要求项目已打开；导入的素材节点会出现在画布上、可见可撤销。
+
+### R1.6 生成透明背景（免抠）素材
+
+**触发**：用户要的主体需要叠到别的画面上——说「透明背景」「免扣」「去背」「alpha」「不要背景」「可叠加」，
+或素材用途是图标、贴纸、立绘、道具、logo、UI 切图。普通场景图/完整画面**不要**加透明要求
+（会去掉地面与投影，破坏构图）；意图不确定时先问一句，不要默认。
+
+```bash
+# 1) 先看模型支持什么——不要猜参数
+iart model get <model_id> --json
+#    parameter_schema.fields[] 有 background/transparent 一类字段 → 按 schema 取值显式传
+#    有输出格式字段且枚举含 png（OpenAI 图像模板是 format）→ --arg format=png
+#    没有 png 选项（如只有 jpeg）→ 这个模型做不出透明 PNG：换模型，或在提交前如实告知用户
+
+# 2) 提交：参数显式 + 提示词显式，两者缺一不可
+iart generate \
+  --prompt "<主体描述>。背景完全透明（alpha=0），主体以外所有像素全透明；不要任何背景色、渐变、地面、投影、文字、边框、装饰；不要用棋盘格图案表示透明；主体边缘干净，无白边或杂色。" \
+  --model <model_id> --arg format=png --wait --json --project <路径或名称>
+```
+
+要点：
+
+- ⚠ **PNG 不等于透明**：PNG 只是容器，alpha 通道可以全为不透明；JPEG 则根本没有 alpha。
+  只选 PNG 不写透明要求，模型通常会补白底/纯色底/场景底。
+- **必须写否定项**：只写「透明背景」不够，模型常画棋盘格或白底来「表示」透明；要明确禁止
+  背景色、地面、阴影、边框、棋盘格。
+- **主体自身的半透明单独说明**：玻璃、薄纱、烟雾、发光边缘需要保留 alpha 渐变，否则容易被一起抠掉。
+- **终态成功 ≠ 背景透明**：生成成功只说明任务完成。拿终态结果的 `local_file_path` 核验实际 alpha：
+  - 产物是 JPEG → 直接判定不可能透明；产物不是 PNG 时先确认格式（WebP 也可能带 alpha）；
+  - macOS：`sips -g hasAlpha "<路径>"`——`no` 一定不透明；`yes` 只说明有通道，仍可能全不透明；
+  - 有 Python/Pillow：`python3 -c "from PIL import Image; print(Image.open('<路径>').convert('RGBA').getextrema()[3])"`，
+    最小值 `0` 才代表存在全透明像素；再确认透明区域成片（如四角），不是零星像素；
+  - 两者都不可用：打开文件确认，或交用户确认。
+- **非透明时不要宣告完成**：如实说「图已生成，但背景不透明」，给两条路——加强提示词用**新的
+  `--request-id`** 重试，或换支持背景/透明参数的模型。同一 `--request-id` 重提只会重放既有结果。
 
 ### R2 画布组织方法论（先规划分组，再提交生成）
 
@@ -425,7 +472,7 @@ iart canvas undo --operation <operation_id> --project <路径或名称> --json
 要点：
 
 - **认节点不要 N+1**：`canvas inspect` 一条命令给出名称、尺寸、批次、组归属与场景事实；只有需要某个资产的完整摘要或提示词时才加 `--full` 或 `asset get`。
-- **不要用截图验收布局**：直接用 `canvas inspect` 的 `overlaps`（应为空）、`min_gap`（非负即无重叠）与容器 `bbox` 判断；需要看顺序是否变化时读 `canvas layout` 响应的 `content_reordered` 与 `order_changes`。
+- **不要用截图验收布局**：直接用 `canvas inspect` 的 `overlaps`（应为空）与 `min_gap` 判断重叠——`min_gap` 是对象，`min_gap === null`（不足两个顶层容器）或 `min_gap.gap >= 0` 即无重叠；容器 `bbox` 用来核对位置与尺寸。需要看顺序是否变化时读 `canvas layout` 响应的 `content_reordered` 与 `order_changes`。
 - **先预演再执行**：`--dry-run` 零副作用；执行后把 `operation_id` 留着，便于按操作回退。
 - **不要连按撤销**：按操作撤销不会碰到用户期间的手工编辑。
 

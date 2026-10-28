@@ -1,15 +1,30 @@
 import {
-  GENERATION_MEDIA_SLOT_IDS,
   GENERATION_WIRE_NAME_PATTERN,
   cloneJsonValue,
+  formatInterfaceFormatBindingTarget,
+  normalizeHeaderName,
+  parseInterfaceFormatRuleTarget,
   type CustomParameterField,
   type OfficialParameterOverride,
   type ParameterOverrides,
   type ParameterOverridesValue,
 } from '@iart/contracts';
 import type { ModelAssetLocalizationResourceMap } from '@iart/contracts/model-asset-contract';
+import * as loggingModule from './logging.cts';
 import { isObjectRecord } from './model-package-catalog.shared.cts';
 import type { LocaleResources } from './model-package-catalog.localization.cts';
+import {
+  aliasHitsReservedName,
+  collectReservedWireNames,
+  collectWireNamesByFieldKey,
+  isSameWireName,
+  ownedFieldKeyOfRule,
+  validateAliasName,
+  wireNameConflicts,
+  type FieldWireFact,
+  type FieldWireLocation,
+  type ReservedWireNames,
+} from './generation-wire-names.cts';
 import { validateParameterSchema } from './model-package-catalog.parameter-schema.cts';
 import { validatePayloadRuleFieldKeysForParts } from './model-package-catalog.payload-rule-validation.cts';
 import { classifyDisabledFieldTargets } from './model-package-catalog.payload-rule-references.cts';
@@ -29,6 +44,10 @@ import type { GenerationFamilyTemplateSources } from './generation-family-templa
  * - **族无关**：函数只消费 `GenerationFamilyTemplateSources` 的 JSON 形状
  *   （parameter_schema.fields / default_values / runtime.payload_rules / runtime.schema_defaults），
  *   适用性判定基于组件类型（select / imageSize / 素材位上传组件），不写死任何族的字段名。
+ * - **缺显示设置时读取降级**（设计 §3.5.1）：字段缺 `component_props` 时只跳过该字段这一次
+ *   「张数与多选 / 档位与比例收窄」写入并写 debug 留痕，其余字段照常合成、整份投影照常返回。
+ *   这是本模块唯一的 IO（条件跳过必须留痕）；生产模板的显示设置由一致性门禁钉死，降级兜的是
+ *   内置模板漂移，不给用户加永远修不了的保存错误。
  * - 空覆盖快速路径：official 与 custom 都为空时原样返回入参对象（同一引用），
  *   保证「无覆盖声明与现状行为完全一致」（S8）。
  */
@@ -44,10 +63,11 @@ export const MAX_CUSTOM_PARAMETER_FIELDS = 8;
 /**
  * 素材位字段的组件名（小写）：模板里承载素材输入的系统模态字段。
  *
- * 素材位归属由记录上的 `accepted_media_slots` 管控，参数层永不开放——这类字段既不能被
- * 别名改写、也不能被禁用或改默认值。判定按**组件类型**而不是 `image` 这个字面量：
- * 素材位词表里有图片、视频、音频等多种素材位，各族模板会用不同组件名承载，只认 `image`
- * 会把其它族的素材字段误判成可覆盖。
+ * 素材位**清单与启用**由记录上的 `accepted_media_slots` 管控；参数层只开放两个维度——
+ * `wire_name`（服务商字段名）与 `media_max_files`（最多几张）。禁用、枚举、预设、默认值
+ * 对素材位一律拒绝（启用归勾选清单，其余维度对素材输入无意义）。判定按**组件类型**而不是
+ * `image` 这个字面量：素材位词表里有图片、视频、音频等多种素材位，各族模板会用不同组件名
+ * 承载，只认 `image` 会把其它族的素材字段误判成可覆盖。
  */
 const MEDIA_SLOT_COMPONENTS: ReadonlySet<string> = new Set([
   'imageupload',
@@ -59,25 +79,11 @@ const MEDIA_SLOT_COMPONENTS: ReadonlySet<string> = new Set([
 /**
  * 某个组件名是否承载素材位（大小写不敏感）。
  *
- * 导出给族模板参数描述符的通用构建复用：素材位字段不出现在参数编辑器官方区（归属由记录上的
- * `accepted_media_slots` 管控），判定必须与校验端同一份集合，不得在描述符侧另认一遍组件名。
+ * 导出给族模板参数描述符的通用构建复用：素材位字段的判定必须与校验端同一份集合，
+ * 不得在描述符侧另认一遍组件名。
  */
 export const isMediaSlotComponentName = (component: string): boolean =>
   MEDIA_SLOT_COMPONENTS.has(component.toLowerCase());
-
-/**
- * 系统注入/模态保留的发出键名：任何别名与自定义参数都不得占用。
- *
- * `model` 由 remote_model_id 注入；`prompt`/`input` 是提示词系统键；素材位词表里的每个 id
- * 都保留（它们会作为请求体键或 form 字段名出现，参数层永不开放）。素材位 id 从 contracts
- * 的受控词表派生，不在这里另写一份清单——词表扩容时保留键自动跟随。
- */
-const SYSTEM_RESERVED_WIRE_NAMES: ReadonlySet<string> = new Set([
-  'model',
-  'prompt',
-  'input',
-  ...GENERATION_MEDIA_SLOT_IDS,
-]);
 
 /** 空覆盖（与契约缺省同口径）：不改变模板的任何内容。 */
 export const EMPTY_PARAMETER_OVERRIDES: ParameterOverrides = { official: [], custom: [] };
@@ -99,6 +105,30 @@ const readRecordOrThrow = (value: unknown, errorCode: string): JsonObject => {
     throw new Error(errorCode);
   }
   return record;
+};
+
+/**
+ * 读取字段的显示设置（`component_props`）用于写入；缺失时返回 null 并写 debug 留痕。
+ *
+ * 缺显示设置只影响**这一个字段**的这一次写入（素材位张数与多选 / 画幅档位与比例收窄），
+ * 不得让整份模型列表投影抛错：历史实现直接抛错，一条记录踩中就让该服务商下所有模型都读不出来，
+ * 且没有任何原因提示（设计 §3.5.1「读取降级」）。生产模板的显示设置由一致性门禁钉死
+ * （`generation-family-template-consistency.test.ts`），这里兜的是内置模板漂移。
+ */
+const readComponentPropsForWrite = (
+  record: JsonObject,
+  context: { modelId: string | null; fieldKey: string; skippedWrite: string },
+): JsonObject | null => {
+  const props = readRecord(record.component_props);
+  if (props === null) {
+    loggingModule.logDebug('[generation-parameter-overrides] component_props missing, override write skipped', {
+      modelId: context.modelId,
+      fieldKey: context.fieldKey,
+      component: readString(record.component) ?? '',
+      skippedWrite: context.skippedWrite,
+    });
+  }
+  return props;
 };
 
 /**
@@ -132,6 +162,10 @@ type TemplateFieldFacts = {
   displayName: string;
   /** 小写化后的组件名（'select' | 'imagesize' | 'imageupload' | ...）。 */
   component: string;
+  /** 该字段是否承载素材位（组件名判定，与保留键/描述符共用同一份集合）。 */
+  isMediaSlot: boolean;
+  /** 素材位当前默认张数（`component_props.maxFiles`）；非素材位或未声明时为 null。 */
+  maxFiles: number | null;
   enumValues: ParameterOverridesValue[];
   visibleWhenField: string | null;
   sizeLevels: ImageSizeLevelFact[];
@@ -145,55 +179,10 @@ type TemplateOverrideFacts = {
   fields: TemplateFieldFacts[];
   fieldsByKey: Map<string, TemplateFieldFacts>;
   payloadRules: JsonObject | null;
-  reservedWireNames: ReadonlySet<string>;
-};
-
-/**
- * 收集 payload_rules 已占用的发出键名：`body.<键>` 的键段 + 无点号的顶层键（提示词系统键），
- * 叠加系统保留键。保留键从模板 sources 计算，不硬编码字段清单（设计 §3.5）。
- *
- * 导出给族模板的参数描述符构建复用（GET /api/generation-family-templates/:familyAdapterId），
- * 与校验共用同一份保留键事实，不得另写第二份。
- */
-export const collectReservedWireNames = (payloadRules: JsonObject | null): Set<string> => {
-  const reserved = new Set<string>();
-  for (const name of SYSTEM_RESERVED_WIRE_NAMES) {
-    reserved.add(name);
-  }
-  if (payloadRules === null) return reserved;
-  for (const targetPath of Object.keys(payloadRules)) {
-    if (!targetPath.includes('.')) {
-      reserved.add(targetPath);
-      continue;
-    }
-    const second = targetPath.split('.')[1];
-    if (targetPath.startsWith('body.') && second !== undefined && second.length > 0) {
-      reserved.add(second);
-    }
-  }
-  return reserved;
-};
-
-/**
- * 收集每个已声明字段当前的发出键名：来自 payload_rules 的 `body.<键>` target
- * （kind='field' 且 field_key 命中）。展示名与 wire 名分离靠 target 路径承载（设计 §1.2）。
- * 导出给族模板的参数描述符构建复用，与校验共用同一份 wire 名事实。
- */
-export const collectWireNamesByFieldKey = (payloadRules: JsonObject | null): Map<string, string> => {
-  const wireNameByFieldKey = new Map<string, string>();
-  if (payloadRules === null) return wireNameByFieldKey;
-  for (const [targetPath, rule] of Object.entries(payloadRules)) {
-    if (!targetPath.startsWith('body.')) continue;
-    const record = readRecord(rule);
-    if (record === null || record.kind !== 'field') continue;
-    const fieldKey = readString(record.field_key);
-    if (fieldKey === null || wireNameByFieldKey.has(fieldKey)) continue;
-    const keySegment = targetPath.slice('body.'.length).split('.')[0];
-    if (keySegment !== undefined && keySegment.length > 0) {
-      wireNameByFieldKey.set(fieldKey, keySegment);
-    }
-  }
-  return wireNameByFieldKey;
+  /** 按命名空间拆分的已占用线路名称（请求体 / 查询参数 / 请求头）。 */
+  reservedWireNames: ReservedWireNames;
+  /** 每个字段当前的发出位置与名称：判断「改成的名字是否只是它原有的名字」。 */
+  wireFactByFieldKey: ReadonlyMap<string, FieldWireFact>;
 };
 
 const collectScalarValues = (options: unknown): ParameterOverridesValue[] => {
@@ -277,10 +266,14 @@ const collectTemplateOverrideFacts = (sources: GenerationFamilyTemplateSources):
     // 显示名：模板 locales 的 zh-CN `fields.<key>.label`；解析不可得回退 field_key。
     const labelKey = readString(field.label) ?? `fields.${fieldKey}.label`;
     const displayName = resolveLocaleText(sources.localizationResources['zh-CN'], labelKey) ?? fieldKey;
+    const isMediaSlot = MEDIA_SLOT_COMPONENTS.has(lowerComponent);
+    const maxFiles = props === null ? null : readNonNegativeNumber(props.maxFiles);
     const facts: TemplateFieldFacts = {
       fieldKey,
       displayName,
       component: lowerComponent,
+      isMediaSlot,
+      maxFiles,
       enumValues: collectScalarValues(field.enum_options),
       visibleWhenField: visibleWhen === null ? null : readString(visibleWhen.field),
       sizeLevels,
@@ -299,6 +292,7 @@ const collectTemplateOverrideFacts = (sources: GenerationFamilyTemplateSources):
     fieldsByKey,
     payloadRules,
     reservedWireNames: collectReservedWireNames(payloadRules),
+    wireFactByFieldKey: collectWireNamesByFieldKey(payloadRules),
   };
 };
 
@@ -364,8 +358,7 @@ export const validateParameterOverrides = (
 ): ParameterOverrideViolation[] => {
   const facts = collectTemplateOverrideFacts(templateSources);
   const violations: ParameterOverrideViolation[] = [];
-  const aliasWireNames = new Set<string>();
-  const aliasByFieldKey = new Map<string, string>();
+  const aliasByFieldKey = new Map<string, FieldWireFact>();
   const disabledFieldKeys = new Set<string>();
   const seenOfficialKeys = new Set<string>();
 
@@ -390,12 +383,28 @@ export const validateParameterOverrides = (
       });
       continue;
     }
-    if (MEDIA_SLOT_COMPONENTS.has(fieldFacts.component)) {
+    // 素材位只开放两个维度：发送名称（服务商字段名）与最多几张。启用与否归记录上的
+    // `accepted_media_slots` 勾选清单——两处都能改会造出「勾选清单说不要、覆盖里说启用」
+    // 的二义。其余维度（枚举/预设/默认值）由下面的通用分支按组件类型拒绝。
+    if (fieldFacts.isMediaSlot && entry.enabled === false) {
       violations.push({
-        code: 'official_field_media_slot_not_overridable',
-        message: `「${shownName}」是模型自带的素材输入，不能在这里关闭或修改。`,
+        code: 'media_slot_toggle_not_allowed',
+        message: `「${shownName}」是素材输入，要不要用它请在素材位清单里勾选；这里只能改发送名称和最多几张。`,
       });
       continue;
+    }
+    if (entry.media_max_files !== undefined) {
+      if (!fieldFacts.isMediaSlot) {
+        violations.push({
+          code: 'media_max_files_not_allowed',
+          message: `「${shownName}」不是素材输入，不能设置最多张数。`,
+        });
+      } else if (!Number.isInteger(entry.media_max_files) || entry.media_max_files < 1) {
+        violations.push({
+          code: 'media_max_files_invalid',
+          message: `「${shownName}」的最多张数要填 1 或更大的整数。`,
+        });
+      }
     }
     if (entry.enabled === false) {
       // 禁用时其余维度无意义（合成第 1 步先整体移除），不再校验其合法性。
@@ -404,25 +413,37 @@ export const validateParameterOverrides = (
     }
     if (entry.wire_name !== undefined) {
       const wire = entry.wire_name;
-      if (!GENERATION_WIRE_NAME_PATTERN.test(wire)) {
-        violations.push({
-          code: 'wire_name_format',
-          message: `参数「${shownName}」的发送名称「${wire}」格式不对：请以小写字母开头，只用小写字母、数字和下划线。`,
-        });
-      } else if (facts.reservedWireNames.has(wire)) {
+      // 字段当前的落点决定别名的命名空间与名称规则：别名只改这个落点内的名称，不改变落点。
+      const currentFact = facts.wireFactByFieldKey.get(fieldKey) ?? null;
+      const location: FieldWireLocation = currentFact?.wire_location ?? 'body';
+      const aliasFact: FieldWireFact = { wire_location: location, wire_name: wire };
+      const nameIssue = validateAliasName(wire, location, shownName);
+      if (nameIssue !== null) {
+        violations.push(nameIssue);
+      } else if (currentFact !== null && isSameWireName(wire, currentFact.wire_name, location)) {
+        // 「改成本来就叫这个名字」等于没改：不登记别名，也不参与重名判定。
+      } else if (aliasHitsReservedName(wire, location, currentFact, facts.reservedWireNames)) {
         violations.push({
           code: 'wire_name_reserved',
           message: `发送名称「${wire}」和这个模型自带的参数重名了，请换一个名称再保存。`,
         });
-      } else if (aliasWireNames.has(wire)) {
+      } else if (
+        [...aliasByFieldKey].some(
+          ([otherFieldKey, otherFact]) => otherFieldKey !== fieldKey && wireNameConflicts(aliasFact, otherFact),
+        ) ||
+        [...facts.wireFactByFieldKey].some(([otherFieldKey, otherFact]) => {
+          if (otherFieldKey === fieldKey || aliasByFieldKey.has(otherFieldKey)) return false;
+          if (disabledFieldKeys.has(otherFieldKey)) return false;
+          return wireNameConflicts(aliasFact, otherFact);
+        })
+      ) {
         violations.push({
           code: 'wire_name_conflict',
           message: `有两个参数都用了发送名称「${wire}」，请把它们改成不同的名称。`,
         });
       } else {
-        aliasWireNames.add(wire);
+        aliasByFieldKey.set(fieldKey, aliasFact);
       }
-      aliasByFieldKey.set(fieldKey, wire);
     }
     if (entry.enum_options !== undefined) {
       if (fieldFacts.component !== 'select') {
@@ -527,12 +548,14 @@ export const validateParameterOverrides = (
     });
   }
   const customWireNames = new Set<string>();
-  // 官方参数覆盖生效后的最终发出键名（禁用字段已释放其键名）。
-  const currentWireNameByFieldKey = collectWireNamesByFieldKey(facts.payloadRules);
-  const finalOfficialWireNames = new Set<string>();
+  // 官方参数覆盖生效后的最终请求体名称（禁用字段已释放其键名）。
+  // **只看请求体命名空间**：新增自定义参数仍只发请求体（记录级参数覆盖不承担传输职责，
+  // 查询参数 / 请求头的落点由接口格式自己的参数定义决定），因此不与那两处的名称互相占用。
+  const finalOfficialBodyNames = new Set<string>();
   for (const field of facts.fields) {
     if (disabledFieldKeys.has(field.fieldKey)) continue;
-    finalOfficialWireNames.add(aliasByFieldKey.get(field.fieldKey) ?? currentWireNameByFieldKey.get(field.fieldKey) ?? field.fieldKey);
+    const fact = aliasByFieldKey.get(field.fieldKey) ?? facts.wireFactByFieldKey.get(field.fieldKey);
+    if (fact !== undefined && fact.wire_location === 'body') finalOfficialBodyNames.add(fact.wire_name);
   }
   for (const custom of overrides.custom) {
     const wire = custom.wire_name;
@@ -541,7 +564,7 @@ export const validateParameterOverrides = (
         code: 'wire_name_format',
         message: `自定义参数「${custom.label}」的发送名称「${wire}」格式不对：请以小写字母开头，只用小写字母、数字和下划线。`,
       });
-    } else if (facts.reservedWireNames.has(wire)) {
+    } else if (facts.reservedWireNames.body.has(wire)) {
       violations.push({
         code: 'wire_name_reserved',
         message: `自定义参数的发送名称「${wire}」和这个模型自带的参数重名了，请换一个名称再保存。`,
@@ -551,7 +574,7 @@ export const validateParameterOverrides = (
         code: 'wire_name_conflict',
         message: `有两个自定义参数都用了发送名称「${wire}」，请把它们改成不同的名称。`,
       });
-    } else if (aliasWireNames.has(wire) || finalOfficialWireNames.has(wire)) {
+    } else if (finalOfficialBodyNames.has(wire)) {
       violations.push({
         code: 'wire_name_conflict',
         message: `自定义参数的发送名称「${wire}」和已有参数的发送名称重复了，请换一个名称再保存。`,
@@ -653,6 +676,8 @@ export const applyParameterOverrides = (
     cloneJsonValue(templateSources.runtimeModel),
     'generation_parameter_overrides_clone_invalid',
   );
+  // 留痕用的模型身份：模板构建器把 model_id 写在 runtimeModel 顶层（各族同形）。
+  const modelId = readString(runtimeModel.model_id);
   const parameterSchema = readRecordOrThrow(runtimeModel.parameter_schema, 'generation_parameter_overrides_template_schema_missing');
   const rawFields = parameterSchema.fields;
   if (!Array.isArray(rawFields)) {
@@ -665,17 +690,27 @@ export const applyParameterOverrides = (
 
   const facts = collectTemplateOverrideFacts(templateSources);
   const disabledFieldKeys = new Set<string>();
-  const aliasByFieldKey = new Map<string, string>();
+  const aliasByFieldKey = new Map<string, FieldWireFact>();
+  const mediaMaxFilesByFieldKey = new Map<string, number>();
   for (const entry of overrides.official) {
     const fieldFacts = facts.fieldsByKey.get(entry.field_key);
-    // 素材位字段不参与合成：归属由记录上的 accepted_media_slots 管控（保存期已拒绝）。
-    if (fieldFacts === undefined || MEDIA_SLOT_COMPONENTS.has(fieldFacts.component)) continue;
-    if (entry.enabled === false) {
+    if (fieldFacts === undefined) continue;
+    // 素材位的启用与否归记录上的 accepted_media_slots 勾选清单；合成只处理它开放的两个
+    // 维度（保存期已拒绝其余维度，这里不需要二次判定）。
+    if (entry.enabled === false && !fieldFacts.isMediaSlot) {
       disabledFieldKeys.add(entry.field_key);
       continue;
     }
     if (entry.wire_name !== undefined) {
-      aliasByFieldKey.set(entry.field_key, entry.wire_name);
+      // 别名只改字段**当前落点内**的名称：落点（请求体 / 查询参数 / 请求头）保持不变。
+      const current = facts.wireFactByFieldKey.get(entry.field_key);
+      const location: FieldWireLocation = current?.wire_location ?? 'body';
+      if (current === undefined || !isSameWireName(entry.wire_name, current.wire_name, location)) {
+        aliasByFieldKey.set(entry.field_key, { wire_location: location, wire_name: entry.wire_name });
+      }
+    }
+    if (fieldFacts.isMediaSlot && entry.media_max_files !== undefined) {
+      mediaMaxFilesByFieldKey.set(entry.field_key, entry.media_max_files);
     }
   }
 
@@ -711,20 +746,51 @@ export const applyParameterOverrides = (
     prunedRules[targetPath] = rule;
   }
 
-  // ② 别名：改写该 field_key 的 payload_rule 的 body.<键> 键段（保持条目顺序）。
+  // ② 别名：改写该字段**当前落点内**的名称（保持条目顺序与落点命名空间）。
+  //    归属判定与描述符共用 `ownedFieldKeyOfRule`——条件/断言包裹的规则同样要改名，
+  //    否则保存期放行、运行时仍发旧字段名（静默不生效）。落点由 target 前缀决定：
+  //    `body.<路径>` / `api.query.<名称>` / `api.headers.<名称>`，别名不跨命名空间搬移。
   const rewrittenRules: JsonObject = {};
   for (const [targetPath, rule] of Object.entries(prunedRules)) {
-    const record = readRecord(rule);
-    const fieldKey = record !== null && record.kind === 'field' ? readString(record.field_key) : null;
-    const alias = fieldKey !== null ? aliasByFieldKey.get(fieldKey) : undefined;
-    if (alias !== undefined && targetPath.startsWith('body.')) {
-      const rest = targetPath.slice('body.'.length);
-      const dotIndex = rest.indexOf('.');
-      const nextTarget = dotIndex === -1 ? `body.${alias}` : `body.${alias}${rest.slice(dotIndex)}`;
-      rewrittenRules[nextTarget] = rule;
+    const parsed = parseInterfaceFormatRuleTarget(targetPath);
+    const fieldKey =
+      parsed.kind === 'body_field' || parsed.kind === 'query' || parsed.kind === 'header'
+        ? ownedFieldKeyOfRule(rule)
+        : null;
+    const alias = fieldKey === null ? undefined : aliasByFieldKey.get(fieldKey);
+    const current = fieldKey === null ? undefined : facts.wireFactByFieldKey.get(fieldKey);
+    if (alias === undefined || fieldKey === null || current === undefined) {
+      rewrittenRules[targetPath] = rule;
       continue;
     }
-    rewrittenRules[targetPath] = rule;
+    if (current.wire_location !== alias.wire_location) {
+      // 别名只属于字段当前落点；其它命名空间里的同字段规则原样保留。
+      rewrittenRules[targetPath] = rule;
+      continue;
+    }
+    const isCurrentName =
+      parsed.kind === 'body_field'
+        ? parsed.path === current.wire_name
+        : parsed.kind === 'query'
+          ? parsed.name === current.wire_name
+          : parsed.kind === 'header'
+            ? normalizeHeaderName(parsed.name) === normalizeHeaderName(current.wire_name)
+            : false;
+    if (!isCurrentName) {
+      rewrittenRules[targetPath] = rule;
+      continue;
+    }
+    const nextTarget = formatInterfaceFormatBindingTarget(
+      alias.wire_location === 'body'
+        ? { location: 'body', path: alias.wire_name }
+        : alias.wire_location === 'query'
+          ? { location: 'query', name: alias.wire_name }
+          : { location: 'header', name: alias.wire_name },
+    );
+    if (nextTarget in rewrittenRules) {
+      throw new Error(`parameter_overrides_rule_target_conflict: ${nextTarget}`);
+    }
+    rewrittenRules[nextTarget] = rule;
   }
 
   // ③ 合法值与默认值：select 替换枚举；imageSize 收窄档位/比例；默认值落到 field 与两处默认表。
@@ -735,16 +801,21 @@ export const applyParameterOverrides = (
   }
   for (const entry of overrides.official) {
     const record = survivingFields.get(entry.field_key);
-    if (record === undefined) continue; // 禁用或不可覆盖字段：第①步已处理
+    if (record === undefined) continue; // 已禁用字段：第①步已处理
     if (entry.enum_options !== undefined && isRecordComponent(record, 'select')) {
       record.enum_options = entry.enum_options.map((value): JsonObject => ({ value }));
     }
     if (isRecordComponent(record, 'imagesize')) {
-      const props = readRecord(record.component_props);
-      if (props === null) {
-        throw new Error('generation_parameter_overrides_template_component_props_missing');
-      }
-      if (entry.resolution_preset_keys !== undefined) {
+      const wantsPresetNarrowing =
+        entry.resolution_preset_keys !== undefined || entry.aspect_preset_keys !== undefined;
+      const props = wantsPresetNarrowing
+        ? readComponentPropsForWrite(record, {
+          modelId,
+          fieldKey: entry.field_key,
+          skippedWrite: 'size_presets',
+        })
+        : null;
+      if (props !== null && entry.resolution_preset_keys !== undefined) {
         const keys = entry.resolution_preset_keys;
         props.sizeLevels = (Array.isArray(props.sizeLevels) ? props.sizeLevels : []).filter((item) => {
           const level = readRecord(item);
@@ -752,7 +823,7 @@ export const applyParameterOverrides = (
           return id !== null && keys.includes(id);
         });
       }
-      if (entry.aspect_preset_keys !== undefined) {
+      if (props !== null && entry.aspect_preset_keys !== undefined) {
         const keys = entry.aspect_preset_keys;
         props.aspectPresets = (Array.isArray(props.aspectPresets) ? props.aspectPresets : []).filter((item) => {
           const aspect = readRecord(item);
@@ -767,6 +838,28 @@ export const applyParameterOverrides = (
       schemaDefaults[entry.field_key] = entry.default_value;
     }
   }
+
+  // ③b 素材位张数：表单可附件数、是否允许多选、画布输入端口可连数必须同值。
+  //     只改一处会造出「表单让传 3 张而画布只让连 1 个」（或反之）的错位。
+  //     「产品侧不校验上限」只针对**张数取值本身**（真实上限属服务商接口事实，超限由上游拒绝）；
+  //     它不等于允许字段结构缺失——字段缺 component_props 时这一维写入整体跳过（§3.5.1），
+  //     端口与能力声明随同一跳过，避免造出「表单没改、画布被改」的新错位。
+  const skippedComponentPropsFieldKeys = new Set<string>();
+  for (const [fieldKey, maxFiles] of mediaMaxFilesByFieldKey) {
+    const record = survivingFields.get(fieldKey);
+    if (record === undefined) continue;
+    const props = readComponentPropsForWrite(record, { modelId, fieldKey, skippedWrite: 'media_max_files' });
+    if (props === null) {
+      skippedComponentPropsFieldKeys.add(fieldKey);
+      continue;
+    }
+    props.maxFiles = maxFiles;
+    props.allowMultiple = maxFiles > 1;
+  }
+  // 实际写入成功的张数：端口与能力声明只跟随这一份（跳过的字段不进）。
+  const appliedMediaMaxFilesByFieldKey = new Map(
+    [...mediaMaxFilesByFieldKey].filter(([fieldKey]) => !skippedComponentPropsFieldKeys.has(fieldKey)),
+  );
 
   // ④ 新增自定义字段：field_key = wire_name；控件按 value_type 派生；
   //    在模板现存的每个 endpoint 分支各追加一条 body.<wire_name> 规则（payload_rules 是
@@ -822,12 +915,34 @@ export const applyParameterOverrides = (
     runtime.payload_rules,
   );
 
+  // ⑤b 画布输入端口与能力声明跟随素材位张数：端口 `field_key` 与素材位字段键同源，
+  //     多张时端口必须允许多连，否则创作面只能接一个资产、提交时凑不满张数。
+  //     `supports_multi_image` 只升不降——族模板可能已因其它素材位声明为多图。
+  //     只跟随**真的写进表单**的张数（appliedMediaMaxFilesByFieldKey）：表单那一维被降级跳过时，
+  //     端口与能力声明必须保持模板原样，否则两处不同值。
+  const node = cloneJsonValue(templateSources.node);
+  if (Array.isArray(node.input_ports)) {
+    for (const rawPort of node.input_ports) {
+      const port = readRecord(rawPort);
+      if (port === null) continue;
+      const portFieldKey = readString(port.field_key);
+      const maxFiles = portFieldKey === null ? undefined : appliedMediaMaxFilesByFieldKey.get(portFieldKey);
+      if (maxFiles === undefined) continue;
+      port.multiple = maxFiles > 1;
+      port.max_connections = maxFiles;
+    }
+  }
+  if ([...appliedMediaMaxFilesByFieldKey.values()].some((maxFiles) => maxFiles > 1)) {
+    const capability = readRecord(runtimeModel.capability);
+    if (capability !== null) capability.supports_multi_image = true;
+  }
+
   if (!isObjectRecord(runtimeModel)) {
     throw new Error('generation_parameter_overrides_clone_invalid');
   }
   return {
     runtimeModel,
-    node: templateSources.node,
+    node,
     localizationResources,
   };
 };

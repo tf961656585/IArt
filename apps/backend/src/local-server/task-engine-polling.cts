@@ -1,7 +1,7 @@
 import * as networkModule from "./network.cts";
 import * as utilsModule from "./utils.cts";
 import * as loggingModule from "./logging.cts";
-import { getAdapter } from "./protocol-adapter/adapter-registry.cts";
+import { resolveSnapshotAuth } from "./provider-connection/snapshot-protocol.cts";
 import {
   acquireLease,
   getLease,
@@ -9,9 +9,11 @@ import {
   releaseLease,
 } from "./provider-connection/credential-store.cts";
 import {
-  buildAdapterAuthHeader,
+  buildAdapterAuthInjection,
   ExecutionSnapshotSchema,
+  type AdapterAuthInjection,
   type ExecutionSnapshot,
+  type TaskFailureStage,
 } from "@iart/contracts";
 import { getFetchDispatcher } from "./fetch-dispatcher.cts";
 import {
@@ -33,7 +35,9 @@ import {
 import {
   buildRequestBody,
   flattenHeaders,
+  readRequestBodyEncodingOptions,
 } from "./task-engine-request.cts";
+import { redactSecrets, setQueryParamValue } from "./request-wire-utils.cts";
 import { parsePollingResponseBody } from "./task-engine-http-response.cts";
 import {
   mergeTaskProgressPatch,
@@ -45,7 +49,15 @@ import {
   parseTaskProgress,
   readValueByPath,
 } from "./task-engine-polling-utils.cts";
+import { readResultRule } from "./task-failure-mapping.cts";
+import {
+  collectRecipeConditionPaths,
+  evaluateRecipeCondition,
+  isRecipeConditionPathObservable,
+  type MatchedConditionPath,
+} from "./result-condition-evaluator.cts";
 import { hasResultOutputMapping } from "./task-result-output-mapping.cts";
+import { maybeRunResultAcquisition } from "./task-result-acquisition.cts";
 import { resolveHttpStatusUserMessage } from "./http-status-fallback-messages.cts";
 import {
   normalizeString,
@@ -55,6 +67,92 @@ import {
 
 const { isAllowedTaskUrlForModel } = networkModule;
 const { normalizePositiveInt } = utilsModule;
+
+type ResultRuleConditions = {
+  failureCondition: unknown;
+  successCondition: unknown;
+  /** 配方声明的失败原因（用户可读文本）；缺省为 null。 */
+  failureReason: string | null;
+  hasFailureCondition: boolean;
+  hasSuccessCondition: boolean;
+};
+
+/**
+ * 执行计划里的声明式条件树（`result_rule`）。缺省时轮询完全走既有扁平策略。
+ * 注意：读取口径与 HTTP 提交失败路径共用 `readResultRule`，不另建事实源。
+ * 返回类型显式声明为 unknown，避免 `Reflect.get` 的 any 顺流到解构处。
+ */
+const readResultRuleConditions = (record: unknown): ResultRuleConditions => {
+  const resultRule = toRecord(readResultRule(record));
+  // PlainObject 是显式字段类型，读取动态键走 Reflect.get（与 task-failure-mapping 同口径）。
+  const failureCondition: unknown = Reflect.get(resultRule, "failure_condition");
+  const successCondition: unknown = Reflect.get(resultRule, "success_condition");
+  const failureReason = normalizeString(Reflect.get(resultRule, "failure_reason")) || null;
+  return {
+    failureCondition,
+    successCondition,
+    failureReason,
+    hasFailureCondition:
+      failureCondition !== undefined && failureCondition !== null,
+    hasSuccessCondition:
+      successCondition !== undefined && successCondition !== null,
+  };
+};
+
+const CONDITION_VALUE_SUMMARY_MAX_LENGTH = 120;
+/** 连续多少轮「条件树引用路径全部不可观测」后告警并落档（诊断用，不改变判定）。 */
+const CONDITION_UNSEEN_ATTEMPTS_WARNING_THRESHOLD = 5;
+/** 跨过阈值后，每隔多少轮刷新一次用户可见提示（避免每轮都 patch）。 */
+const CONDITION_UNSEEN_MESSAGE_REFRESH_INTERVAL = 20;
+/** 用户可见提示（文案定稿，逐字使用；由 progress.message 流到任务监视器）。 */
+const CONDITION_UNSEEN_USER_MESSAGE =
+  "长时间没有匹配到成功判定，请检查这个模型引用的接口配方。";
+
+/**
+ * 用户可见提示的写入时机：首次跨过阈值写一次，之后每跨过
+ * CONDITION_UNSEEN_MESSAGE_REFRESH_INTERVAL 轮刷新一次。
+ * 只决定是否 patch progress.message，不参与任务终态判定。
+ */
+const shouldRefreshUnseenConditionMessage = (
+  consecutiveAttempts: number,
+): boolean => {
+  if (consecutiveAttempts < CONDITION_UNSEEN_ATTEMPTS_WARNING_THRESHOLD) {
+    return false;
+  }
+  if (consecutiveAttempts === CONDITION_UNSEEN_ATTEMPTS_WARNING_THRESHOLD) {
+    return true;
+  }
+  return (
+    (consecutiveAttempts - CONDITION_UNSEEN_ATTEMPTS_WARNING_THRESHOLD) %
+      CONDITION_UNSEEN_MESSAGE_REFRESH_INTERVAL ===
+    0
+  );
+};
+
+const summarizeConditionValue = (value: unknown): string => {
+  let text: string;
+  if (typeof value === "string") {
+    text = value;
+  } else {
+    try {
+      const encoded = JSON.stringify(value);
+      text = encoded === undefined ? String(value) : encoded;
+    } catch {
+      text = String(value);
+    }
+  }
+  return text.length > CONDITION_VALUE_SUMMARY_MAX_LENGTH
+    ? `${text.slice(0, CONDITION_VALUE_SUMMARY_MAX_LENGTH - 3)}...`
+    : text;
+};
+
+const summarizeMatchedPaths = (
+  matchedPaths: MatchedConditionPath[],
+): Array<{ path: string; value: string }> =>
+  matchedPaths.slice(0, 5).map((item) => ({
+    path: item.path,
+    value: summarizeConditionValue(item.value),
+  }));
 
 const resolveExecutionSnapshotFromMetadata = (metadata: PlainObject): ExecutionSnapshot | null => {
   const candidate =
@@ -85,15 +183,23 @@ const executePollingTask = async (
   controller: AbortController,
   overrides: unknown = {},
 ) => {
-  const failPollingTask = async (currentRecord: unknown, error: unknown) =>
-    await patchTaskRecord(currentRecord, {
+  const failPollingTask = async (
+    currentRecord: unknown,
+    error: unknown,
+    stage: TaskFailureStage | null = null,
+  ) => {
+    const errorPayload = toRecord(error);
+    // 失败阶段只加字段（不重构）：null 表示该失败点不属于已拍板的阶段集合。
+    if (stage) errorPayload.stage = stage;
+    return await patchTaskRecord(currentRecord, {
       status: TASK_STATUS.FAILED,
       finishedAt: Date.now(),
-      error,
+      error: errorPayload,
       progress: mergeTaskProgressPatch(toRecord(currentRecord).progress, {
         phase: null,
       } as TaskProgressPatch),
     } as PlainObject);
+  };
   const recordValue = toRecord(record);
   const overridesValue = toRecord(overrides);
   const activeRequest = normalizeTaskRequest(
@@ -105,7 +211,7 @@ const executePollingTask = async (
     return failPollingTask(record, {
       code: ERROR_CODES.INVALID_TASK,
       message: "Missing polling request",
-    });
+    }, "recovery");
   }
   const activeRequestValue = toRecord(activeRequest);
   const activeRequestMethod =
@@ -121,7 +227,7 @@ const executePollingTask = async (
     return failPollingTask(record, {
       code: ERROR_CODES.INVALID_TASK,
       message: "Missing polling config",
-    });
+    }, "recovery");
   }
   const gateModelId = normalizeString(
     toRecord(recordValue.metadata).modelId || toRecord(recordValue.metadata).model_id,
@@ -155,27 +261,60 @@ const executePollingTask = async (
       return failPollingTask(record, {
         code: ERROR_CODES.INVALID_URL,
         message: "Invalid task URL",
-      });
+      }, "recovery");
     }
   } catch {
     return failPollingTask(record, {
       code: ERROR_CODES.INVALID_URL,
       message: "Invalid task URL",
-    });
+    }, "recovery");
   }
   if (!isAllowedTaskUrlForModel(targetUrl, gateModelId)) {
     return failPollingTask(record, {
       code: ERROR_CODES.REMOTE_HOST_NOT_ALLOWED,
       message: "Remote host not allowed",
-    });
+    }, "recovery");
   }
+  // 入口状态写入（failed → polling 的唯一一次写入）。
+  // 缺省路径行为不变；重新查询经 `overrides.initialPatch` 一次性带上状态复位
+  // （finishedAt / error / response / progress）与新的执行计划，避免「先 patch 再 poll」
+  // 产生第二次状态通知。
+  const initialPatchRaw = Object.getOwnPropertyDescriptor(overridesValue, "initialPatch");
+  const initialPatch = initialPatchRaw !== undefined && isRecord(initialPatchRaw.value)
+    ? initialPatchRaw.value
+    : null;
   let next = toRecord(
     await patchTaskRecord(record, {
       status: TASK_STATUS.POLLING,
       startedAt: recordValue.startedAt ?? Date.now(),
       error: null,
+      ...(initialPatch ?? {}),
     } as PlainObject),
   );
+  // 声明式条件树（result_rule）在任务生命周期内不变，进入循环前读一次。
+  // 存在任一条件树时，轮询终态判定只由条件树决定，扁平策略不参与（避免两套口径同时生效）。
+  const {
+    failureCondition,
+    successCondition,
+    failureReason,
+    hasFailureCondition,
+    hasSuccessCondition,
+  } = readResultRuleConditions(next);
+  const hasConditionTree = hasFailureCondition || hasSuccessCondition;
+  const conditionReferencedPaths = hasConditionTree
+    ? Array.from(
+        new Set([
+          ...collectRecipeConditionPaths(
+            hasFailureCondition ? failureCondition : null,
+          ),
+          ...collectRecipeConditionPaths(
+            hasSuccessCondition ? successCondition : null,
+          ),
+        ]),
+      )
+    : [];
+  let consecutiveUnseenConditionAttempts = 0;
+  let pollingRuleUnmatchedWarningEmitted = false;
   const intervalMs = normalizePositiveInt(
     polling.intervalMs,
     DEFAULT_POLL_INTERVAL_MS,
@@ -240,7 +379,7 @@ const executePollingTask = async (
           return failPollingTask(next, {
             code: "credential_missing",
             message: "failed to acquire credential lease for polling",
-          });
+          }, "recovery");
         }
         pollingLeaseId = leaseRes.lease.leaseId;
         pollingLeaseValue = leaseRes.value;
@@ -260,7 +399,7 @@ const executePollingTask = async (
         return failPollingTask(next, {
           code: "credential_missing",
           message: "failed to acquire credential lease for polling",
-        });
+        }, "recovery");
       }
       pollingLeaseId = leaseRes.lease.leaseId;
       pollingLeaseValue = leaseRes.value;
@@ -290,6 +429,34 @@ const executePollingTask = async (
     }
     pollingLeaseId = null;
   };
+  /**
+   * 成功证据命中后的收口入口：先执行结果获取（`needs_fetch` 配方），再交既有 finalize。
+   *
+   * 获取阶段必须在租约释放前运行（json 二次请求需要复用与提交同源的凭证）；它自己决定
+   * 是否真的发请求（`binary` 只构造地址）。失败按 spec 收口为正式 failed，不回退轮询。
+   */
+  const finalizeWithAcquisition = async (currentRecord: PlainObject) => {
+    const acquisition = await maybeRunResultAcquisition(currentRecord);
+    releasePollingLease();
+    if (acquisition.kind === "failed") {
+      const failedRecord = toRecord(acquisition.record);
+      return await patchTaskRecord(failedRecord, {
+        status: TASK_STATUS.FAILED,
+        finishedAt: Date.now(),
+        error: {
+          code: acquisition.code,
+          message: acquisition.message,
+          stage: "result_acquisition",
+        },
+        progress: mergeTaskProgressPatch(failedRecord.progress, {
+          phase: null,
+        } as TaskProgressPatch),
+      } as PlainObject);
+    }
+    return finalizePollingSuccess(
+      toRecord(acquisition.kind === "acquired" ? acquisition.record : currentRecord),
+    );
+  };
   // 若为 snapshot 轮询，targetUrl 已重写；否则保持原 polling URL
   if (snapshotForPolling) {
     try {
@@ -312,22 +479,38 @@ const executePollingTask = async (
       });
     }
     const headers = new Headers(activeRequestHeaders);
-    // 鉴权注入形态由适配器声明（spec 03 §3.1），与提交链路同源，不得硬编码 Bearer。
-    const pollingAuthAdapter = snapshotForPolling ? getAdapter(snapshotForPolling.adapter_id) : null;
+    // 鉴权注入形态由快照冻结的协议声明（生成 = 接口格式、对话 = 适配器），与提交链路同源，
+    // 不得硬编码 Bearer / header 名 / query 名。
+    const pollingAuth = snapshotForPolling ? resolveSnapshotAuth(snapshotForPolling) : null;
+    let authInjection: AdapterAuthInjection | null = null;
     if (snapshotForPolling && pollingLeaseValue) {
-      if (!pollingAuthAdapter) {
-        loggingModule.logDebug("[task-engine-polling] snapshot adapter missing, skip auth injection", {
-          adapterId: snapshotForPolling.adapter_id,
+      if (!pollingAuth) {
+        loggingModule.logDebug("[task-engine-polling] snapshot protocol unresolved, skip auth injection", {
+          snapshotId: snapshotForPolling.snapshot_id,
           taskId: normalizeString(next.id),
         });
       } else {
-        const authHeader = buildAdapterAuthHeader(pollingAuthAdapter.auth, pollingLeaseValue);
-        if (!headers.has(authHeader.name)) {
-          headers.set(authHeader.name, authHeader.value);
+        authInjection = buildAdapterAuthInjection(pollingAuth, pollingLeaseValue);
+        if (authInjection.kind === "header" && !headers.has(authInjection.name)) {
+          headers.set(authInjection.name, authInjection.value);
         }
       }
     }
-    const body = buildRequestBody(activeRequestBody, headers);
+    const body = buildRequestBody(
+      activeRequestBody,
+      headers,
+      readRequestBodyEncodingOptions(activeRequest),
+    );
+    // 查询参数形态的凭证只拼到本次 fetch 的地址副本上：`targetUrl` 保持无凭证，
+    // 供失败日志与后续记录使用（凭证不得落盘/落日志）。
+    let attemptUrl = targetUrl;
+    if (authInjection?.kind === "query") {
+      attemptUrl = new URL(
+        setQueryParamValue(targetUrl.toString(), authInjection.name, authInjection.value),
+      );
+    }
+    const redactAttemptSecrets = (text: string): string =>
+      redactSecrets(text, [authInjection?.kind === "query" ? authInjection.value : null]);
     const requestController = new AbortController();
     const handleAbort = () => requestController.abort();
     controller.signal.addEventListener("abort", handleAbort, { once: true });
@@ -349,7 +532,7 @@ const executePollingTask = async (
       Object.assign(requestInit as PlainObject, {
         dispatcher: getFetchDispatcher(),
       });
-      const response = await fetch(targetUrl.toString(), requestInit);
+      const response = await fetch(attemptUrl.toString(), requestInit);
       controller.signal.removeEventListener("abort", handleAbort);
       responseStatus = response.status;
       responseOk = response.ok;
@@ -388,16 +571,19 @@ const executePollingTask = async (
           message: "Task canceled",
         });
       }
+      const errorCauseText = getErrorCause(error);
       writePollingErrorLog(
         next,
         attempt,
         targetUrl,
         activeRequestMethod,
-        String(error),
-        getErrorCause(error),
+        redactAttemptSecrets(String(error)),
+        errorCauseText === undefined || errorCauseText === null
+          ? null
+          : redactAttemptSecrets(String(errorCauseText)),
         false,
       );
-      lastFailureMessage = String(error);
+      lastFailureMessage = redactAttemptSecrets(String(error));
       lastNetworkClass = classifyNetworkError(error, {
         phase: "polling",
         elapsedMs: Date.now() - attemptStartedAt,
@@ -424,7 +610,7 @@ const executePollingTask = async (
           : {
               code: ERROR_CODES.TASK_EXECUTION_FAILED,
               message: lastFailureMessage,
-            });
+            }, "polling_request");
       }
       await wait(intervalMs);
       continue;
@@ -464,8 +650,25 @@ const executePollingTask = async (
       failureCodePaths: polling.failureCodePaths,
       failureMessagePaths: polling.failureMessagePaths,
     } as PlainObject, responseHeaders);
-    if (failureDetection.failed) {
-      lastFailureMessage = failureDetection.message || "Task failed";
+    const conditionFailureEvaluation =
+      hasConditionTree && hasFailureCondition
+        ? evaluateRecipeCondition(failureCondition, evaluationBody, responseHeaders)
+        : null;
+    const conditionSuccessEvaluation =
+      hasConditionTree && hasSuccessCondition
+        ? evaluateRecipeCondition(successCondition, evaluationBody, responseHeaders)
+        : null;
+    // 判定顺序（spec docs/model-assets/06-结果判定规则.md）：先失败、再成功、都不命中继续轮询。
+    // 存在条件树时扁平失败策略不参与；不存在任何条件树时行为与改造前完全一致。
+    const failedByFlatStrategy = !hasConditionTree && failureDetection.failed;
+    if (conditionFailureEvaluation?.matched === true || failedByFlatStrategy) {
+      // 提示优先级（spec docs/model-assets/06-结果判定规则.md「失败原因来源与回落顺序」）：
+      // 配方声明的失败原因 → 既有扁平策略 message → 现存通用文案。
+      // 配方原因只在条件树命中时生效：扁平策略判失败时它解释不了那次失败。
+      const matchedRecipeReason =
+        conditionFailureEvaluation?.matched === true ? failureReason : null;
+      lastFailureMessage =
+        matchedRecipeReason ?? (failureDetection.message || "Task failed");
       lastNetworkClass = null;
       const detectedFailureCode =
         failureDetection.code !== undefined && failureDetection.code !== null
@@ -478,29 +681,113 @@ const executePollingTask = async (
         error: {
           code: detectedFailureCode || ERROR_CODES.TASK_EXECUTION_FAILED,
           message: lastFailureMessage,
-          userMessage: resolveHttpStatusUserMessage(responseStatus),
+          // 用户可见摘要优先展示配方原因（界面消费 userMessage 先于 message）；
+          // 没有原因时保持既有 HTTP 状态兜底。
+          userMessage: matchedRecipeReason ?? resolveHttpStatusUserMessage(responseStatus),
+          stage: "remote_failure",
         },
         progress: mergeTaskProgressPatch(next.progress, { phase: null } as TaskProgressPatch),
       } as PlainObject);
     }
-    const successValue = resolvePollingSuccessValue(polling as PlainObject, evaluationBody, responseHeaders);
-    if (
-      successValue !== undefined &&
-      successValue !== null &&
-      successValue !== ""
-    ) {
-      releasePollingLease();
-      return finalizePollingSuccess(next);
+    if (!hasConditionTree) {
+      const successValue = resolvePollingSuccessValue(polling as PlainObject, evaluationBody, responseHeaders);
+      if (
+        successValue !== undefined &&
+        successValue !== null &&
+        successValue !== ""
+      ) {
+        return finalizeWithAcquisition(next);
+      }
+    } else if (conditionSuccessEvaluation?.matched === true) {
+      // 条件树命中即成功。存在 success_condition 但未命中时**不回落到扁平策略**：
+      // 两套口径同时生效会让「配方说还在跑、扁平字段说完成」互相打架。
+      return finalizeWithAcquisition(next);
     }
-    // 判定未命中继续轮询：debug 留痕（AGENTS.md 条件跳过必须留痕），否则链路断裂不可见。
-    loggingModule.logDebug("[task-engine] polling attempt evaluated without terminal judgement", {
-      taskId: next.id,
-      attempt,
-      maxAttempts,
-      httpStatus: responseStatus,
-      resolvedStatus: failureDetection.status ?? null,
-      successEvidencePresent: isSuccessEvidencePresent(polling as PlainObject, evaluationBody),
-    });
+    if (hasConditionTree) {
+      // 判定未命中继续轮询：debug 留痕（AGENTS.md 条件跳过必须留痕）。
+      const unseenPaths = conditionReferencedPaths.filter(
+        (pathText) =>
+          !isRecipeConditionPathObservable(evaluationBody, pathText, responseHeaders),
+      );
+      const allReferencedPathsUnseen =
+        conditionReferencedPaths.length > 0 &&
+        unseenPaths.length === conditionReferencedPaths.length;
+      loggingModule.logDebug(
+        "[task-engine] polling condition tree not matched, continue polling",
+        {
+          taskId: next.id,
+          attempt,
+          maxAttempts,
+          httpStatus: responseStatus,
+          hasFailureCondition,
+          hasSuccessCondition,
+          matchedPaths: summarizeMatchedPaths([
+            ...(conditionFailureEvaluation?.matchedPaths ?? []),
+            ...(conditionSuccessEvaluation?.matchedPaths ?? []),
+          ]),
+          unseenPaths: unseenPaths.slice(0, 10),
+          allReferencedPathsUnseen,
+        },
+      );
+      if (allReferencedPathsUnseen) {
+        consecutiveUnseenConditionAttempts += 1;
+        if (
+          consecutiveUnseenConditionAttempts >=
+            CONDITION_UNSEEN_ATTEMPTS_WARNING_THRESHOLD &&
+          !pollingRuleUnmatchedWarningEmitted
+        ) {
+          pollingRuleUnmatchedWarningEmitted = true;
+          loggingModule.logWarn(
+            "[task-engine] polling condition tree references paths never observed in body or headers",
+            {
+              taskId: next.id,
+              attempt,
+              consecutiveAttempts: consecutiveUnseenConditionAttempts,
+              referencedPaths: conditionReferencedPaths.slice(0, 20),
+            },
+          );
+          appendTaskArchiveEventSafely(
+            next,
+            "task.polling_rule_unmatched",
+            {
+              phase: "polling",
+              attempt,
+              consecutiveAttempts: consecutiveUnseenConditionAttempts,
+              referencedPaths: conditionReferencedPaths.slice(0, 20),
+              hasFailureCondition,
+              hasSuccessCondition,
+              response: summarizeArchiveResponse(next.response),
+            },
+            "[task-engine] Failed to write polling_rule_unmatched archive event:",
+          );
+        }
+        // 用户可见半边（2026-10-24 决定：长时间未命中只提示、继续等）：
+        // 走 progress.message 流到任务监视器；不清空（成功由状态/阶段覆盖注意力，
+        // 失败由 error 优先展示），也不占用 progress.phase 的状态机语义。
+        if (shouldRefreshUnseenConditionMessage(consecutiveUnseenConditionAttempts)) {
+          next = toRecord(
+            await patchTaskRecord(next, {
+              progress: mergeTaskProgressPatch(next.progress, {
+                message: CONDITION_UNSEEN_USER_MESSAGE,
+              } as TaskProgressPatch),
+            } as PlainObject),
+          );
+        }
+      } else {
+        consecutiveUnseenConditionAttempts = 0;
+        pollingRuleUnmatchedWarningEmitted = false;
+      }
+    } else {
+      // 判定未命中继续轮询：debug 留痕（AGENTS.md 条件跳过必须留痕），否则链路断裂不可见。
+      loggingModule.logDebug("[task-engine] polling attempt evaluated without terminal judgement", {
+        taskId: next.id,
+        attempt,
+        maxAttempts,
+        httpStatus: responseStatus,
+        resolvedStatus: failureDetection.status ?? null,
+        successEvidencePresent: isSuccessEvidencePresent(polling as PlainObject, evaluationBody),
+      });
+    }
     if (!responseOk) {
       lastFailureMessage = `Polling request failed (HTTP ${responseStatus || 0})`;
       lastNetworkClass = null;
@@ -520,7 +807,7 @@ const executePollingTask = async (
           code: ERROR_CODES.TASK_EXECUTION_FAILED,
           message: lastFailureMessage,
           userMessage: resolveHttpStatusUserMessage(responseStatus),
-        });
+        }, "polling_request");
       }
       await wait(intervalMs);
       continue;
@@ -531,7 +818,7 @@ const executePollingTask = async (
       return failPollingTask(next, {
         code: ERROR_CODES.TASK_EXECUTION_FAILED,
         message: "任务轮询失败（超过最大尝试次数）",
-      });
+      }, "polling_timeout");
     }
     await wait(intervalMs);
   }
@@ -543,6 +830,7 @@ const executePollingTask = async (
       code: ERROR_CODES.TASK_EXECUTION_FAILED,
       message: "任务轮询失败（超过最大尝试次数）",
       userMessage: resolveHttpStatusUserMessage(responseStatus),
+      stage: "polling_timeout",
     },
   } as PlainObject);
 };
@@ -589,19 +877,25 @@ const isSuccessEvidencePresent = (
   return false;
 };
 
-const isStatusMatchingSuccess = (
+/**
+ * 解析命中的成功状态值（body 优先、响应头兜底）。
+ *
+ * 返回实际命中的状态文本而不是 boolean：扁平策略在未声明产物路径时，
+ * 用它作为「成功证据」（如 `/v1/videos` 完成态响应本就没有产物地址）。
+ */
+const resolveMatchingSuccessStatus = (
   polling: PlainObject,
   body: unknown,
   responseHeaders: Headers | null,
-): boolean => {
+): string | undefined => {
   const successStatuses = Array.isArray(polling.successStatuses)
     ? (polling.successStatuses as string[])
     : [];
-  if (successStatuses.length === 0) return true;
+  if (successStatuses.length === 0) return undefined;
   const statusPaths = Array.isArray(polling.statusFieldPaths)
     ? (polling.statusFieldPaths as string[])
     : [];
-  if (statusPaths.length === 0) return false;
+  if (statusPaths.length === 0) return undefined;
   const normalizedSuccessStatuses = new Set(
     successStatuses.map((item) => item.toLowerCase()),
   );
@@ -617,10 +911,23 @@ const isStatusMatchingSuccess = (
     if (value === undefined || value === null || value === "") continue;
     const valueStr = typeof value === "string" ? value : String(value);
     if (normalizedSuccessStatuses.has(valueStr.toLowerCase())) {
-      return true;
+      return valueStr;
     }
   }
-  return false;
+  return undefined;
+};
+
+const isStatusMatchingSuccess = (
+  polling: PlainObject,
+  body: unknown,
+  responseHeaders: Headers | null,
+): boolean => {
+  const successStatuses = Array.isArray(polling.successStatuses)
+    ? (polling.successStatuses as string[])
+    : [];
+  // 未声明状态枚举 = 无状态约束（保持既有语义）。
+  if (successStatuses.length === 0) return true;
+  return resolveMatchingSuccessStatus(polling, body, responseHeaders) !== undefined;
 };
 
 const resolvePollingSuccessValue = (polling: PlainObject, body: unknown, responseHeaders: Headers | null = null) => {
@@ -636,6 +943,11 @@ const resolvePollingSuccessValue = (polling: PlainObject, body: unknown, respons
     if (value !== undefined && value !== null && value !== "") {
       return value;
     }
+  }
+  if (successPaths.length === 0) {
+    // 扁平策略未声明任何产物路径（无产物约束），证据与状态已命中即成功。
+    // 返回命中的状态值本身作为成功证据，语义清晰且不引入 sentinel / 布尔值与既有返回值类型混用。
+    return resolveMatchingSuccessStatus(polling, body, responseHeaders);
   }
   return undefined;
 };
@@ -681,4 +993,8 @@ const finalizePollingSuccess = async (next: PlainObject) => {
   return finalized;
 };
 
-export { executePollingTask, resolvePollingSuccessValue };
+export {
+  executePollingTask,
+  resolvePollingSuccessValue,
+  shouldRefreshUnseenConditionMessage,
+};

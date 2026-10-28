@@ -1,8 +1,8 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { cloneJsonValue } from '@iart/contracts';
-import type { RuntimeMediaAssetRow, RuntimeTaskOutputRow } from '@iart/contracts';
+import { cloneJsonValue, buildAdapterAuthInjection, ExecutionSnapshotSchema } from '@iart/contracts';
+import type { AdapterAuthInjection, RuntimeMediaAssetRow, RuntimeTaskOutputRow } from '@iart/contracts';
 import mediaFileKeyModule = require('@iart/utils/media-file-key');
 import * as loggingModule from './logging.cts';
 import * as storageModule from './storage.cts';
@@ -14,6 +14,8 @@ import * as taskEngineModule from './task-engine.cts';
 import * as taskResultOutputMappingModule from './task-result-output-mapping.cts';
 import * as taskRecordViewModule from './task-record-view.cts';
 import * as mediaAssetRegistryModule from './media-asset-registry.cts';
+import { resolveSnapshotAuth } from './provider-connection/snapshot-protocol.cts';
+import { acquireLease, releaseLease } from './provider-connection/credential-store.cts';
 import type { DownloadResult } from './media-download.cts';
 import { toRecord } from './task-engine-shared.cts';
 
@@ -22,6 +24,8 @@ type DownloadOptions = {
   source: string | undefined;
   abortSignal: AbortSignal | undefined;
   headers: Record<string, string> | undefined;
+  /** 查询参数形态的鉴权；由下载模块拼到 fetch 地址副本，不进日志/记录。 */
+  authQuery?: { name: string; value: string } | null;
   mediaDir: string | undefined;
   projectRef: string | undefined;
 };
@@ -96,7 +100,7 @@ const {
   summarizeArchiveResponse,
 } = taskEngineModule;
 const { extractMappedTaskOutputs, hasResultOutputMapping } = taskResultOutputMappingModule;
-const { readTaskRecordId } = taskRecordViewModule;
+const { readTaskRecordId, readResultOutputMapping } = taskRecordViewModule;
 const { repairProjectMediaAssetThumbnail } = mediaAssetRegistryModule;
 
 const normalizeString = (value: unknown) =>
@@ -375,12 +379,108 @@ const buildRuntimeMediaRows = async (
   }
   return { taskOutputs, mediaAssets };
 };
-const buildDownloadOptions = (taskId: string, mediaDir: string | null, controller: AbortController | undefined, projectRefValue: string | null): DownloadOptions => {
+const buildDownloadOptions = (taskId: string, mediaDir: string | null, controller: AbortController | undefined, projectRefValue: string | null, injection: AdapterAuthInjection | null): DownloadOptions => {
   const options: DownloadOptions = { source: `task:${taskId}`, mediaDir: undefined, abortSignal: undefined, headers: undefined, projectRef: undefined };
   if (mediaDir) options.mediaDir = mediaDir;
   if (controller) options.abortSignal = controller.signal;
   if (projectRefValue) options.projectRef = projectRefValue;
+  if (injection?.kind === 'header') options.headers = { [injection.name]: injection.value };
+  if (injection?.kind === 'query') options.authQuery = { name: injection.name, value: injection.value };
   return options;
+};
+
+type DownloadAuthResolution =
+  | { ok: true; injection: AdapterAuthInjection | null; release: () => void }
+  | { ok: false; code: string; message: string };
+
+/**
+ * 结果下载鉴权头（`result_output_mapping.requires_auth`）。
+ *
+ * 凭证读取只走 credential-store 租约：物化发生在轮询租约释放之后，因此这里按任务冻结的
+ * ExecutionSnapshot 重新 acquire 一个租约，下载全部结束后释放。明文只参与请求头构造，
+ * 不写任务记录、不进日志、不进失败 payload。
+ */
+/** ExecutionSnapshot 在任务 metadata 上的候选键（固定字段禁止字面量下标访问，按键遍历读取）。 */
+const SNAPSHOT_METADATA_KEYS = ['executionSnapshot', 'execution_snapshot'] as const;
+
+const resolveDownloadAuth = async (taskRecordInput: unknown): Promise<DownloadAuthResolution> => {
+  const mapping = readResultOutputMapping(taskRecordInput);
+  if (mapping === null || mapping.requires_auth !== true) {
+    return { ok: true, injection: null, release: () => undefined };
+  }
+  const taskRecord = asTaskRecordRaw(taskRecordInput);
+  const metadata = isPlainObject(taskRecord.metadata) ? taskRecord.metadata : {};
+  let snapshotRaw: unknown;
+  for (const key of SNAPSHOT_METADATA_KEYS) {
+    const candidate: unknown = metadata[key];
+    if (candidate !== undefined) {
+      snapshotRaw = candidate;
+      break;
+    }
+  }
+  const parsed = ExecutionSnapshotSchema.safeParse(snapshotRaw);
+  if (!parsed.success) {
+    loggingModule.logDebug('[task-result-materializer] requires_auth but execution snapshot invalid', {
+      taskId: readTaskRecordId(taskRecord),
+      error: parsed.error.message,
+    });
+    return {
+      ok: false,
+      code: 'credential_missing',
+      message: '结果地址需要鉴权，但任务缺少可用的接入信息，请重新提交任务',
+    };
+  }
+  const snapshot = parsed.data;
+  if (!snapshot.credential_ref) {
+    loggingModule.logDebug('[task-result-materializer] requires_auth but credential_ref missing', {
+      taskId: readTaskRecordId(taskRecord),
+      connectionId: snapshot.connection_id,
+    });
+    return {
+      ok: false,
+      code: 'credential_missing',
+      message: '结果地址需要鉴权，但这条连接没有可用凭证，请先在设置里补充 API Key 后重新提交任务',
+    };
+  }
+  const auth = resolveSnapshotAuth(snapshot);
+  if (!auth) {
+    loggingModule.logDebug('[task-result-materializer] requires_auth but protocol unresolved', {
+      taskId: readTaskRecordId(taskRecord),
+      snapshotId: snapshot.snapshot_id,
+    });
+    return {
+      ok: false,
+      code: 'credential_missing',
+      message: '结果地址需要鉴权，但认不出这个模型使用的接口格式，请重新提交任务',
+    };
+  }
+  const lease = await acquireLease({
+    connectionId: snapshot.connection_id,
+    credentialRef: snapshot.credential_ref,
+    credentialVersion: snapshot.credential_version ?? 0,
+    connectionRevision: snapshot.connection_revision,
+  });
+  if (!lease) {
+    loggingModule.logDebug('[task-result-materializer] requires_auth but credential lease unavailable', {
+      taskId: readTaskRecordId(taskRecord),
+      connectionId: snapshot.connection_id,
+    });
+    return {
+      ok: false,
+      code: 'credential_missing',
+      message: '结果地址需要鉴权，但没能读取到这条连接的凭证，请检查设置后重新提交任务',
+    };
+  }
+  const header = buildAdapterAuthInjection(auth, lease.value);
+  return {
+    ok: true,
+    injection: header,
+    release: () => {
+      try {
+        releaseLease(lease.lease.leaseId);
+      } catch { void 0; }
+    },
+  };
 };
 const EXT_BY_INLINE_MIME: Record<string, string> = {
   'image/png': '.png',
@@ -491,7 +591,7 @@ async function executeTaskResultMaterialization(
     const failurePatch = toRecord({
       status: 'failed',
       finishedAt: Date.now(),
-      error: { code: 'result_output_mapping_missed', message: '结果输出映射未命中正式输出' },
+      error: { code: 'result_output_mapping_missed', message: '结果输出映射未命中正式输出', stage: 'result_mapping' },
       progress: { phase: null },
     });
     const failed = await patchTaskRecord(taskRecord, failurePatch);
@@ -510,6 +610,25 @@ async function executeTaskResultMaterialization(
   const registeredProjectForDownload = registerRuntimeProjectScope(projectPath);
   const projectRefForDownload = (registeredProjectForDownload !== null && registeredProjectForDownload !== undefined ? registeredProjectForDownload.projectRef : undefined) ?? null;
 
+  // 结果地址需要鉴权时，下载前取得与提交同源的鉴权头；取不到凭证必须收口失败，
+  // 不得静默退化成无鉴权请求（否则上游 401 会被误报成普通下载失败）。
+  let downloadAuthInjection: AdapterAuthInjection | null = null;
+  let releaseDownloadAuth: () => void = () => undefined;
+  if (mediaCandidates.length > 0) {
+    const authResolution = await resolveDownloadAuth(taskRecord);
+    if (!authResolution.ok) {
+      await patchTaskRecord(taskRecord, toRecord({
+        status: 'failed',
+        finishedAt: Date.now(),
+        error: { code: authResolution.code, message: authResolution.message, stage: 'download' },
+        progress: { phase: null },
+      }));
+      throw new Error(authResolution.message);
+    }
+    downloadAuthInjection = authResolution.injection;
+    releaseDownloadAuth = authResolution.release;
+  }
+
   const responseMediaDownload = asMediaDownloadRaw(response.mediaDownload);
   let currentRecord: unknown = taskRecord;
   if (mediaCandidates.length > 0) {
@@ -525,47 +644,52 @@ async function executeTaskResultMaterialization(
   }
 
   const localOutputs: LocalTaskOutput[] = [];
-  for (const output of mappedOutputs) {
-    if (output.mediaType === 'text') {
-      const textValue = normalizeString(output.textValue);
-      if (textValue) localOutputs.push({ mediaType: 'text', textValue, url: null, mimeType: null, sizeBytes: null, sourceUrl: null, downloadedAt: null, width: undefined, height: undefined, durationMs: undefined, assetId: undefined, fileKey: undefined, projectRef: undefined });
-      continue;
+  try {
+    for (const output of mappedOutputs) {
+      if (output.mediaType === 'text') {
+        const textValue = normalizeString(output.textValue);
+        if (textValue) localOutputs.push({ mediaType: 'text', textValue, url: null, mimeType: null, sizeBytes: null, sourceUrl: null, downloadedAt: null, width: undefined, height: undefined, durationMs: undefined, assetId: undefined, fileKey: undefined, projectRef: undefined });
+        continue;
+      }
+      const candidateUrl = normalizeString(output.url);
+      if (!candidateUrl) continue;
+      const stored = /^data:/i.test(candidateUrl)
+        ? persistInlineMediaToFiles(candidateUrl, output.mediaType, mediaDir ?? '')
+        : await downloadRemoteMediaToFiles(candidateUrl, buildDownloadOptions(taskId, mediaDir, controller, projectRefForDownload, downloadAuthInjection)) as DownloadResult | { error: { code: string; message: string } } | null;
+      if (isDownloadedMedia(stored)) {
+        const registeredProject = registerRuntimeProjectScope(projectPath);
+        const projectRef = (registeredProject !== null && registeredProject !== undefined ? registeredProject.projectRef : undefined) ?? null;
+        const fileKey = normalizeString(stored.fileKey) || extractRuntimeFileKey(stored.url);
+        const url = (projectRef && fileKey ? resolveLocalMediaUrl(projectRef, fileKey) : null) ?? stored.url;
+        localOutputs.push({ url, fileKey, projectRef, mediaType: output.mediaType || stored.mediaType, mimeType: stored.mimeType || null, sizeBytes: stored.sizeBytes || null, sourceUrl: /^data:/i.test(candidateUrl) ? 'inline_data' : candidateUrl, downloadedAt: new Date().toISOString(), textValue: null, width: undefined, height: undefined, durationMs: undefined, assetId: undefined });
+        continue;
+      }
+      const storedError = isDownloadFailure(stored) ? stored.error : { code: 'download_failed', message: 'No candidate downloaded' };
+      const errorPayload = { ...(isPlainObject(storedError) ? storedError : { message: String(storedError) }), url: candidateUrl };
+      const errorMessage = normalizeString(readObjectField(errorPayload, 'message')) || 'No candidate downloaded';
+      const downloadFailurePatch = toRecord({
+        status: 'failed',
+        finishedAt: Date.now(),
+        error: {
+          code: normalizeString(readObjectField(errorPayload, 'code')) || 'download_failed',
+          message: errorMessage,
+          stage: 'download',
+        },
+        response: { ...response, mediaDownload: { ...responseMediaDownload, phase: 'blocked', candidates: mediaCandidates, attempts: 1, nextAttemptAt: null, lastError: cloneValue(errorPayload), updatedAt: new Date().toISOString() } },
+        progress: { phase: null },
+      });
+      await patchTaskRecord(currentRecord, downloadFailurePatch);
+      throw new Error(errorMessage);
     }
-    const candidateUrl = normalizeString(output.url);
-    if (!candidateUrl) continue;
-    const stored = /^data:/i.test(candidateUrl)
-      ? persistInlineMediaToFiles(candidateUrl, output.mediaType, mediaDir ?? '')
-      : await downloadRemoteMediaToFiles(candidateUrl, buildDownloadOptions(taskId, mediaDir, controller, projectRefForDownload)) as DownloadResult | { error: { code: string; message: string } } | null;
-    if (isDownloadedMedia(stored)) {
-      const registeredProject = registerRuntimeProjectScope(projectPath);
-      const projectRef = (registeredProject !== null && registeredProject !== undefined ? registeredProject.projectRef : undefined) ?? null;
-      const fileKey = normalizeString(stored.fileKey) || extractRuntimeFileKey(stored.url);
-      const url = (projectRef && fileKey ? resolveLocalMediaUrl(projectRef, fileKey) : null) ?? stored.url;
-      localOutputs.push({ url, fileKey, projectRef, mediaType: output.mediaType || stored.mediaType, mimeType: stored.mimeType || null, sizeBytes: stored.sizeBytes || null, sourceUrl: /^data:/i.test(candidateUrl) ? 'inline_data' : candidateUrl, downloadedAt: new Date().toISOString(), textValue: null, width: undefined, height: undefined, durationMs: undefined, assetId: undefined });
-      continue;
-    }
-    const storedError = isDownloadFailure(stored) ? stored.error : { code: 'download_failed', message: 'No candidate downloaded' };
-    const errorPayload = { ...(isPlainObject(storedError) ? storedError : { message: String(storedError) }), url: candidateUrl };
-    const errorMessage = normalizeString(readObjectField(errorPayload, 'message')) || 'No candidate downloaded';
-    const downloadFailurePatch = toRecord({
-      status: 'failed',
-      finishedAt: Date.now(),
-      error: {
-        code: normalizeString(readObjectField(errorPayload, 'code')) || 'download_failed',
-        message: errorMessage,
-      },
-      response: { ...response, mediaDownload: { ...responseMediaDownload, phase: 'blocked', candidates: mediaCandidates, attempts: 1, nextAttemptAt: null, lastError: cloneValue(errorPayload), updatedAt: new Date().toISOString() } },
-      progress: { phase: null },
-    });
-    await patchTaskRecord(currentRecord, downloadFailurePatch);
-    throw new Error(errorMessage);
+  } finally {
+    releaseDownloadAuth();
   }
 
   if (localOutputs.length === 0) {
     const emptyOutputPatch = toRecord({
       status: 'failed',
       finishedAt: Date.now(),
-      error: { code: 'result_output_mapping_empty', message: '结果输出映射未生成可入库输出' },
+      error: { code: 'result_output_mapping_empty', message: '结果输出映射未生成可入库输出', stage: 'result_mapping' },
       progress: { phase: null },
     });
     await patchTaskRecord(currentRecord, emptyOutputPatch);

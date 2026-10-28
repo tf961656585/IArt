@@ -1,0 +1,476 @@
+{
+  "schema_version": 1,
+  "format_id": "veo-v1",
+  "version": "1.0.0",
+  "display_name": "Veo",
+  "family": "generation",
+  "origin": "preset",
+  "status": "ready",
+  "order": 50,
+  "transport": {
+    "auth": {
+      "kind": "header_api_key",
+      "header_name": "x-goog-api-key"
+    },
+    "endpoints": {
+      "predictLongRunning": "/v1beta/models/{model}:predictLongRunning",
+      "operation": "/v1beta/{operation_name}"
+    },
+    "submit": {
+      "endpoint_key": "predictLongRunning",
+      "method": "POST",
+      "content_type": "application/json",
+      "payload_format": "json"
+    },
+    "async": {
+      "identity_path": "/name",
+      "polling": {
+        "endpoint_key": "operation",
+        "method": "GET",
+        "interval_ms": 10000,
+        "max_attempts": 120
+      }
+    },
+    "payload_rules": {
+      "api.endpoint": { "kind": "literal", "value": "{{endpoint:predictLongRunning}}" },
+      "api.method": { "kind": "literal", "value": "{{method:submit}}" },
+      "api.contentType": { "kind": "literal", "value": "{{content_type:submit}}" },
+      "body.instances": {
+        "kind": "compute",
+        "operator": "array",
+        "cache_key": "declaredVeoV1.instances",
+        "note": "按记录的素材位组装官方 instances：prompt 与首帧/尾帧/参考图分支，compact_object 丢弃未填写的分支。",
+        "args": [
+          {
+            "kind": "compute",
+            "operator": "compact_object",
+            "cache_key": "declaredVeoV1.instance",
+            "entries": {
+              "prompt": {
+                "kind": "when",
+                "condition": { "op": "truthy", "field": "__prompt" },
+                "truthy": { "kind": "field", "field_key": "__prompt", "transforms": ["trim"] }
+              },
+              "image": {
+                "$if": { "$slot_present": "first_frame" },
+                "then": {
+                  "kind": "when",
+                  "condition": { "op": "ne", "field": "firstFrameImage", "value": [] },
+                  "truthy": {
+                    "kind": "field",
+                    "field_key": "firstFrameImage",
+                    "transforms": ["extractFirstUrl"],
+                    "media_target": "inline_data"
+                  }
+                }
+              },
+              "lastFrame": {
+                "$if": { "$slot_present": "last_frame" },
+                "then": {
+                  "kind": "when",
+                  "condition": { "op": "ne", "field": "lastFrameImage", "value": [] },
+                  "truthy": {
+                    "kind": "field",
+                    "field_key": "lastFrameImage",
+                    "transforms": ["extractFirstUrl"],
+                    "media_target": "inline_data"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "body.parameters": {
+        "kind": "compute",
+        "operator": "compact_object",
+        "cache_key": "declaredVeoV1.parameters",
+        "entries": {
+          "aspectRatio": {
+            "kind": "compute",
+            "operator": "normalize_enum",
+            "cache_key": "declaredVeoV1.aspectRatio",
+            "args": [{ "kind": "field", "field_key": "aspectRatio", "transforms": ["trim"] }],
+            "options": { "allowed_values": ["16:9", "9:16"], "fallback": "16:9" }
+          },
+          "durationSeconds": {
+            "kind": "compute",
+            "operator": "normalize_enum",
+            "cache_key": "declaredVeoV1.durationSeconds",
+            "args": [{ "kind": "field", "field_key": "durationSeconds", "transforms": ["trim"] }],
+            "options": { "allowed_values": ["4", "6", "8"], "fallback": "8" }
+          },
+          "resolution": {
+            "kind": "compute",
+            "operator": "normalize_enum",
+            "cache_key": "declaredVeoV1.resolution",
+            "args": [{ "kind": "field", "field_key": "resolution", "transforms": ["trim"] }],
+            "options": { "allowed_values": ["720p", "1080p"], "fallback": "720p" }
+          },
+          "personGeneration": {
+            "$if": { "$slot_present": "first_frame" },
+            "then": {
+              "kind": "when",
+              "condition": { "op": "ne", "field": "firstFrameImage", "value": [] },
+              "truthy": { "kind": "literal", "value": "allow_adult" },
+              "falsy": { "kind": "literal", "value": "allow_all" }
+            },
+            "else": { "kind": "literal", "value": "allow_all" }
+          },
+          "seed": {
+            "kind": "when",
+            "condition": { "op": "truthy", "field": "seed" },
+            "truthy": { "kind": "field", "field_key": "seed", "transforms": ["toNumber"] }
+          }
+        }
+      },
+      "prompt": { "kind": "field", "field_key": "__prompt", "transforms": ["trim"] },
+      "input": { "kind": "field", "field_key": "__prompt", "transforms": ["trim"] },
+      "meta.model_id": { "kind": "literal", "value": "{{model_id}}" },
+      "meta.aspectRatio": { "kind": "field", "field_key": "aspectRatio" },
+      "meta.durationSeconds": { "kind": "field", "field_key": "durationSeconds" },
+      "meta.resolution": { "kind": "field", "field_key": "resolution" }
+    }
+  },
+  "parameters": {
+    "schema": {
+      "schema_type": "object",
+      "fields": [
+        {
+          "field_key": "aspectRatio",
+          "label": "fields.aspectRatio.label",
+          "description": "fields.aspectRatio.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            { "value": "16:9", "label": "fields.aspectRatio.options.ratio_16_9.label" },
+            { "value": "9:16", "label": "fields.aspectRatio.options.ratio_9_16.label" }
+          ],
+          "component_props": {}
+        },
+        {
+          "field_key": "durationSeconds",
+          "label": "fields.durationSeconds.label",
+          "description": "fields.durationSeconds.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            { "value": "4", "label": "fields.durationSeconds.options.duration_4.label" },
+            { "value": "6", "label": "fields.durationSeconds.options.duration_6.label" },
+            { "value": "8", "label": "fields.durationSeconds.options.duration_8.label" }
+          ],
+          "component_props": {}
+        },
+        {
+          "field_key": "resolution",
+          "label": "fields.resolution.label",
+          "description": "fields.resolution.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            { "value": "720p", "label": "fields.resolution.options.resolution_720p.label" },
+            { "value": "1080p", "label": "fields.resolution.options.resolution_1080p.label" }
+          ],
+          "component_props": {}
+        },
+        {
+          "field_key": "seed",
+          "label": "fields.seed.label",
+          "description": "fields.seed.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "number",
+          "component_props": {}
+        }
+      ],
+      "required_fields": [],
+      "validation_rules": []
+    },
+    "defaults": {
+      "aspectRatio": "16:9",
+      "durationSeconds": "8",
+      "resolution": "720p"
+    },
+    "prompt_field": {
+      "field_key": "__prompt",
+      "required": true,
+      "validation_rules": []
+    }
+  },
+  "media": {
+    "supports": ["first_frame", "last_frame"],
+    "required": [],
+    "slots": {
+      "first_frame": {
+        "field_key": "firstFrameImage",
+        "component": "imageUpload",
+        "wire_name": "firstFrameImage",
+        "max_files": 1
+      },
+      "last_frame": {
+        "field_key": "lastFrameImage",
+        "component": "imageUpload",
+        "wire_name": "lastFrameImage",
+        "max_files": 1
+      }
+    }
+  },
+  "projection": {
+    "provider_id": "google",
+    "group_key": "google",
+    "capability": {
+      "input_modalities": {
+        "$if": { "$any_slot_present": true },
+        "then": ["text", "image"],
+        "else": ["text"]
+      },
+      "output_modalities": ["video"],
+      "supports_async_task": true,
+      "supports_streaming": false,
+      "supports_multi_image": false,
+      "supports_reference_media": {
+        "$if": { "$any_slot_present": true },
+        "then": true,
+        "else": false
+      },
+      "constraints": []
+    },
+    "execution_profile": {
+      "task_type": "video",
+      "supports_async_task": true
+    },
+    "display": {
+      "visible": true,
+      "order": 9000
+    },
+    "workspace": {
+      "task_list_position": "right"
+    },
+    "execution_driver": "http_formal_task",
+    "node": {
+      "node_type": "model",
+      "output_ports": [
+        {
+          "id": "video",
+          "name": "ports.outputs.video.name",
+          "data_type": "video",
+          "field_key": "output_video",
+          "multiple": true,
+          "description": "ports.outputs.video.description"
+        }
+      ]
+    }
+  },
+  "builtin_behavior": {
+    "result_rule": {
+      "mode": "async"
+    },
+    "polling_status": {
+      "status_paths": ["done"],
+      "success_values": ["true"],
+      "failure_values": ["error", "failed", "failure", "cancelled", "canceled"],
+      "success_field_paths": ["response.generateVideoResponse.generatedSamples[0].video.uri"],
+      "failure_code_paths": ["error.code"],
+      "failure_message_paths": ["error.message", "error.status", "error.details"]
+    },
+    "result_output_mapping": {
+      "response_mode": "structured_payload",
+      "output_mapping_rules": [
+        {
+          "target": "output.video_url",
+          "source": {
+            "kind": "response",
+            "path": "response.generateVideoResponse.generatedSamples[0].video.uri"
+          },
+          "required": false,
+          "default_value": null
+        }
+      ],
+      "note": "declared generation model (veo-v1 family template)"
+    }
+  },
+  "composition": {
+    "fragments": {
+      "first_frame": {
+        "schema_field": {
+          "label": "fields.firstFrameImage.label",
+          "description": "fields.firstFrameImage.description",
+          "required": false,
+          "default_value": [],
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component_props": {
+            "accept": "image/*"
+          }
+        },
+        "input_port": {
+          "id": "firstFrameImage",
+          "name": "ports.inputs.firstFrameImage.name",
+          "data_type": "image",
+          "required": false,
+          "max_connections": 1,
+          "description": "ports.inputs.firstFrameImage.description"
+        }
+      },
+      "last_frame": {
+        "schema_field": {
+          "label": "fields.lastFrameImage.label",
+          "description": "fields.lastFrameImage.description",
+          "required": false,
+          "default_value": [],
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component_props": {
+            "accept": "image/*"
+          }
+        },
+        "input_port": {
+          "id": "lastFrameImage",
+          "name": "ports.inputs.lastFrameImage.name",
+          "data_type": "image",
+          "required": false,
+          "max_connections": 1,
+          "description": "ports.inputs.lastFrameImage.description"
+        }
+      }
+    },
+    "variants": []
+  },
+  "localization": {
+    "zh-CN": {
+      "fields": {
+        "prompt": {
+          "label": "提示词"
+        },
+        "firstFrameImage": {
+          "label": "首帧",
+          "description": "作为视频起始画面；建议不低于 720p，画幅为 16:9 或 9:16。"
+        },
+        "lastFrameImage": {
+          "label": "尾帧",
+          "description": "作为视频结束画面，必须与首帧图一同使用。"
+        },
+        "referenceImages": {
+          "label": "参考图",
+          "description": "最多 3 张，用于保持主体外观；使用时视频时长固定为 8 秒。"
+        },
+        "aspectRatio": {
+          "label": "画幅比例",
+          "description": "仅支持 16:9 与 9:16 两档。",
+          "options": {
+            "ratio_16_9": { "label": "横屏 16:9" },
+            "ratio_9_16": { "label": "竖屏 9:16" }
+          }
+        },
+        "durationSeconds": {
+          "label": "视频时长",
+          "description": "1080p 或使用参考图时必须为 8 秒。",
+          "options": {
+            "duration_4": { "label": "4 秒" },
+            "duration_6": { "label": "6 秒" },
+            "duration_8": { "label": "8 秒" }
+          }
+        },
+        "resolution": {
+          "label": "清晰度",
+          "description": "默认 720p，可选 720p / 1080p；1080p 仅支持 8 秒时长。",
+          "options": {
+            "resolution_720p": { "label": "720p" },
+            "resolution_1080p": { "label": "1080p" }
+          }
+        },
+        "seed": {
+          "label": "随机种子",
+          "description": "用于重复生成的随机种子，不保证结果完全一致。"
+        }
+      },
+      "ports": {
+        "inputs": {
+          "firstFrameImage": { "name": "首帧", "description": "接入素材或资产节点作为视频起始画面。" },
+          "lastFrameImage": { "name": "尾帧", "description": "接入素材或资产节点作为视频结束画面。" },
+          "referenceImages": { "name": "参考图", "description": "接入多张参考图（最多 3 张）。" }
+        },
+        "outputs": {
+          "video": { "name": "生成视频", "description": "生成的视频结果。" }
+        }
+      }
+    },
+    "en": {
+      "fields": {
+        "prompt": {
+          "label": "Prompt"
+        },
+        "firstFrameImage": {
+          "label": "First frame image",
+          "description": "Image used as the opening frame; 720p or higher and a 16:9 or 9:16 frame is recommended."
+        },
+        "lastFrameImage": {
+          "label": "Last frame image",
+          "description": "Image used as the closing frame; must be provided together with the first frame image."
+        },
+        "referenceImages": {
+          "label": "Reference images",
+          "description": "Up to 3 images that keep the subject appearance; duration is fixed at 8 seconds when used."
+        },
+        "aspectRatio": {
+          "label": "Aspect ratio",
+          "description": "Only 16:9 and 9:16 are supported.",
+          "options": {
+            "ratio_16_9": { "label": "Landscape 16:9" },
+            "ratio_9_16": { "label": "Portrait 9:16" }
+          }
+        },
+        "durationSeconds": {
+          "label": "Duration",
+          "description": "Must be 8 seconds for 1080p or reference-image inputs.",
+          "options": {
+            "duration_4": { "label": "4 seconds" },
+            "duration_6": { "label": "6 seconds" },
+            "duration_8": { "label": "8 seconds" }
+          }
+        },
+        "resolution": {
+          "label": "Resolution",
+          "description": "Defaults to 720p. Available: 720p, 1080p; 1080p requires an 8 second duration.",
+          "options": {
+            "resolution_720p": { "label": "720p" },
+            "resolution_1080p": { "label": "1080p" }
+          }
+        },
+        "seed": {
+          "label": "Seed",
+          "description": "Random seed for repeat generation; output is not guaranteed to be identical."
+        }
+      },
+      "ports": {
+        "inputs": {
+          "firstFrameImage": { "name": "First frame", "description": "Connect an asset as the opening frame." },
+          "lastFrameImage": { "name": "Last frame", "description": "Connect an asset as the closing frame." },
+          "referenceImages": { "name": "Reference images", "description": "Connect up to 3 reference images." }
+        },
+        "outputs": {
+          "video": { "name": "Generated video", "description": "The generated video output." }
+        }
+      }
+    }
+  }
+}

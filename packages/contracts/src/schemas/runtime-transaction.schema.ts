@@ -1,5 +1,6 @@
 import * as z from "zod";
 
+import { TASK_FAILURE_STAGES } from "../task-failure-stage";
 import { UNIFIED_GENERATION_STATUSES } from "../unified-generation";
 
 const LOCAL_MEDIA_SCHEME = "local-media://";
@@ -19,6 +20,11 @@ export const RuntimeTaskFailureSchema = z.object({
   backendMessage: z.string().nullable().optional(),
   retryable: z.boolean().nullable().optional(),
   details: z.unknown().nullable().optional(),
+  /**
+   * 失败阶段（见 task-failure-stage.ts）。旧 failureJson 无该键仍可 parse；
+   * 重新查询资格只认该字段，缺失即不可重查。
+   */
+  stage: z.enum(TASK_FAILURE_STAGES).nullable().optional(),
 }).strict();
 
 export const RuntimeTaskRowSchema = z.object({

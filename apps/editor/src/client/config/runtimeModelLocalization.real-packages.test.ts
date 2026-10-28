@@ -170,7 +170,7 @@ describe("投影本地化（族模板）", () => {
 
     const expectations = {
       "zh-CN": {
-        field: "首帧图",
+        field: "首帧",
         helper: "作为视频起始画面；建议不低于 720p，画幅为 16:9 或 9:16。",
         enumOption: "横屏 16:9",
         output: "生成视频",
@@ -284,8 +284,8 @@ describe("投影本地化（族模板）", () => {
 
     const expectations = {
       "zh-CN": {
-        firstFrame: "首帧图",
-        lastFrame: "尾帧图",
+        firstFrame: "首帧",
+        lastFrame: "尾帧",
         resolution: "4K",
         output: "视频",
       },

@@ -2,12 +2,10 @@ import type { ProjectMediaType, RuntimeRef } from "@iart/contracts";
 import type { AudioSegment } from "./audioSegment";
 import type { PromptCollectionItem } from "./promptCollection";
 import type {
-  ImageDerivedOp,
   ImageMeta,
   NodeContentCache,
   NodeDataBase,
   NodeTaskInfo,
-  VideoDerivedOp,
   VideoMeta,
 } from "./node";
 
@@ -119,13 +117,9 @@ export interface ImageInputNodeData extends NodeDataBase {
   /** 最近一次写入的上游输出端口 */
   lastSourcePortId: string | undefined;
   /** 数据来源标记 */
-  valueSource: "upload" | "upstream" | "processed" | undefined;
+  valueSource: "upload" | "upstream" | undefined;
   /** 媒体落盘失败提示（仅本地播放策略） */
   mediaError: string | undefined;
-  /** 衍生链：源节点 ID */
-  derivedFromNodeId: string | undefined;
-  /** 衍生链：操作描述（resize/mirror/rotate...） */
-  derivedOp: ImageDerivedOp | undefined;
   /** 关联的生成任务信息 */
   taskInfo: NodeTaskInfo | undefined;
   /**
@@ -133,15 +127,6 @@ export interface ImageInputNodeData extends NodeDataBase {
    * @deprecated 已废弃，仅用于迁移兼容
    */
   cachedContent: NodeContentCache | undefined;
-  /** 原始图片元数据（上传时记录，不可变，用于resize基准） */
-  originalImageMeta: ImageMeta | null | undefined;
-  /** 当前缩放百分比 (10-100)，默认100表示原尺寸 */
-  resizePercent: number | undefined;
-  /**
-   * 图片扩图时用户显式选择的图像生成模型
-   * - 不再偷偷回退到固定默认模型
-   */
-  outpaintModelId: string | undefined;
 }
 
 /** 视频素材节点数据 */
@@ -153,13 +138,9 @@ export interface VideoInputNodeData extends NodeDataBase {
   /** 视频尺寸元信息（用于保持节点宽高比） */
   videoMeta: VideoMeta | null | undefined;
   /** 数据来源标记 */
-  valueSource: "upload" | "upstream" | "processed" | undefined;
+  valueSource: "upload" | "upstream" | undefined;
   /** 媒体落盘失败提示（仅本地播放策略） */
   mediaError: string | undefined;
-  /** 衍生链：源节点 ID */
-  derivedFromNodeId: string | undefined;
-  /** 衍生链：操作描述（videoTrim...） */
-  derivedOp: VideoDerivedOp | undefined;
   /** 记录最近一次由上游执行写入的执行 ID，便于快照展示 */
   lastExecutionId: string | undefined;
   /** 最近一次写入的上游节点 ID */

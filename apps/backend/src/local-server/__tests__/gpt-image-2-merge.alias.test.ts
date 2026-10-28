@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { GenerationMediaSlotId } from "@iart/contracts";
-import {
-  OPENAI_IMAGE_V1_FAMILY_ADAPTER_ID,
-  OPENAI_IMAGE_V1_SUPPORTED_MEDIA_SLOTS,
-  buildOpenAiImageV1BaseTemplateSources,
-} from "../generation-family-templates.openai-image.cts";
+import { requireFamilyTemplate } from "../generation-family-templates.registry.cts";
 import { projectFamilyTemplate } from "./family-template-projection-test-helpers";
 
 /**
@@ -23,14 +19,25 @@ import { projectFamilyTemplate } from "./family-template-projection-test-helpers
 
 const MODEL_ID = "declared-openai-image-merge-test";
 
-const projectMerged = (acceptedMediaSlots: readonly GenerationMediaSlotId[]) =>
-  projectFamilyTemplate({
-    familyAdapterId: OPENAI_IMAGE_V1_FAMILY_ADAPTER_ID,
-    buildBaseSources: buildOpenAiImageV1BaseTemplateSources,
-    supportsMediaSlots: OPENAI_IMAGE_V1_SUPPORTED_MEDIA_SLOTS,
+const OPENAI_IMAGE_V1_FAMILY_ADAPTER_ID = "openai-image-v1";
+
+const openAiImageEntry = () => {
+  const entry = requireFamilyTemplate(OPENAI_IMAGE_V1_FAMILY_ADAPTER_ID);
+  assert.equal(entry.status, "ready", "openai-image-v1 必须已就绪");
+  if (entry.status !== "ready") throw new Error("unreachable: family template not ready");
+  return entry;
+};
+
+const projectMerged = (acceptedMediaSlots: readonly GenerationMediaSlotId[]) => {
+  const entry = openAiImageEntry();
+  return projectFamilyTemplate({
+    familyAdapterId: entry.familyAdapterId,
+    buildBaseSources: entry.buildBaseSources,
+    supportsMediaSlots: entry.supportsMediaSlots,
     acceptedMediaSlots,
     modelId: MODEL_ID,
   }).projection;
+};
 
 void describe("openai-image 族：单节点双模式（文生图 / 图生图）契约", () => {
   void it("图生图形态：image 端口可选且支持多图", () => {

@@ -1,5 +1,5 @@
 import { Button, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@iart/ui';
-import type { FamilyTemplateParameterDescriptor } from '@iart/contracts';
+import type { FamilyTemplateParameterDescriptor, InterfaceRecipe } from '@iart/contracts';
 import {
   GenerationModelFields,
   useGenerationModelForm,
@@ -19,9 +19,9 @@ import {
  * 从弹窗发起的写入，原因必须出现在这里。
  */
 
-/** 表单区块的绑定：由调用方装配（模板装载按表单所选接口类型发请求）。 */
+/** 表单区块的绑定：由调用方装配（模板装载按表单所选接口格式发请求）。 */
 export interface CustomModelFormBinding {
-  /** 拉取族模板参数描述（展开「高级参数自定义」时按表单当前所选接口类型调用；由调用方注入，弹窗自己不碰网络） */
+  /** 拉取族模板参数描述（展开「高级参数自定义」时按表单当前所选接口格式调用；由调用方注入，弹窗自己不碰网络） */
   loadParameterTemplate: (familyAdapterId: string) => Promise<FamilyTemplateParameterDescriptor>;
   /** 返回 false 表示没添加成功（保留输入内容，不静默清空） */
   onSubmit: (payload: GenerationModelFormPayload) => Promise<boolean>;
@@ -30,10 +30,18 @@ export interface CustomModelFormBinding {
 export function AddModelDialog({
   providerName,
   customForm,
+  recipes,
+  recipesUnavailable = false,
   failureText = null,
+  formatOptions,
+  initialFamilyAdapterId,
+  onCreateInterfaceFormat,
   onClose,
 }: {
   providerName: string;
+  /** 接口配方公共库；表单按所选接口格式过滤后展示（不选 = 内置默认）。 */
+  recipes: readonly InterfaceRecipe[];
+  recipesUnavailable?: boolean;
   /**
    * 表单区块的绑定。仍然由调用方按连接装配（模板装载要发请求），因此保留这个可空入参：
    * 装配缺失时弹窗不渲染表单控件，只留一句可读说明——比渲染一个提交必然失败的空白表单好。
@@ -46,6 +54,12 @@ export function AddModelDialog({
    * 出现在这里；成功或关掉弹窗后由调用方把它清掉（null）。
    */
   failureText?: string | null;
+  /** 接口格式选项（预设 + 用户自建）；缺省回落到预设清单快照。 */
+  formatOptions?: ReadonlyArray<{ value: string; label: string }>;
+  /** 从「接口格式」页带过来的预选格式。 */
+  initialFamilyAdapterId?: string | null;
+  /** 下拉末尾「新建接口格式…」的动作。 */
+  onCreateInterfaceFormat?: () => void;
   onClose: () => void;
 }) {
   // 表单状态挂在弹窗壳层：footer 按钮与字段树都要读它。customForm 为 null 时字段树不渲染，
@@ -53,6 +67,11 @@ export function AddModelDialog({
   const form = useGenerationModelForm({
     loadParameterTemplate:
       customForm?.loadParameterTemplate ?? (() => Promise.reject(new Error('该连接没有生成模型表单'))),
+    recipes,
+    recipesUnavailable,
+    ...(formatOptions === undefined ? {} : { formatOptions }),
+    ...(initialFamilyAdapterId === undefined ? {} : { initialFamilyAdapterId }),
+    ...(onCreateInterfaceFormat === undefined ? {} : { onCreateInterfaceFormat }),
     onSubmit: customForm?.onSubmit ?? (async () => false),
     onClose,
   });

@@ -43,6 +43,25 @@ export interface NodeDiagnosticInfo {
   duration: number | undefined;
 }
 
+/** 节点加工问题类别：执行失败 / 前置条件未满足（参数或源不可用） */
+export type NodeProcessingIssueKind = 'processing-failed' | 'processing-blocked';
+
+/**
+ * 节点级加工问题（资产卡片上的常驻标注）。
+ *
+ * 与前端 `toast` 的分工：toast 一闪而过，本通道保留到下一次执行开始或成功为止。
+ * `message` / `hint` 必须用户可读（发生了什么 + 可以怎么做），不写内部术语。
+ */
+export type NodeProcessingIssue = {
+  kind: NodeProcessingIssueKind;
+  /** 发生了什么（用户可读） */
+  message: string;
+  /** 补充原因（后端返回的说明，可空；展开后显示） */
+  detail?: string | undefined;
+  /** 可以怎么做（用户可读） */
+  hint: string;
+};
+
 const extractBackendMessageFromDiagnosticDetails = (errorDetails: unknown): string | undefined => {
   if (!errorDetails || typeof errorDetails !== 'object') return undefined;
   const backendMessage = (errorDetails as { backendMessage: unknown | undefined }).backendMessage;
@@ -128,6 +147,12 @@ interface ExecutionState {
    * 每次触发执行时整体替换，不进 undo history、不持久化。
    */
   preflightIssuesByNodeId: Record<string, ExecutionPreflightIssue[]>;
+  /**
+   * 节点加工问题（按节点）：执行失败或前置条件未满足时写入，下一次执行开始 /
+   * 成功后清除。常驻在资产卡片上，不依赖 toast 的瞬时提示。
+   * 会话态反馈通道：不进 undo history、不持久化。
+   */
+  processingIssueByNodeId: Record<string, NodeProcessingIssue>;
 }
 
 // 为了兼容性，提供 execution 作为 currentExecution 的别名
@@ -177,6 +202,10 @@ interface ExecutionActions {
   // 状态查询
   /** 写入本次触发的前置校验问题（整体替换；空数组表示校验通过，清空标注） */
   setPreflightIssues: (issues: ExecutionPreflightIssue[]) => void;
+  /** 写入节点加工问题（覆盖旧值）；卡片上常驻可展开 */
+  setProcessingIssue: (nodeId: string, issue: NodeProcessingIssue) => void;
+  /** 清除该节点的加工问题与前置校验标注（执行开始 / 成功后调用） */
+  clearNodeProcessingIssue: (nodeId: string) => void;
   /** 本地诊断结果，仅用于错误/调试展示，不代表正式任务生命周期 */
   getNodeDiagnosticResult: (nodeId: string, executionId: string | undefined) => NodeExecutionResult | undefined;
   /** 本地诊断摘要，仅暴露 UI 允许消费的错误/调试字段 */
@@ -226,6 +255,7 @@ export const useExecutionStore = create<ExecutionState & ExecutionActions>()(
       executionHistory: [],
       maxHistorySize: 20,
       preflightIssuesByNodeId: {},
+      processingIssueByNodeId: {},
       options: {
         variables: undefined,
         startFromNode: undefined,
@@ -507,6 +537,23 @@ export const useExecutionStore = create<ExecutionState & ExecutionActions>()(
         });
       },
 
+      setProcessingIssue: (nodeId, issue) => {
+        set((state) => {
+          state.processingIssueByNodeId[nodeId] = issue;
+        });
+      },
+
+      clearNodeProcessingIssue: (nodeId) => {
+        set((state) => {
+          delete state.processingIssueByNodeId[nodeId];
+          // 旧的一次执行前置校验标注同属该节点的「加工问题」，随重试 / 成功一并清除，
+          // 避免失败标记与已解决的老校验项同时挂在卡片上。
+          if (state.preflightIssuesByNodeId[nodeId] !== undefined) {
+            delete state.preflightIssuesByNodeId[nodeId];
+          }
+        });
+      },
+
       getNodeDiagnosticResult: (nodeId, executionId) => {
         const result = get().getNodeResult(nodeId, executionId);
         if (!result) return undefined;
@@ -584,6 +631,7 @@ export const useExecutionStore = create<ExecutionState & ExecutionActions>()(
           state.executions = {};
           state.executionHistory = [];
           state.preflightIssuesByNodeId = {};
+          state.processingIssueByNodeId = {};
         });
       },
     };

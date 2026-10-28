@@ -1,18 +1,21 @@
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import test from 'node:test';
 
 import {
+  cloneJsonValue,
   GENERATION_FAMILY_ADAPTER_IDS,
   GENERATION_MEDIA_SLOT_IDS,
   type GenerationFamilyAdapterId,
   type GenerationMediaSlotId,
   type ParameterOverrides,
 } from '@iart/contracts';
-import { buildGeminiImageInteractionsV1BaseTemplateSources } from '../generation-family-templates.gemini-image.cts';
-import { buildOpenAiImageV1BaseTemplateSources } from '../generation-family-templates.openai-image.cts';
+import { buildProjectionFromPackageSources } from '../model-package-catalog.projection.cts';
 import {
   buildFamilyTemplateParameterDescriptor,
-  GENERATION_FAMILY_TEMPLATE_REGISTRY,
+  requireFamilyTemplate,
 } from '../generation-family-templates.registry.cts';
 import {
   applyParameterOverrides,
@@ -37,12 +40,20 @@ const asRaw = (value: unknown): CatalogRawObject => {
   return value;
 };
 
-const T2I_SOURCES = buildOpenAiImageV1BaseTemplateSources('overrides-unit-model', {
-  acceptedMediaSlots: [],
-});
-const I2I_SOURCES = buildOpenAiImageV1BaseTemplateSources('overrides-unit-model-ref', {
-  acceptedMediaSlots: ['reference_image'],
-});
+/** 经实体门面取某格式的基础模板 sources（与记录合成同一条链路）。 */
+const baseSourcesOf = (
+  familyAdapterId: string,
+  modelId: string,
+  acceptedMediaSlots: readonly GenerationMediaSlotId[],
+): GenerationFamilyTemplateSources => {
+  const entry = requireFamilyTemplate(familyAdapterId);
+  assert.equal(entry.status, 'ready', `${familyAdapterId} 必须已就绪`);
+  if (entry.status !== 'ready') throw new Error('unreachable: family template not ready');
+  return entry.buildBaseSources(modelId, { acceptedMediaSlots });
+};
+
+const T2I_SOURCES = baseSourcesOf('openai-image-v1', 'overrides-unit-model', []);
+const I2I_SOURCES = baseSourcesOf('openai-image-v1', 'overrides-unit-model-ref', ['reference_image']);
 
 /** 测试字面量显式写全必填键（required 等），直接以契约输出类型进入校验器；不 parse——
  * 形状非法（如坏 wire 名）正是要在校验器层测试的输入，parse 会先被 schema 拒掉。 */
@@ -116,7 +127,7 @@ void test('S2 禁用：字段、默认值与 payload_rules 一并移除；素材
   assert.deepEqual(violationsOf(I2I_SOURCES, overridesOf({
     official: [{ field_key: 'image', enabled: false }],
     custom: [],
-  })), ['official_field_media_slot_not_overridable']);
+  })), ['media_slot_toggle_not_allowed']);
 });
 
 void test('S3 枚举替换：选项替换、默认值随行；替换后旧默认值非法被拒', () => {
@@ -270,8 +281,13 @@ void test('S7 非法覆盖拦截：保留键、格式、未知字段、重复、
     violationsOf(T2I_SOURCES, overridesOf({ official: [{ field_key: 'size', wire_name: 'prompt' }], custom: [] })),
     ['wire_name_reserved'],
   );
-  // wire 名格式。
-  for (const badWire of ['Size', '1abc', 'a-b', 'has space']) {
+  // 「改成本来就叫这个名字」等于没改：填回默认发送名不得被判成撞名。
+  assert.deepEqual(
+    violationsOf(T2I_SOURCES, overridesOf({ official: [{ field_key: 'size', wire_name: 'size' }], custom: [] })),
+    [],
+  );
+  // 发送名格式：请求体路径按共享路径规则（允许大小写与短横线），拒绝空段/空格/冒号。
+  for (const badWire of ['1abc', 'a..b', 'has space', 'a:b']) {
     assert.deepEqual(
       violationsOf(T2I_SOURCES, overridesOf({ official: [{ field_key: 'size', wire_name: badWire }], custom: [] })),
       ['wire_name_format'],
@@ -409,9 +425,15 @@ void test('族模板参数描述：字段、wire 名、预设与保留键（GET 
   const descriptor = result.descriptor;
   assert.deepEqual(
     descriptor.official_fields.map((field) => field.field_key),
-    ['size', 'quality', 'format', 'moderation'],
-    'descriptor must exclude the image system-modality field',
+    ['image', 'size', 'quality', 'format', 'moderation'],
+    '素材位行排在官方参数区最前；其余官方参数顺序不变',
   );
+  const mediaField = descriptor.official_fields.find((field) => field.field_key === 'image');
+  assert.ok(mediaField);
+  assert.equal(mediaField.media_slot_id, 'reference_image', '素材位行必须带位标识');
+  assert.equal(mediaField.media_max_files, 16, '素材位行带当前默认张数');
+  assert.equal(mediaField.wire_name, 'image');
+  assert.equal(mediaField.label, '参考图');
   const size = descriptor.official_fields.find((field) => field.field_key === 'size');
   assert.ok(size);
   assert.equal(size.component, 'imageSize');
@@ -428,23 +450,23 @@ void test('族模板参数描述：字段、wire 名、预设与保留键（GET 
   assert.deepEqual(format.enum_options, ['png', 'jpeg', 'webp']);
   assert.equal(format.label, '图片格式');
 
-  assert.ok(descriptor.reserved_wire_names.includes('model'));
-  assert.ok(descriptor.reserved_wire_names.includes('prompt'));
-  assert.ok(descriptor.reserved_wire_names.includes('input'));
-  assert.ok(descriptor.reserved_wire_names.includes('image'), '素材位字段键保留，t2i 基线同样保留');
-  // 素材位词表里的每个 id 都保留（参数层永不开放），词表扩容时这条断言自动跟随
+  assert.ok(descriptor.reserved_wire_names.body.includes('model'));
+  assert.ok(descriptor.reserved_wire_names.body.includes('prompt'));
+  assert.ok(descriptor.reserved_wire_names.body.includes('input'));
+  assert.ok(descriptor.reserved_wire_names.body.includes('image'), '素材位字段键保留，t2i 基线同样保留');
+  // 素材位词表里的每个 id 都保留（不得被别名或自定义参数占用），词表扩容时这条断言自动跟随
   for (const slot of GENERATION_MEDIA_SLOT_IDS) {
-    assert.ok(descriptor.reserved_wire_names.includes(slot), `${slot} 素材位必须保留`);
+    assert.ok(descriptor.reserved_wire_names.body.includes(slot), `${slot} 素材位必须保留`);
   }
-  assert.ok(descriptor.reserved_wire_names.includes('output_format'));
-  assert.ok(descriptor.reserved_wire_names.includes('n'));
+  assert.ok(descriptor.reserved_wire_names.body.includes('output_format'));
+  assert.ok(descriptor.reserved_wire_names.body.includes('n'));
 
   // 未知族与未就绪族必须可区分：前者是非法 id（路由 404），后者是合法接口类型但模板未实现
   assert.equal(buildFamilyTemplateParameterDescriptor('not-a-family').kind, 'unknown');
   // pending 清单从注册表派生（逐族实现批次逐个转 ready，测试不手写「哪族还没实现」——
   // 手写清单会在并行批次把某族转 ready 时变成对方的红灯）。
   const pendingFamilyAdapterIds = GENERATION_FAMILY_ADAPTER_IDS.filter(
-    (id) => GENERATION_FAMILY_TEMPLATE_REGISTRY[id].status === 'pending',
+    (id) => requireFamilyTemplate(id).status === 'pending',
   );
   for (const pendingFamilyAdapterId of pendingFamilyAdapterIds) {
     assert.equal(
@@ -464,7 +486,7 @@ void test('族模板参数描述：字段、wire 名、预设与保留键（GET 
     descriptorByFamily.set(familyAdapterId, built.descriptor.supports_media_slots);
     assert.deepEqual(
       built.descriptor.supports_media_slots,
-      [...GENERATION_FAMILY_TEMPLATE_REGISTRY[familyAdapterId].supportsMediaSlots],
+      [...requireFamilyTemplate(familyAdapterId).supportsMediaSlots],
       `${familyAdapterId} 的描述符素材位必须等于注册表声明的能力`,
     );
   }
@@ -480,7 +502,7 @@ void test('校验错误文案用户可读：无内部术语上屏、用中文显
     { official: [{ field_key: 'nope' }], custom: [] },
     { official: [{ field_key: 'image', enabled: false }], custom: [] },
     { official: [{ field_key: 'size' }, { field_key: 'size' }], custom: [] },
-    { official: [{ field_key: 'size', wire_name: 'Size' }], custom: [] },
+    { official: [{ field_key: 'size', wire_name: '1abc' }], custom: [] },
     { official: [{ field_key: 'size', wire_name: 'model' }], custom: [] },
     { official: [{ field_key: 'size', wire_name: 'output_format' }], custom: [] },
     { official: [{ field_key: 'size', wire_name: 'image_size' }, { field_key: 'quality', wire_name: 'image_size' }], custom: [] },
@@ -692,9 +714,7 @@ void test('禁用任何字段都不得让整条规则键被静默删除（含协
 void test('真实 gemini 图像族：嵌套 compute 字段引用被保存期识别（族无关口径回归）', () => {
   // 该族为自保在外层加了 `when truthy <field>` 守卫；即便去掉守卫（字段引用只留在
   // compute.args 里），保存期也必须给出同样的可读拒绝——这才是根因修复的判据。
-  const sources = buildGeminiImageInteractionsV1BaseTemplateSources('gemini-nested-check', {
-    acceptedMediaSlots: [],
-  });
+  const sources = baseSourcesOf('gemini-image-interactions-v1', 'gemini-nested-check', []);
   const responseFormat = asRaw(payloadRulesOf(sources)['body.response_format']);
   const entries = asRaw(responseFormat.entries);
   // 复刻「无守卫」形态：把 when 拆掉，直接留下被包裹的值规则。
@@ -734,4 +754,203 @@ void test('真实 gemini 图像族：嵌套 compute 字段引用被保存期识�
     official: [{ field_key: 'imageSize', enum_options: ['1K'] }],
     custom: [],
   })), []);
+});
+
+// ---------------------------------------------------------------------------
+// 素材位（2026-10-24）：只开放「发送名称」与「最多几张」两个维度
+// ---------------------------------------------------------------------------
+
+void test('素材位改名：payload 规则目标随发送名改写，字段键与端口键保持稳定', () => {
+  const overrides = overridesOf({
+    official: [{ field_key: 'image', wire_name: 'reference_images' }],
+    custom: [],
+  });
+  assert.deepEqual(violationsOf(I2I_SOURCES, overrides), []);
+  const output = applyParameterOverrides(I2I_SOURCES, overrides);
+  const rules = payloadRulesOf(output);
+  assert.equal(rules['body.image'], undefined, '旧发送名不得残留');
+  assert.ok(rules['body.reference_images'], '新发送名必须承载同一条规则');
+  const truthy = asRaw(asRaw(rules['body.reference_images']).truthy);
+  const args = Array.isArray(truthy.args) ? truthy.args : [];
+  const valueRule = asRaw(truthy.field_key === undefined ? args[0] : truthy);
+  assert.equal(valueRule.field_key, 'image', '字段键不随发送名变化');
+  // 端口 id / field_key 不变：画布连的是字段，不是服务商字段名。
+  const node = asRaw(output.node);
+  const ports = Array.isArray(node.input_ports) ? node.input_ports : [];
+  assert.ok(
+    ports.some((port) => isObjectRecord(port) && port.field_key === 'image'),
+    '端口仍以字段键标识',
+  );
+});
+
+void test('素材位张数：表单上限、允许多选、画布端口与多图能力四处同值', () => {
+  const overrides = overridesOf({
+    official: [{ field_key: 'image', media_max_files: 9 }],
+    custom: [],
+  });
+  assert.deepEqual(violationsOf(I2I_SOURCES, overrides), []);
+  const output = applyParameterOverrides(I2I_SOURCES, overrides);
+  const props = asRaw(fieldRecordOf(output, 'image').component_props);
+  assert.equal(props.maxFiles, 9);
+  assert.equal(props.allowMultiple, true);
+  const node = asRaw(output.node);
+  const ports = Array.isArray(node.input_ports) ? node.input_ports : [];
+  const port = ports
+    .map((item) => (isObjectRecord(item) ? item : null))
+    .find((item) => item !== null && item.field_key === 'image');
+  assert.ok(port, '素材位端口必须存在');
+  assert.equal(port.multiple, true);
+  assert.equal(port.max_connections, 9);
+  assert.equal(asRaw(asRaw(output.runtimeModel).capability).supports_multi_image, true);
+
+  // 张数只要求正整数，产品侧不设上限：服务端支持多少由用户填，超限由上游拒绝。
+  assert.deepEqual(violationsOf(I2I_SOURCES, overridesOf({
+    official: [{ field_key: 'image', media_max_files: 200 }],
+    custom: [],
+  })), []);
+});
+
+void test('素材位越界维度被拒：启用、枚举、预设、默认值都不归参数层', () => {
+  assert.deepEqual(violationsOf(I2I_SOURCES, overridesOf({
+    official: [{ field_key: 'image', enabled: false }],
+    custom: [],
+  })), ['media_slot_toggle_not_allowed']);
+  assert.ok(violationsOf(I2I_SOURCES, overridesOf({
+    official: [{ field_key: 'image', enum_options: ['a'] }],
+    custom: [],
+  })).includes('enum_options_not_allowed'));
+  assert.ok(violationsOf(I2I_SOURCES, overridesOf({
+    official: [{ field_key: 'image', resolution_preset_keys: ['1k'] }],
+    custom: [],
+  })).includes('preset_keys_not_allowed'));
+  assert.ok(violationsOf(I2I_SOURCES, overridesOf({
+    official: [{ field_key: 'image', default_value: 'x' }],
+    custom: [],
+  })).includes('default_value_not_allowed'));
+  // 张数维度只对素材位合法。
+  assert.deepEqual(violationsOf(I2I_SOURCES, overridesOf({
+    official: [{ field_key: 'quality', media_max_files: 2 }],
+    custom: [],
+  })), ['media_max_files_not_allowed']);
+  assert.ok(violationsOf(I2I_SOURCES, overridesOf({
+    official: [{ field_key: 'image', media_max_files: 0 }],
+    custom: [],
+  })).includes('media_max_files_invalid'));
+});
+
+// ---------------------------------------------------------------------------
+// 缺显示设置（component_props）时的读取降级（2026-10-26，设计 §3.5.1）
+// ---------------------------------------------------------------------------
+
+/**
+ * 造一份「某个字段缺 `component_props`」的模板（只在测试里构造）。
+ *
+ * 生产模板不允许出现这种形状：一致性门禁在 `generation-family-template-consistency.test.ts`
+ * 逐族钉死「素材位与画幅字段必须带 component_props」。本函数只用于验证读取侧遇到这种模板时
+ * 必须降级而不是让整份投影抛错。
+ */
+const withoutComponentProps = (
+  sources: GenerationFamilyTemplateSources,
+  fieldKey: string,
+): GenerationFamilyTemplateSources => {
+  const runtimeModel = asRaw(cloneJsonValue(sources.runtimeModel));
+  const parameterSchema = asRaw(runtimeModel.parameter_schema);
+  const rawFields = Array.isArray(parameterSchema.fields) ? parameterSchema.fields : [];
+  let stripped = false;
+  const fields: JsonObject[] = [];
+  for (const item of rawFields) {
+    if (!isObjectRecord(item)) continue;
+    if (item.field_key !== fieldKey) {
+      fields.push(item);
+      continue;
+    }
+    const copy: JsonObject = {};
+    for (const [key, value] of Object.entries(item)) {
+      if (key === 'component_props') continue;
+      copy[key] = value;
+    }
+    stripped = true;
+    fields.push(copy);
+  }
+  assert.equal(stripped, true, `基模板字段 ${fieldKey} 必须带 component_props，否则本用例失去意义`);
+  parameterSchema.fields = fields;
+  return {
+    runtimeModel,
+    node: sources.node,
+    localizationResources: sources.localizationResources,
+  };
+};
+
+void test('缺 component_props：跳过张数/多选写入并留痕，其余合成照常，整份投影不抛错', () => {
+  const degraded = withoutComponentProps(I2I_SOURCES, 'image');
+  const overrides = overridesOf({
+    official: [
+      // 同一字段既改发送名又改张数：只允许「张数」这一维跳过，发送名必须照常生效。
+      { field_key: 'image', wire_name: 'reference_images', media_max_files: 3 },
+      { field_key: 'quality', enum_options: ['low', 'high'] },
+    ],
+    custom: [],
+  });
+  // 缺显示设置不改变保存期校验结论：覆盖本身合法（这正是「保存放行、投影抛错」的形态）。
+  assert.deepEqual(violationsOf(degraded, overrides), [], '缺显示设置不得改变保存期校验结论');
+
+  const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'overrides-missing-props-'));
+  const previousRoot = process.env['IART_STORAGE_ROOT'];
+  const previousLogLevel = process.env['IART_LOG_LEVEL'];
+  process.env['IART_STORAGE_ROOT'] = storageRoot;
+  process.env['IART_LOG_LEVEL'] = 'debug';
+  let output: GenerationFamilyTemplateSources;
+  try {
+    output = applyParameterOverrides(degraded, overrides);
+  } finally {
+    if (previousRoot === undefined) delete process.env['IART_STORAGE_ROOT'];
+    else process.env['IART_STORAGE_ROOT'] = previousRoot;
+    if (previousLogLevel === undefined) delete process.env['IART_LOG_LEVEL'];
+    else process.env['IART_LOG_LEVEL'] = previousLogLevel;
+  }
+
+  // ① 跳过的只是张数/多选写入：不得凭空造出 component_props。
+  try {
+    assert.equal(
+      fieldRecordOf(output, 'image').component_props,
+      undefined,
+      '缺显示设置时不得替模板补造 component_props',
+    );
+    // ② 发送名仍生效（只跳过张数维度）。
+    assert.notEqual(payloadRulesOf(output)['body.reference_images'], undefined, '发送名改写不受影响');
+    // ③ 端口不得被改小/改大：张数没写进表单，端口也必须保持模板值（否则表单与画布错位）。
+    const outputNode = asRaw(output.node);
+    const ports = Array.isArray(outputNode.input_ports) ? outputNode.input_ports : [];
+    const imagePort = ports
+      .map((item) => (isObjectRecord(item) ? item : null))
+      .find((item) => item !== null && item.field_key === 'image');
+    assert.ok(imagePort, '素材位端口必须存在');
+    assert.equal(imagePort.max_connections, undefined, '张数写入被跳过时端口也不得写入张数');
+    // ④ 其余字段照常合成（其余覆盖、自定义字段、模板其余字段都不受影响）。
+    const qualityOptions = fieldRecordOf(output, 'quality').enum_options;
+    assert.deepEqual(
+      (Array.isArray(qualityOptions) ? qualityOptions : []).map((item) => (isObjectRecord(item) ? item.value : null)),
+      ['low', 'high'],
+    );
+    // ⑤ 整份投影必须成功返回（症状是「一条记录的降级拖垮整份模型列表」，这里钉死首尾）。
+    assert.doesNotThrow(() => {
+      buildProjectionFromPackageSources({
+        packageId: 'declared-openai-image-v1',
+        entryModelModelId: 'overrides-unit-model-ref',
+        protocolFormat: undefined,
+        runtimeModel: output.runtimeModel,
+        node: output.node,
+        localizationResources: output.localizationResources,
+      });
+    }, '缺显示设置的降级必须让整份投影成功构建');
+    // ⑥ 留痕：debug 日志点名模型与字段（条件跳过必须留痕）。
+    const logPath = path.join(storageRoot, 'logs', 'backend.log');
+    assert.equal(fs.existsSync(logPath), true, '条件跳过必须写 backend.log');
+    const logText = fs.readFileSync(logPath, 'utf-8');
+    assert.match(logText, /component_props missing, override write skipped/);
+    assert.match(logText, /overrides-unit-model-ref/, '留痕必须点名哪个模型');
+    assert.match(logText, /"fieldKey":"image"/, '留痕必须点名哪个字段');
+  } finally {
+    fs.rmSync(storageRoot, { recursive: true, force: true });
+  }
 });

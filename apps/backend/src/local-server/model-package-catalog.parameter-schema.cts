@@ -31,13 +31,14 @@ import {
 const SUPPORTED_FIELD_COMPONENTS = new Set(
   MODEL_ASSET_SUPPORTED_FIELD_COMPONENTS.map((item) => item.toLowerCase()),
 );
-/* 「允许空 fields」的例外已移除：那是给对话模型包的（对话没有生成参数表），
-   而对话模型已不再由能力包承载。 */
+/* 空 fields 是合法形态：生成格式可以没有模型参数（参数区可为空），提示词由
+   `prompt_field` 单独承载，不是参数。旧注释里的「对话模型包例外」已随对话模型退出
+   能力包链路消失，但空参数表本身不能因此被当成坏数据。 */
 export const validateParameterSchema = (value: unknown) => {
   if (!isObjectRecord(value)) {
     throw new Error("runtime_model.parameter_schema_missing");
   }
-  if (!Array.isArray(value.fields) || value.fields.length === 0) {
+  if (!Array.isArray(value.fields)) {
     throw new Error("runtime_model.parameter_schema_fields_missing");
   }
   value.fields.forEach((field, index) => {

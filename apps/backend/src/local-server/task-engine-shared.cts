@@ -106,6 +106,8 @@ type PlainObject = {
   sourceKind: unknown | undefined;
   sourceMimeType: unknown | undefined;
   sourceNodeId: unknown | undefined;
+  /** 失败阶段（task-failure-stage 契约；只随失败信息写入，不是独立列）。 */
+  stage: unknown | undefined;
   startedAt: unknown | undefined;
   status: unknown | undefined;
   statusFieldPaths: unknown | undefined;

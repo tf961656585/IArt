@@ -2,10 +2,12 @@ import { useState, type Dispatch, type ReactNode, type SetStateAction } from 're
 import type {
   CustomGenerationModel,
   FamilyTemplateParameterDescriptor,
+  InterfaceRecipe,
   ProviderConnection,
 } from '@iart/contracts';
 import type { HubApiClient } from '../../../client/types';
 import type { GenerationModelFormPayload } from './GenerationModelForm';
+import type { InterfaceFormatOption } from './useInterfaceFormatOptions';
 import {
   GenerationModelEditDialog,
   type GenerationModelEditPayload,
@@ -51,6 +53,11 @@ type RunWrite = (
 export function useGenerationModelManagement(options: {
   api: HubApiClient;
   customGenerationModels: CustomGenerationModel[];
+  /** 接口配方公共库：添加 / 修改模型时按接口格式过滤后供选择 */
+  interfaceRecipes: InterfaceRecipe[];
+  interfaceRecipesUnavailable: boolean;
+  /** 接口格式选项表：只用于把格式 id 显示成人话名 */
+  formatOptions?: readonly InterfaceFormatOption[];
   dialogFailure: string | null;
   reload: () => Promise<void>;
   setNotice: Dispatch<SetStateAction<ProviderNotice | null>>;
@@ -62,6 +69,9 @@ export function useGenerationModelManagement(options: {
   const {
     api,
     customGenerationModels,
+    interfaceRecipes,
+    interfaceRecipesUnavailable,
+    formatOptions = [],
     dialogFailure,
     reload,
     setNotice,
@@ -110,11 +120,13 @@ export function useGenerationModelManagement(options: {
         connection_id: connection.connection_id,
         // 远端模型名留空即按模型 ID 请求（契约缺省回落 model_id）
         ...(payload.remoteModelId === null ? {} : { remote_model_id: payload.remoteModelId }),
-        // 接口类型随表单选择落库（2026-09-26 起协议归属模型级，不再从连接继承）
+        // 接口格式随表单选择落库（2026-09-26 起协议归属模型级，不再从连接继承）
         family_adapter_id: payload.familyAdapterId,
         accepted_media_slots: payload.acceptedMediaSlots,
         // 没有自定义任何参数时请求体不带 parameter_overrides：与不带本字段的既有行为完全一致
         ...(payload.parameterOverrides === null ? {} : { parameter_overrides: payload.parameterOverrides }),
+        // 不选配方时请求体不带 recipe_id：缺省即该族内置默认（契约口径）
+        ...(payload.recipeId === null ? {} : { recipe_id: payload.recipeId }),
       });
       setNotice({ tone: 'success', text: `已添加「${payload.modelId}」` });
       setDialogFailure(null);
@@ -134,14 +146,14 @@ export function useGenerationModelManagement(options: {
     }
   };
 
-  /** 族模板参数描述的装载（「高级参数自定义」展开时由表单按当前所选接口类型调用）。 */
+  /** 族模板参数描述的装载（「高级参数自定义」展开时由表单按当前所选接口格式调用）。 */
   const loadParameterTemplate = (familyAdapterId: string): Promise<FamilyTemplateParameterDescriptor> =>
     api.getGenerationFamilyTemplate(familyAdapterId, undefined);
 
   /**
    * 装配一条连接的「自定义接口的模型」区块（合并弹窗 AddModelDialog 的 customForm）：
    * 返回模板装载与提交的绑定。2026-09-26 起协议归属模型级（记录自带 `family_adapter_id`），
-   * 自建表单不再按连接接口类型设限——每条连接的生成侧入口都有这个区块。
+   * 自建表单不再按连接接口格式设限——每条连接的生成侧入口都有这个区块。
    */
   const generationCustomFormFor = (
     connection: ProviderConnection,
@@ -177,6 +189,8 @@ export function useGenerationModelManagement(options: {
       await api.updateCustomGenerationModel(record.model_id, {
         accepted_media_slots: payload.acceptedMediaSlots,
         parameter_overrides: payload.parameterOverrides,
+        // 三态：undefined = 不改（列表读不到）；null = 清除引用；字符串 = 换成该配方
+        ...(payload.recipeId === undefined ? {} : { recipe_id: payload.recipeId }),
       });
       setNotice({ tone: 'success', text: `已保存「${record.model_id}」的模型配置` });
       setDialogFailure(null);
@@ -222,7 +236,10 @@ export function useGenerationModelManagement(options: {
   const generationModelEditDialog: ReactNode = editingGenerationModel === null ? null : (
     <GenerationModelEditDialog
       entry={editingGenerationModel}
-      // 参数描述按记录自带的接口类型装载（协议归属模型级，记录的族归属不可变）
+      recipes={interfaceRecipes}
+      recipesUnavailable={interfaceRecipesUnavailable}
+      formatOptions={formatOptions}
+      // 参数描述按记录自带的接口格式装载（协议归属模型级，记录的族归属不可变）
       loadParameterTemplate={() =>
         api.getGenerationFamilyTemplate(editingGenerationModel.family_adapter_id, undefined)
       }

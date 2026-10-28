@@ -683,3 +683,188 @@ void test('result materialization: output_mapping_rules 未命中时收口 faile
     true,
   );
 });
+
+void test('result output mapping: inline_media raw_base64 补 data: 前缀并按 media_type 兜底 mime', async () => {
+  const { extractMappedTaskOutputs } = await import('../task-result-output-mapping.cts');
+  const rawBase64 = Buffer.from('raw-image-bytes'.repeat(8)).toString('base64');
+  const outputs = extractMappedTaskOutputs({
+    taskRecord: {
+      metadata: {
+        taskExecutionPlan: {
+          result_output_mapping: {
+            response_mode: 'structured_payload',
+            output_mapping_rules: [
+              { target: 'output.image_url', source: { kind: 'response', path: 'b64' }, required: false },
+            ],
+          },
+        },
+      },
+    },
+    responseBody: { b64: rawBase64 },
+  });
+  assert.equal(outputs.length, 1);
+  assert.equal(outputs[0]?.mediaType, 'image');
+  assert.equal(outputs[0]?.url, `data:image/png;base64,${rawBase64}`);
+});
+
+void test('result materialization: raw_base64 内联媒体落盘后一次提交 outputs 与 mediaAssets', async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'iart-result-materialize-raw-b64-'));
+  fs.writeFileSync(path.join(tempDir, 'manifest.json'), JSON.stringify({ name: 'materialize-raw-b64' }), 'utf-8');
+  const rawBytes = Buffer.from('raw-png-bytes-for-materialization'.repeat(4));
+  const rawBase64 = rawBytes.toString('base64');
+
+  const sentMessages: unknown[] = [];
+  const previousSend = (process as NodeJS.Process & { send?: unknown }).send;
+  (process as NodeJS.Process & { send?: (message: unknown) => boolean }).send = (message: unknown) => {
+    sentMessages.push(message);
+    const msg = message as { transactionId?: string };
+    if (msg.transactionId) {
+      setImmediate(() => {
+        emitProcessMessage({
+          type: 'runtime:transaction-result',
+          transactionId: msg.transactionId,
+          success: true,
+        });
+      });
+    }
+    return true;
+  };
+
+  t.after(() => {
+    if (previousSend === undefined) {
+      delete (process as NodeJS.Process & { send?: unknown }).send;
+    } else {
+      (process as NodeJS.Process & { send?: unknown }).send = previousSend;
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const { executeTaskResultMaterialization } = await import('../task-executor.cts');
+  const taskRecord = {
+    taskId: 'task-materialize-raw-b64',
+    id: 'task-materialize-raw-b64',
+    projectPath: tempDir,
+    status: 'polling',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    metadata: {
+      taskId: 'task-materialize-raw-b64',
+      projectPath: tempDir,
+      taskExecutionPlan: {
+        result_output_mapping: {
+          response_mode: 'structured_payload',
+          output_mapping_rules: [
+            {
+              target: 'output.image_url',
+              source: { kind: 'response', path: 'b64' },
+              required: true,
+            },
+          ],
+        },
+      },
+    },
+    response: {
+      status: 200,
+      ok: true,
+      contentType: 'application/json',
+      bodyType: 'json',
+      body: { b64: rawBase64 },
+    },
+  };
+
+  const outputs = await executeTaskResultMaterialization(taskRecord, undefined);
+  assert.equal(outputs.length, 1);
+  assert.equal(outputs[0]?.mediaType, 'image');
+  assert.equal(outputs[0]?.mimeType, 'image/png');
+  assert.match(String(outputs[0]?.url), /^local-media:\/\/prj_[^/]+\/.+\.png$/);
+
+  const finalTransaction = sentMessages
+    .filter(isRuntimeTransactionWithOutputs)
+    .find((message) => message.taskOutputs.length > 0);
+  assert.ok(finalTransaction);
+  assert.equal(finalTransaction.taskOutputs?.[0]?.assetId, finalTransaction.mediaAssets?.[0]?.assetId);
+
+  const storedPath = path.join(tempDir, 'media', String(outputs[0]?.fileKey ?? ''));
+  assert.equal(fs.existsSync(storedPath), true);
+  assert.deepEqual(fs.readFileSync(storedPath), rawBytes, '落盘内容应为解码后的原始字节');
+});
+
+void test('result materialization: requires_auth 但取不到凭证时收口 failed，不退化成无鉴权下载', async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'iart-result-materialize-auth-missing-'));
+  fs.writeFileSync(path.join(tempDir, 'manifest.json'), JSON.stringify({ name: 'materialize-auth-missing' }), 'utf-8');
+
+  const sentMessages: unknown[] = [];
+  const previousSend = (process as NodeJS.Process & { send?: unknown }).send;
+  (process as NodeJS.Process & { send?: (message: unknown) => boolean }).send = (message: unknown) => {
+    sentMessages.push(message);
+    const msg = message as { transactionId?: string };
+    if (msg.transactionId) {
+      setImmediate(() => {
+        emitProcessMessage({
+          type: 'runtime:transaction-result',
+          transactionId: msg.transactionId,
+          success: true,
+        });
+      });
+    }
+    return true;
+  };
+
+  t.after(() => {
+    if (previousSend === undefined) {
+      delete (process as NodeJS.Process & { send?: unknown }).send;
+    } else {
+      (process as NodeJS.Process & { send?: unknown }).send = previousSend;
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const { executeTaskResultMaterialization } = await import('../task-executor.cts');
+  const taskRecord = {
+    taskId: 'task-materialize-auth-missing',
+    id: 'task-materialize-auth-missing',
+    projectPath: tempDir,
+    status: 'polling',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    metadata: {
+      taskId: 'task-materialize-auth-missing',
+      projectPath: tempDir,
+      taskExecutionPlan: {
+        result_output_mapping: {
+          response_mode: 'structured_payload',
+          requires_auth: true,
+          output_mapping_rules: [
+            {
+              target: 'output.video_url',
+              source: { kind: 'response', path: 'video_url' },
+              required: true,
+            },
+          ],
+        },
+      },
+    },
+    response: {
+      status: 200,
+      ok: true,
+      contentType: 'application/json',
+      bodyType: 'json',
+      body: { video_url: 'https://cdn.example.com/out.mp4' },
+    },
+  };
+
+  await assert.rejects(
+    () => executeTaskResultMaterialization(taskRecord, undefined),
+    /鉴权/,
+  );
+
+  const taskTransactions = sentMessages.filter(isRuntimeTransaction);
+  assert.equal(
+    taskTransactions.some((message) => message.tasks?.some((task) => task.status === 'succeeded')),
+    false,
+  );
+  assert.equal(
+    taskTransactions.some((message) => message.tasks?.some((task) => task.status === 'failed')),
+    true,
+  );
+});

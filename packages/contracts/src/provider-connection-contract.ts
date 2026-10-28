@@ -25,13 +25,19 @@ import { TaskSubmitMediaInputSchema } from './task-submit-media-input';
 // ---------------------------------------------------------------------------
 
 export const PROTOCOL_ADAPTER_IDS = [
+  // 生成侧协议 id（8 个预设接口格式 id）。2026-10-27 起生成侧没有代码适配器，本节仅保留
+  // **历史数据解析**：连接上的遗留 `protocol_adapter_id` 与已落库任务快照仍带这些值，
+  // 缩小值域会让整条记录解析失败。现役生成传输事实源是接口格式实体。
   'openai-image-v1',
+  // OpenAI 形状的视频接口格式（2026-10-24 新增）：OpenAI 官方视频服务已于 2026-09-24 关停，
+  // 但 `POST /v1/videos` + job 对象这套**格式**仍被大量第三方 Provider 沿用。
+  'openai-video-v1',
   'gemini-image-interactions-v1',
   'seedance-2-0-v1',
   'veo-v1',
-  // 可灵按官方三个提交端点拆成三个协议适配器（2026-10-19）：官方三个端点的请求体字段并不
+  // 可灵按官方三个提交端点拆成三个接口格式（2026-10-19）：官方三个端点的请求体字段并不
   // 通用（图生视频的 settings 没有 aspect_ratio、omni 的 audio 多一个 original 取值），
-  // 端点即模型身份。三个条目各自只声明自己的提交端点、共用同一组异步任务查询端点。
+  // 端点即模型身份。
   'kling-text2video-v1',
   'kling-image2video-v1',
   'kling-omni-video-v1',
@@ -54,11 +60,12 @@ export type ProtocolAdapterId = z.infer<typeof ProtocolAdapterIdSchema>;
  * 判别联合表达不同官方协议的凭证注入方式，禁止用一组全可选字段覆盖所有形态：
  * - `bearer`：`Authorization: Bearer <secret>`（OpenAI Images、火山 Ark）
  * - `header_api_key`：`<header_name>: <secret>`，无 scheme（Google `x-goog-api-key`）
+ * - `query_api_key`：`?<query_name>=<secret>`（用户自建接口格式的查询参数鉴权，2026-10-27 起）
  *
- * 用户连接只提交一个 API Key 明文；注入位置完全由适配器声明，连接不得自行选择
- * Bearer / query / header 形状（spec 03 §4.3）。
+ * 用户连接只提交一个 API Key 明文；注入位置完全由适配器 / 接口格式声明，连接不得自行选择
+ * Bearer / query / header 形状（spec 03 §4.3）。三种形态共用同一份连接凭证。
  */
-export const ADAPTER_AUTH_KINDS = ['bearer', 'header_api_key'] as const;
+export const ADAPTER_AUTH_KINDS = ['bearer', 'header_api_key', 'query_api_key'] as const;
 export const AdapterAuthKindSchema = z.enum(ADAPTER_AUTH_KINDS);
 export type AdapterAuthKind = z.infer<typeof AdapterAuthKindSchema>;
 
@@ -67,6 +74,13 @@ export const AdapterAuthSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('bearer'),
       header_name: z.string().min(1),
+      /**
+       * scheme 前缀，缺省 `Bearer`。
+       *
+       * 用户自建接口格式可以声明别的 scheme（`Token abc`），执行链必须按声明渲染；
+       * 只认 `Bearer` 会让「用户声明了 A、实际发了 B」变成静默错误。
+       */
+      prefix: z.string().min(1).optional(),
     })
     .strict(),
   z
@@ -75,51 +89,72 @@ export const AdapterAuthSchema = z.discriminatedUnion('kind', [
       header_name: z.string().min(1),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal('query_api_key'),
+      /** 凭证注入的查询参数名（如 `key`）；字符集由接口格式写入侧校验。 */
+      query_name: z.string().min(1),
+    })
+    .strict(),
 ]);
 export type AdapterAuth = z.infer<typeof AdapterAuthSchema>;
 
 /**
- * 按适配器声明的鉴权形态，把凭证明文渲染成最终请求头。
+ * 凭证注入位置：请求头或查询参数（`kind` 是注入位置，不是鉴权形态）。
  *
- * 这是「凭证 → 请求头」的唯一实现点：执行链（提交与轮询）必须调用本函数，
- * 不得各自硬编码 `Bearer` 前缀或 header 名。
+ * 执行链（提交、轮询、取结果）只应消费本结构：拿到 `{ kind:'header' }` 就设请求头，
+ * 拿到 `{ kind:'query' }` 就拼查询参数。把「鉴权形态」与「注入位置」混在一起，
+ * 会让查询参数鉴权被当成请求头写出去。
  */
-export const buildAdapterAuthHeader = (
-  auth: AdapterAuth,
-  secret: string,
-): { name: string; value: string } =>
-  auth.kind === 'bearer'
-    ? { name: auth.header_name, value: `Bearer ${secret}` }
-    : { name: auth.header_name, value: secret };
+export const AdapterAuthInjectionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('header'), name: z.string().min(1), value: z.string() }).strict(),
+  z.object({ kind: z.literal('query'), name: z.string().min(1), value: z.string() }).strict(),
+]);
+export type AdapterAuthInjection = z.infer<typeof AdapterAuthInjectionSchema>;
+
+/**
+ * 按接口格式声明的鉴权形态，把凭证明文渲染成最终注入位置与取值。
+ *
+ * 这是「凭证 → 线路注入」的**唯一实现点**：执行链必须调用本函数，不得各自硬编码
+ * `Bearer` 前缀、header 名或 query 名。
+ */
+export const buildAdapterAuthInjection = (auth: AdapterAuth, secret: string): AdapterAuthInjection => {
+  switch (auth.kind) {
+    case 'bearer':
+      return { kind: 'header', name: auth.header_name, value: `${auth.prefix ?? 'Bearer'} ${secret}` };
+    case 'header_api_key':
+      return { kind: 'header', name: auth.header_name, value: secret };
+    case 'query_api_key':
+      return { kind: 'query', name: auth.query_name, value: secret };
+  }
+};
 
 /**
  * 适配器族（spec 03 §1）：生成能力进 PromptDock 可执行目录；对话能力只作为 agent 形态的
- * 语言模型来源、不进 PromptDock 目录。协议族只由适配器自身声明，消费端不得按 id 硬编码。
+ * 语言模型来源、不进 PromptDock 目录。
+ *
+ * 2026-10-27 起 `generation` 只作历史标记存在：生成侧协议由接口格式实体声明，
+ * 现役注册表（`ADAPTER_REGISTRY`）只剩对话族。
  */
 export const PROTOCOL_ADAPTER_FAMILIES = ['generation', 'chat'] as const;
 export const ProtocolAdapterFamilySchema = z.enum(PROTOCOL_ADAPTER_FAMILIES);
 export type ProtocolAdapterFamily = z.infer<typeof ProtocolAdapterFamilySchema>;
 
 /**
- * ProtocolAdapter：系统内置、不可变、版本化的官方协议执行规则（spec 03 §3）。
+ * ProtocolAdapter：系统内置、不可变、版本化的**对话协议**执行规则（spec 03 §3）。
  *
- * `relative_endpoints` 是该协议**唯一**的 endpoint 事实源（键 = 语义化的 endpoint 名，
+ * `relative_endpoints` 是该协议唯一的 endpoint 事实源（键 = 语义化的 endpoint 名，
  * 值 = 相对路径模板，可含 `{model}` / `{id}` / `{operation_name}` 占位符）。
  *
- * ⚠️ 未完成的收口（spec 03 验收 PC-02「最终 endpoint 只能由适配器相对路径构造」）：
- * 当前模型能力包仍在自己的 `api_defaults.endpoint` / `payload_rules["api.endpoint"]` /
- * `polling_strategy.request.url_template` 里重复声明这些相对路径，执行链消费的是包内的值，
- * 而非本表的派生结果（`adapter-registry.cts` 的 `buildRequestUrl` / `resolveRelativeEndpoint`
- * 在生产代码中零调用方）。因此本表目前是「声明 + 文档」，不是运行时事实源。
- * 待办：① 打包期校验「包内 endpoint 必须是本模型所属适配器声明的路径之一」；
- *       ② 把执行链的 endpoint 解析改为按 endpoint key 从本表派生。
+ * 生成族的等价物是接口格式实体（`interface-format/` 预设 + 用户库）：传输规则由格式声明，
+ * 执行链按声明执行，不再有代码适配器与预设的双份事实源（2026-10-27 退场）。
  */
 export const ProtocolAdapterSchema = z
   .object({
     adapter_id: ProtocolAdapterIdSchema,
     version: z.string().min(1),
     display_name: z.string().min(1),
-    /** 协议族：generation = 生成能力（进 PromptDock 目录）；chat = 对话能力（不进目录） */
+    /** 协议族：`chat` 是现役取值；`generation` 仅为历史数据解析保留 */
     family: ProtocolAdapterFamilySchema,
     auth: AdapterAuthSchema,
     relative_endpoints: z.record(z.string()).optional(),
@@ -137,97 +172,24 @@ export const ProtocolAdapterSchema = z
 
 export type ProtocolAdapter = z.infer<typeof ProtocolAdapterSchema>;
 
-export const ADAPTER_REGISTRY: Record<ProtocolAdapterId, ProtocolAdapter> = {
-  'openai-image-v1': {
-    adapter_id: 'openai-image-v1',
-    version: '1.0.0',
-    display_name: 'OpenAI Image',
-    family: 'generation',
-    auth: { kind: 'bearer', header_name: 'Authorization' },
-    relative_endpoints: {
-      generations: '/v1/images/generations',
-      edits: '/v1/images/edits',
-    },
-    description: 'OpenAI Images API (gpt-image series) — sync generations/edits',
-  },
-  'gemini-image-interactions-v1': {
-    adapter_id: 'gemini-image-interactions-v1',
-    version: '1.0.0',
-    display_name: 'Gemini Image',
-    family: 'generation',
-    auth: { kind: 'header_api_key', header_name: 'x-goog-api-key' },
-    relative_endpoints: {
-      interactions: '/v1beta/interactions',
-    },
-    description: 'Gemini Image (Interactions API) — sync image generation/editing',
-  },
-  'seedance-2-0-v1': {
-    adapter_id: 'seedance-2-0-v1',
-    version: '1.0.0',
-    display_name: 'Seedance 2.0',
-    family: 'generation',
-    auth: { kind: 'bearer', header_name: 'Authorization' },
-    relative_endpoints: {
-      tasks: '/api/v3/contents/generations/tasks',
-      taskById: '/api/v3/contents/generations/tasks/{id}',
-    },
-    description: 'Seedance 2.0 video generation (async polling)',
-  },
-  'veo-v1': {
-    adapter_id: 'veo-v1',
-    version: '1.0.0',
-    display_name: 'Veo',
-    family: 'generation',
-    auth: { kind: 'header_api_key', header_name: 'x-goog-api-key' },
-    relative_endpoints: {
-      predictLongRunning: '/v1beta/models/{model}:predictLongRunning',
-      operation: '/v1beta/{operation_name}',
-    },
-    description: 'Veo video generation (LRO async)',
-  },
-  'kling-text2video-v1': {
-    adapter_id: 'kling-text2video-v1',
-    version: '1.0.0',
-    display_name: 'Kling 文生视频',
-    family: 'generation',
-    auth: { kind: 'bearer', header_name: 'Authorization' },
-    relative_endpoints: {
-      // 官方「新设计标准」（版本在 path，官方推荐）：无 /v1 前缀，模型版本是 path 的一段。
-      // 与旧设计标准（/v1/videos/text2video + body.model_name）互斥，本适配器只承载新标准。
-      // spec：docs/provider-remote-apis/07-Kling-视频生成接口.md §5。
-      textToVideo: '/text-to-video/kling-3.0',
-      // 新标准统一异步查询端点：task_ids / external_task_ids 二选一，批量以英文逗号分隔。
-      taskById: '/tasks?task_ids={id}',
-      taskByExternalId: '/tasks?external_task_ids={id}',
-    },
-    description: 'Kling AI text-to-video (new design standard, async task query)',
-  },
-  'kling-image2video-v1': {
-    adapter_id: 'kling-image2video-v1',
-    version: '1.0.0',
-    display_name: 'Kling 图生视频',
-    family: 'generation',
-    auth: { kind: 'bearer', header_name: 'Authorization' },
-    relative_endpoints: {
-      imageToVideo: '/image-to-video/kling-3.0',
-      taskById: '/tasks?task_ids={id}',
-      taskByExternalId: '/tasks?external_task_ids={id}',
-    },
-    description: 'Kling AI image-to-video (new design standard, async task query)',
-  },
-  'kling-omni-video-v1': {
-    adapter_id: 'kling-omni-video-v1',
-    version: '1.0.0',
-    display_name: 'Kling 全模态视频',
-    family: 'generation',
-    auth: { kind: 'bearer', header_name: 'Authorization' },
-    relative_endpoints: {
-      omniVideo: '/omni-video/kling-3.0-omni',
-      taskById: '/tasks?task_ids={id}',
-      taskByExternalId: '/tasks?external_task_ids={id}',
-    },
-    description: 'Kling AI omni video (new design standard, async task query)',
-  },
+export const CHAT_PROTOCOL_ADAPTER_IDS = [
+  'openai-chat-completions-v1',
+  'openai-responses-v1',
+  'anthropic-messages-v1',
+  'gemini-chat-v1',
+] as const;
+
+export const ChatProtocolAdapterIdSchema = z.enum(CHAT_PROTOCOL_ADAPTER_IDS);
+export type ChatProtocolAdapterId = z.infer<typeof ChatProtocolAdapterIdSchema>;
+
+/**
+ * 现役适配器注册表（只剩对话族）。
+ *
+ * 生成族的传输定义 2026-10-26 起由接口格式实体承载；2026-10-27 执行链接管后本表不再保留
+ * 生成条目——预设格式与代码适配器的双份声明一并退场，生成侧执行只认格式声明。
+ * `PROTOCOL_ADAPTER_IDS` 仍保留 8 个预设 id，仅用于解析历史数据（连接遗留字段与历史任务快照）。
+ */
+export const ADAPTER_REGISTRY: Record<ChatProtocolAdapterId, ProtocolAdapter> = {
   'openai-chat-completions-v1': {
     adapter_id: 'openai-chat-completions-v1',
     version: '1.0.0',
@@ -280,12 +242,13 @@ export const ADAPTER_REGISTRY: Record<ProtocolAdapterId, ProtocolAdapter> = {
 };
 
 /**
- * 协议族判定的唯一入口：按适配器 id 判断是不是对话协议。
+ * 协议族判定的唯一入口：按协议 id 判断是不是对话协议。
  *
  * Hub 弹层据此在「生成模型目录 / 对话模型目录」之间选择数据源；消费端不得另建 id 清单。
+ * 生成侧协议 id 是接口格式 id（2026-10-27 起生成侧不再有代码适配器），恒返回 false。
  */
-export const isChatProtocolAdapterId = (adapterId: ProtocolAdapterId): boolean =>
-  ADAPTER_REGISTRY[adapterId].family === 'chat';
+export const isChatProtocolAdapterId = (adapterId: ProtocolAdapterId): adapterId is ChatProtocolAdapterId =>
+  ChatProtocolAdapterIdSchema.safeParse(adapterId).success;
 
 /**
  * 该适配器能否承载某个思考档位（spec 37「思考档位」）。
@@ -296,23 +259,6 @@ export const isChatProtocolAdapterId = (adapterId: ProtocolAdapterId): boolean =
  */
 export const canAdapterExpressThinkingTier = (adapter: ProtocolAdapter, tier: string): boolean =>
   isBuiltinThinkingTier(tier) || adapter.supports_custom_thinking_tiers === true;
-
-/**
- * 对话协议适配器 id 清单与 schema：自建对话模型记录 `protocol_adapter_id` 的值域
- * （2026-09-26 起协议归属模型级）。
- *
- * 与下方 `CHAT_PROTOCOL_TO_CHAT_ADAPTER` 的键集必须一致（一致性由 contracts 测试钉住）；
- * 消费端不得各自另列对话协议清单。
- */
-export const CHAT_PROTOCOL_ADAPTER_IDS = [
-  'openai-chat-completions-v1',
-  'openai-responses-v1',
-  'anthropic-messages-v1',
-  'gemini-chat-v1',
-] as const;
-
-export const ChatProtocolAdapterIdSchema = z.enum(CHAT_PROTOCOL_ADAPTER_IDS);
-export type ChatProtocolAdapterId = z.infer<typeof ChatProtocolAdapterIdSchema>;
 
 /**
  * 对话协议 → 执行层对话适配器（`ChatAdapterId`）的**唯一映射**（spec 03 §1）。
@@ -480,10 +426,40 @@ export const BatchIntentSnapshotSchema = z
 export type BatchIntentSnapshot = z.infer<typeof BatchIntentSnapshotSchema>;
 
 /**
+ * 快照冻结的协议身份与鉴权形态（2026-10-27 起执行链的唯一来源）。
+ *
+ * - `generation_format`：生成侧协议由**接口格式实体**声明，快照冻结格式 id、格式版本与
+ *   声明的鉴权形状。格式之后被编辑/删除不影响在跑任务（与预设升级同一冻结语义）。
+ * - `chat_adapter`：对话侧仍是代码内置适配器（对话族不实体化），冻结适配器 id、版本与鉴权。
+ *
+ * 鉴权形状必须进快照：执行链在提交、轮询、结果获取三处注入凭证，若在执行时现查格式，
+ * 用户删除或改写格式就会改变在跑任务的传输语义。
+ */
+export const ExecutionProtocolSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('generation_format'),
+      format_id: z.string().min(1),
+      format_version: z.string().min(1),
+      auth: AdapterAuthSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('chat_adapter'),
+      adapter_id: ProtocolAdapterIdSchema,
+      adapter_version: z.string().min(1),
+      auth: AdapterAuthSchema,
+    })
+    .strict(),
+]);
+export type ExecutionProtocol = z.infer<typeof ExecutionProtocolSchema>;
+
+/**
  * ExecutionSnapshot：Runtime Backend 在任务实际派发前按 active 接入目标解析并冻结的不可变快照
  * （spec 03 §8 / spec 45 §5.2 / runtime spec）。
  *
- * - 冻结连接身份与配置修订、适配器身份与版本、Base URL、remote_model_id、鉴权策略与凭证版本引用、已解析 endpoint 与参数。
+ * - 冻结连接身份与配置修订、协议身份与版本、鉴权形状、Base URL、remote_model_id、凭证版本引用、已解析 endpoint 与参数。
  * - `deployment_id` 语义为「active 接入记录 id」：其值即该模型的记录 id（2026-10-19 起部署载体退场，字段名沿用）。
  * - credential_lease 关联（spec 03 §5.3 Credential lease）：远端已受理后租约保留到任务终态；
  *   lease_state: 'active'（持有中）/ 'released'（任务终态后释放）。credential_ref 只承载不可逆引用，不承载明文 Key。
@@ -497,8 +473,17 @@ export const ExecutionSnapshotSchema = z
     deployment_id: z.string().regex(/^up_dep_[a-z0-9][a-z0-9-_]*$/),
     connection_id: z.string().regex(/^up_conn_[a-z0-9][a-z0-9-_]*$/),
     connection_revision: z.number().int().nonnegative(),
-    adapter_id: ProtocolAdapterIdSchema,
-    adapter_version: z.string().min(1),
+    /** 协议身份与鉴权形状；2026-10-27 起新快照恒有值，缺省只出现在历史记录里 */
+    protocol: ExecutionProtocolSchema.optional(),
+    /**
+     * @deprecated 历史快照的协议身份（生成 = 预设格式 id，对话 = 协议适配器 id）。
+     *
+     * 仅为读取已落库任务记录保留：新快照写 `protocol`，不再写本字段。读取侧通过
+     * `resolveSnapshotProtocol` 统一回退，禁止在调用点各写一份。
+     */
+    adapter_id: ProtocolAdapterIdSchema.optional(),
+    /** @deprecated 历史快照的适配器版本；与 `adapter_id` 同批保留，原因同上。 */
+    adapter_version: z.string().min(1).optional(),
     base_url: z.string().regex(/^https:\/\//),
     remote_model_id: z.string().min(1),
     credential_ref: z.string().min(1).optional(),

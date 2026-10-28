@@ -1,5 +1,5 @@
-import { CloudUpload, Globe, Palette, RefreshCw, Server, SlidersHorizontal, Terminal, type LucideIcon } from 'lucide-react';
-import { Button, cn } from '@iart/ui';
+import { CloudUpload, Globe, Layers, Palette, RefreshCw, Server, SlidersHorizontal, Terminal, type LucideIcon } from 'lucide-react';
+import { Button, cn, SELECTION_SOFT_COMPACT_CLASSES } from '@iart/ui';
 
 /**
  * 设置页左侧分区导航（spec docs/hub/hub-information-architecture.md §5.2）。
@@ -8,7 +8,7 @@ import { Button, cn } from '@iart/ui';
  * 激活态由「当前显示的是哪个分区」直接决定（SettingsTab 的 sectionId），不由滚动位置推断——
  * 滚动推断会让导航说谎（高亮项与屏幕上占多数的分区可以不一致）。
  *
- * 列出全部两个一级分区的子单元（通用 6 + 服务商与模型 1），按 spec §5.1/§7.2 顺序排列，
+ * 列出全部两个一级分区的子单元（通用 6 + 服务商与模型 2），按 spec §5.1/§7.2 顺序排列，
  * 按分区分组。视觉与 Hub 主侧边栏同源（spec §5.2：ghost 按钮 + 选中态令牌 + 图标色）。
  */
 
@@ -38,7 +38,10 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   },
   {
     label: '服务商与模型',
-    items: [{ id: 'providers', label: '服务商', icon: Server }],
+    items: [
+      { id: 'providers', label: '服务商', icon: Server },
+      { id: 'interface-formats', label: '接口格式', icon: Layers },
+    ],
   },
 ];
 
@@ -73,10 +76,13 @@ export function SettingsNav({ activeId, onSelect }: SettingsNavProps) {
                 key={item.id}
                 variant="ghost"
                 aria-current={active ? 'page' : undefined}
-                className={cn('justify-start gap-2', active && 'bg-accent text-accent-foreground')}
+                className={cn(
+                  'justify-start gap-2',
+                  active && SELECTION_SOFT_COMPACT_CLASSES,
+                )}
                 onClick={() => onSelect(item.id)}
               >
-                <Icon className={cn('h-4 w-4', active ? 'text-primary' : 'text-muted-foreground')} />
+                <Icon className={cn('h-4 w-4', active ? 'text-[var(--selection-fg)]' : 'text-muted-foreground')} />
                 {item.label}
               </Button>
             );

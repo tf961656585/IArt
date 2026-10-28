@@ -46,6 +46,7 @@ import { getGroupMembers, isContainerCollapsed } from '@/features/canvas/service
 import {
   noteBatchTaskTerminal,
   registerBatchAcceptance,
+  reopenBatchTaskForRequery,
 } from './batchCompletion';
 import { requestCanvasLocateToNode } from '@/features/canvas/services/canvasLocateRequest';
 import {
@@ -62,6 +63,8 @@ import {
  *   绝不凭 taskId 创建节点；
  * - 终态：succeeded → 首个资产原位 morph、额外资产邻近落位；failed → 保留可重试/删除；
  *   cancel 命令 accepted → 立即移除任务节点；'cancelled' 终态通知对已移除投影幂等忽略；
+ * - 「重新查询结果」的 failed → polling 复活（Spec docs/editor/失败任务重新查询-design.md）：
+ *   同一任务节点原地清空失败事实与旧进度，不新建节点/批次；未收口批次撤销终态记账。
  * - 项目重开从持久化节点恢复合法 Task/Asset 投影，再用 storage read/snapshot 补全；
  *   绝不从 ResultArea slot 或 taskId 自动造节点。
  */
@@ -121,6 +124,13 @@ const readMetadataString = (metadata: unknown, key: string): string => {
   return typeof value === 'string' ? value : '';
 };
 
+const readMetadataPositiveInt = (metadata: unknown, key: string): number => {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return 0;
+  const value: unknown = Reflect.get(metadata, key);
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+};
+
 const buildTaskNodeData = (params: {
   taskId: string;
   taskIndex: number;
@@ -141,6 +151,8 @@ const buildTaskNodeData = (params: {
     progressPhase: params.task?.progressPhase ?? null,
     errorMessage: params.task ? readErrorMessage(params.task) : null,
     failure: params.task ? readFailure(params.task) : null,
+    remoteRequestId: params.task?.remoteRequestId ?? null,
+    requeryCount: params.task ? readMetadataPositiveInt(params.task.metadata, 'requeryCount') : 0,
     createdAt: params.task?.createdAt ?? now,
     updatedAt: params.task?.updatedAt ?? now,
   };
@@ -548,13 +560,30 @@ const applyTaskRowToProjection = (
     return;
   }
 
+  // 「重新查询结果」复活：同一任务 failed → polling。失败事实与旧进度必须显式清空——
+  // 不能用 `??` 继承旧值（轮询失败时后端把 progress.phase 置 null、不携带 failure，
+  // 继承会让新等待态继续显示上一条失败摘要/百分比）。批次台账只对未收口批次撤销终态记账。
+  const isRequeryRevive = taskNode.data.status === 'failed' && status === 'polling';
+  if (isRequeryRevive) {
+    reopenBatchTaskForRequery({ batchId: task.batchId, taskId: task.taskId });
+  }
+
   const nextData: TaskNodeData = {
     ...taskNode.data,
     status: status ?? taskNode.data.status,
-    progressPercent: task.progressPercent ?? taskNode.data.progressPercent,
-    progressPhase: task.progressPhase ?? taskNode.data.progressPhase,
-    errorMessage: readErrorMessage(task),
-    failure: readFailure(task),
+    progressPercent: isRequeryRevive
+      ? null
+      : (task.progressPercent ?? taskNode.data.progressPercent),
+    progressPhase: isRequeryRevive
+      ? null
+      : (task.progressPhase ?? taskNode.data.progressPhase),
+    errorMessage: isRequeryRevive ? null : readErrorMessage(task),
+    failure: isRequeryRevive ? null : readFailure(task),
+    remoteRequestId: task.remoteRequestId ?? taskNode.data.remoteRequestId ?? null,
+    requeryCount:
+      readMetadataPositiveInt(task.metadata, 'requeryCount') ||
+      taskNode.data.requeryCount ||
+      0,
     updatedAt: task.updatedAt ?? Date.now(),
   };
   useCanvasStore.getState().updateNodeData(taskNode.id, nextData, 'promptdock-projection');

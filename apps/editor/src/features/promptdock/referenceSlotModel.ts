@@ -35,6 +35,26 @@ export const candidateSlots = (
   (entry?.media_slots ?? []).filter((slot) => slot.mediaKind === mediaType);
 
 /**
+ * 当前模型是否接受某媒体类型作为参考（参考准入的模型能力判定）。
+ *
+ * 判据只有模型目录下发的素材位清单，与素材来源无关（导入 / 生成 / 加工 / 会话存量一视同仁）：
+ * - `supported`：该媒体类型有素材位，可作参考（余量另由 `resolveAddPlacement` 判定）；
+ * - `unsupported`：模型声明了素材位，但没有该媒体类型的位——参考区放不下它；
+ * - `no-slot-model`：模型没有任何素材位（纯文生图 / 文生视频等）。这是「没有用途模型」的
+ *   兼容口径：沿用既有行为允许加入，引用落未指定，用途域不参与。
+ */
+export type MediaSupport = 'supported' | 'unsupported' | 'no-slot-model';
+
+export const resolveMediaSupport = (
+  entry: SlotCatalogEntry | null | undefined,
+  mediaType: 'image' | 'video' | 'audio',
+): MediaSupport => {
+  const slots = entry?.media_slots ?? [];
+  if (slots.length === 0) return 'no-slot-model';
+  return slots.some((slot) => slot.mediaKind === mediaType) ? 'supported' : 'unsupported';
+};
+
+/**
  * 引用的用途取值（归一）：`undefined` 与 `null` 同义，都是「未指定」。
  *
  * 条目类型上 `slotId` 是可选，读取侧一律经此归一，避免 `undefined !== null` 这类判错。
@@ -43,6 +63,18 @@ export const slotIdOf = (reference: PromptDockReference): string | null => refer
 
 /** 该用途位是否可放多张（多张位即「普通参考」这类用途）。 */
 export const slotIsMulti = (slot: ExecutableCatalogMediaSlot): boolean => slot.maxFiles > 1;
+
+/** 该用途位当前被多少条引用绑定（用途容量判据的唯一计数口径）。 */
+export const slotBindingCount = (
+  references: readonly PromptDockReference[],
+  slot: ExecutableCatalogMediaSlot,
+): number => references.filter((ref) => slotIdOf(ref) === slot.slotId).length;
+
+/** 该用途位是否还有余量（`maxFiles` 是上限，不是「是否多张」的布尔）。 */
+export const slotHasRoom = (
+  slot: ExecutableCatalogMediaSlot,
+  references: readonly PromptDockReference[],
+): boolean => slotBindingCount(references, slot) < slot.maxFiles;
 
 /**
  * 加入参考时的默认落位（设计 §4.3，一次判定、不做二次推断）：
@@ -60,6 +92,56 @@ export const defaultSlotId = (
   if (candidates.length === 1) return candidates[0]?.slotId ?? null;
   const multi = candidates.find((slot) => slotIsMulti(slot));
   return multi?.slotId ?? null;
+};
+
+/**
+ * 「加入参考」的落位结论（设计 §4.3，含容量判据）。
+ *
+ * - `slot`：默认用途还有余量，直接绑它；
+ * - `unspecified`：没有可自动承接的用途（全单张位，或默认多张位已满但同媒体类型还有别的
+ *   候选位有余量）——留给用户在徽章上显式指定；
+ * - `full`：该媒体类型的候选位全部放满，本次不得加入（不静默丢弃，也不制造交不出去的草稿）。
+ */
+export type AddPlacement =
+  | { kind: 'slot'; slotId: string }
+  | { kind: 'unspecified' }
+  | { kind: 'full'; mediaType: 'image' | 'video' | 'audio'; capacity: number };
+
+/**
+ * 给一条新引用决定落位（设计 §4.3）。
+ *
+ * 与 `defaultSlotId` 的区别：默认落位只回答「默认是哪一位」，不知道现有引用；本函数带
+ * `references`，因此是**唯一**能把用途张数落成行为的地方——加入路径必须走它，否则
+ * 「最多 N 张」只会退化成「是不是多张」的布尔。
+ *
+ * 余量按每个位单独计算；该媒体类型全部候选位都没有余量时才拒绝加入。默认多张位放满但
+ * 别的候选位还有余量时落未指定，保住「先加进来、再点徽章标用途」的流程。
+ */
+export const resolveAddPlacement = (
+  entry: SlotCatalogEntry | null | undefined,
+  mediaType: 'image' | 'video' | 'audio',
+  references: readonly PromptDockReference[],
+): AddPlacement => {
+  const candidates = candidateSlots(entry, mediaType);
+  // 没有用途模型的媒体类型沿用既有行为：加入后落未指定，用途域不参与。
+  if (candidates.length === 0) return { kind: 'unspecified' };
+  const remaining = candidates.reduce(
+    (sum, slot) => sum + Math.max(0, slot.maxFiles - slotBindingCount(references, slot)),
+    0,
+  );
+  if (remaining === 0) {
+    const capacity = candidates.reduce((sum, slot) => sum + slot.maxFiles, 0);
+    return { kind: 'full', mediaType, capacity };
+  }
+  // 唯一候选且还有余量 → 唯一去处，直接绑（§4.3 第 1 档）。
+  const only = candidates.length === 1 ? candidates[0] : undefined;
+  if (only !== undefined && slotHasRoom(only, references)) {
+    return { kind: 'slot', slotId: only.slotId };
+  }
+  // 多候选：绑还有余量的多张位；多张位放满则落未指定，不硬塞进已满的位。
+  const multi = candidates.find((slot) => slotIsMulti(slot) && slotHasRoom(slot, references));
+  if (multi !== undefined) return { kind: 'slot', slotId: multi.slotId };
+  return { kind: 'unspecified' };
 };
 
 /**
@@ -153,6 +235,16 @@ export type SlotProblem =
       label: string;
       slotId: string;
       mediaType: 'image' | 'video' | 'audio';
+    }
+  /** 绑定到某用途的条数超过该位声明的张数（模型切换 / 张数改小 / 复用 / 脚本提交）。 */
+  | {
+      kind: 'slot-over-capacity';
+      slotId: string;
+      fieldKey: string;
+      label: string;
+      mediaType: 'image' | 'video' | 'audio';
+      count: number;
+      maxFiles: number;
     };
 
 /**
@@ -161,8 +253,9 @@ export type SlotProblem =
  * 只读草稿的参考条目与模型目录条目，不读参数值、不读后端组装结果——
  * 「`[]` 能过校验」那条旧判据因此被就地关掉，而不是在组装期兜。
  *
- * 三类问题互斥：用途在当前模型上不存在的引用既不占用任何位、也不该再被算成「未指定」，
- * 否则用户会同时看到两条指向同一张图的提示。
+ * 用途在当前模型上不存在的引用既不占用任何位、也不该再被算成「未指定」，
+ * 否则用户会同时看到两条指向同一张图的提示；超量问题按用途位报一次，与「未指定」独立
+ * （超量位上的图都已指定用途，不构成「未指定」）。
  */
 export const collectSlotProblems = (
   references: readonly PromptDockReference[],
@@ -203,6 +296,22 @@ export const collectSlotProblems = (
         mediaType: slot.mediaKind,
       });
     }
+  }
+
+  // 用途位超量：加入路径已按余量落位，这里兜住不经过加入动作的超额来源——模型切换、
+  // Hub 把张数改小、任务复用回填、脚本提交。不静默裁剪：图片是用户的资产，丢哪张都可能丢错。
+  for (const slot of slots) {
+    const count = slotBindingCount(references, slot);
+    if (count <= slot.maxFiles) continue;
+    problems.push({
+      kind: 'slot-over-capacity',
+      slotId: slot.slotId,
+      fieldKey: slot.fieldKey,
+      label: slot.label.length > 0 ? slot.label : slot.fieldKey,
+      mediaType: slot.mediaKind,
+      count,
+      maxFiles: slot.maxFiles,
+    });
   }
 
   // 存在未指定用途的引用（仅当该引用有可选用途时才要求指定）。

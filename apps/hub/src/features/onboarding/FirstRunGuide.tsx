@@ -33,7 +33,7 @@ const GUIDE_STEPS: readonly GuideStepsData[] = [
   },
   {
     title: '添加模型',
-    desc: '在这个服务商的详情里点「添加模型」，填上模型 ID 和接口类型就行。',
+    desc: '在这个服务商的详情里点「添加模型」，填上模型 ID 和接口格式就行。',
   },
   {
     title: '回画布创作',

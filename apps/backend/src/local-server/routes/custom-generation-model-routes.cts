@@ -26,6 +26,7 @@ import {
   checkFamilyMediaSlotSupport,
   getFamilyTemplate,
 } from '../generation-family-templates.registry.cts';
+import { getInterfaceFormat } from '../interface-format/registry.cts';
 import {
   EMPTY_PARAMETER_OVERRIDES,
   validateParameterOverrides,
@@ -83,7 +84,62 @@ const describeBodyError = (issues: readonly { path: readonly PropertyKey[] }[]):
   if (field === 'parameter_overrides') {
     return '高级参数自定义的数据格式无效';
   }
+  if (field === 'recipe_id') {
+    return '接口配方的标识格式不对，请重新选择一份配方';
+  }
   return '模型 ID 只能用字母、数字、.、_、-，且以字母或数字开头';
+};
+
+/**
+ * 写入侧的接口格式可用性守卫（2026-10-26）。
+ *
+ * 契约自本批起只约束 `family_adapter_id` 的形状（`InterfaceFormatIdSchema`），不再有封闭枚举；
+ * 「这个 id 是不是一个可用接口格式」只能由实体注册表裁定：未登记 = 非法输入（拼写错误 /
+ * 已移除的旧 id），pending = 合法格式但运行时规则未就绪。两者都必须给可读拒绝，
+ * 而不是把一条注定合成不出模板的记录写进配置。
+ *
+ * 返回 null = 通过；否则返回可读原因。
+ */
+const describeFamilyAvailability = (familyAdapterId: string): string | null => {
+  const entry = getFamilyTemplate(familyAdapterId);
+  if (entry === null) {
+    loggingModule.logDebug('[custom-generation-model-routes] unknown interface format id', {
+      familyAdapterId,
+    });
+    return '这个接口类型不能用于生成模型';
+  }
+  if (entry.status !== 'ready') {
+    loggingModule.logDebug('[custom-generation-model-routes] interface format pending, record refused', {
+      familyAdapterId,
+      pendingReason: entry.pendingReason,
+    });
+    return '这个接口类型还在支持中，暂时不能添加这类模型';
+  }
+  return null;
+};
+
+/**
+ * 用户自建格式的配方必填守卫（2026-10-26 批次 B5a）。
+ *
+ * 用户自建格式没有内置行为，判定与结果形态只能来自配方：没有配方 = 一条永远判不出成功的记录。
+ * 预设格式仍可选（它们带内置默认判定）。store 里有同一份判断（写入的唯一落盘入口），这里
+ * 先挡一次是为了「表单没选配方」时直接给出可读原因，而不是等到 store 返回。
+ *
+ * 返回 null = 通过；否则返回可读原因。
+ */
+const describeUserFormatRecipeRequirement = (
+  familyAdapterId: string,
+  recipeId: string | undefined,
+): string | null => {
+  if (recipeId !== undefined) return null;
+  const lookup = getInterfaceFormat(familyAdapterId);
+  if (lookup.kind === 'ready' && lookup.format.origin === 'user') {
+    loggingModule.logDebug('[custom-generation-model-routes] user interface format without recipe refused', {
+      familyAdapterId,
+    });
+    return '这个接口格式是本机自定义的，添加模型时必须选择一份判定配方';
+  }
+  return null;
 };
 
 /**
@@ -183,11 +239,24 @@ const createCustomGenerationModelRoutes = (): RouteDefinition[] => [
         sendError(res, 400, ERROR_CODES.INVALID_CONFIG, describeBodyError(parsed.error.issues), corsHeaders);
         return;
       }
-      // 一次写入第一段：归属校验（连接存在、enabled、有凭证；协议由请求体自带的
-      // family_adapter_id 声明，值域由契约 enum 保证与已登记族模板一一对应）
+      // 一次写入第一段：接口格式可用性 + 归属校验（连接存在、enabled、有凭证）。协议由请求体
+      // 自带的 family_adapter_id 声明；2026-10-26 起契约只约束 id 形状，值域由实体注册表裁定。
+      const familyError = describeFamilyAvailability(parsed.data.family_adapter_id);
+      if (familyError !== null) {
+        sendError(res, 400, ERROR_CODES.INVALID_CONFIG, familyError, corsHeaders);
+        return;
+      }
       const ownershipError = describeConnectionOwnershipError(parsed.data.connection_id);
       if (ownershipError !== null) {
         sendError(res, 400, ERROR_CODES.INVALID_CONFIG, ownershipError, corsHeaders);
+        return;
+      }
+      const recipeRequirementError = describeUserFormatRecipeRequirement(
+        parsed.data.family_adapter_id,
+        parsed.data.recipe_id,
+      );
+      if (recipeRequirementError !== null) {
+        sendError(res, 400, ERROR_CODES.INVALID_CONFIG, recipeRequirementError, corsHeaders);
         return;
       }
       // 素材位 × 族能力一致性守卫（写入侧唯一实现，判断依据是族模板注册表的能力事实）
@@ -220,10 +289,21 @@ const createCustomGenerationModelRoutes = (): RouteDefinition[] => [
         ...(parsed.data.parameter_overrides === undefined
           ? {}
           : { parameter_overrides: parsed.data.parameter_overrides }),
+        ...(parsed.data.recipe_id === undefined ? {} : { recipe_id: parsed.data.recipe_id }),
       });
       if (!result.ok) {
+        if (result.reason === 'family_adapter_not_ready') {
+          // store 侧守卫的可读原因原样透给用户（路由侧已先挡一次，这里是纵深防御）
+          sendError(res, 400, ERROR_CODES.INVALID_CONFIG, result.message, corsHeaders);
+          return;
+        }
         if (result.reason === 'media_slot_not_supported_by_family') {
           // store 侧守卫的可读原因原样透给用户（路由侧已先挡一次，这里是纵深防御）
+          sendError(res, 400, ERROR_CODES.INVALID_CONFIG, result.message, corsHeaders);
+          return;
+        }
+        if (result.reason === 'recipe_reference_invalid') {
+          // 引用校验的唯一实现在 store（与 PUT 共用），可读原因原样透给用户。
           sendError(res, 400, ERROR_CODES.INVALID_CONFIG, result.message, corsHeaders);
           return;
         }
@@ -292,6 +372,20 @@ const createCustomGenerationModelRoutes = (): RouteDefinition[] => [
           sendError(res, 400, ERROR_CODES.INVALID_CONFIG, mediaSlotError, corsHeaders);
           return;
         }
+        // 用户自建格式不能清除配方（三态里的 `null`）：清除后该记录永远判不出成功。
+        if (parsed.data.recipe_id === null) {
+          const clearError = describeUserFormatRecipeRequirement(existing.family_adapter_id, undefined);
+          if (clearError !== null) {
+            sendError(
+              res,
+              400,
+              ERROR_CODES.INVALID_CONFIG,
+              '这个接口格式是本机自定义的，不能清除判定配方；请改选另一份配方',
+              corsHeaders,
+            );
+            return;
+          }
+        }
         // parameter_overrides 缺省 = 保持现有覆盖不变；出现 = 整体替换（契约口径）。
         if (parsed.data.parameter_overrides !== undefined) {
           const overrideErrors = validateOverridesForFamily(
@@ -310,10 +404,16 @@ const createCustomGenerationModelRoutes = (): RouteDefinition[] => [
           ...(parsed.data.parameter_overrides === undefined
             ? {}
             : { parameter_overrides: parsed.data.parameter_overrides }),
+          // 三态：缺省保持现有引用；null 清除；字符串改为该配方。
+          ...(parsed.data.recipe_id === undefined ? {} : { recipe_id: parsed.data.recipe_id }),
         });
         if (!updated.ok) {
           if (updated.reason === 'media_slot_not_supported_by_family') {
             // store 侧守卫的可读原因原样透给用户（路由侧已先挡一次，这里是纵深防御）
+            sendError(res, 400, ERROR_CODES.INVALID_CONFIG, updated.message, corsHeaders);
+            return;
+          }
+          if (updated.reason === 'recipe_reference_invalid') {
             sendError(res, 400, ERROR_CODES.INVALID_CONFIG, updated.message, corsHeaders);
             return;
           }

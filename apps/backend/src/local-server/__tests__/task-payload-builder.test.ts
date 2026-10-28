@@ -93,6 +93,80 @@ void describe('task-payload-builder failure normalization', () => {
     assert.equal('requestBodyJson' in row, false);
   });
 
+  void it('summarizes media file parts with wire values and source identity', () => {
+    const row = buildRuntimeTaskRow({
+      id: 'task-media-summary',
+      status: 'succeeded',
+      projectPath: '/tmp/demo.iartproj',
+      request: {
+        url: 'https://example.com/v1/videos',
+        method: 'POST',
+        headers: {},
+        body: {
+          __formData: {
+            fields: [
+              { name: 'model', value: 'example-model' },
+              { name: 'prompt', value: '一只猫' },
+            ],
+            files: [
+              {
+                // 出网值：multipart part 上的两个标签（发送链只读这两个）。
+                name: 'reference_image',
+                filename: 'file',
+                contentType: 'application/octet-stream',
+                // 审计值：来源身份与真实媒体类型（发送链不读）。
+                sourceFilename: 'media.png',
+                mimeType: 'image/png',
+                assetId: 'asset-1',
+                slotId: 'reference_image',
+                dataBase64: 'c'.repeat(1024),
+              },
+              {
+                name: 'reference_image',
+                filename: 'file',
+                contentType: 'application/octet-stream',
+                sourceFilename: 'media.png',
+                mimeType: 'image/png',
+                assetId: 'asset-2',
+                slotId: 'reference_image',
+                dataBase64: 'd'.repeat(512),
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    assert.ok(row.requestJson);
+    const summary = JSON.parse(row.requestJson) as {
+      body: {
+        __formData: {
+          fieldCount: number;
+          fileCount: number;
+          fields: unknown[];
+          files: Array<Record<string, unknown>>;
+        };
+      };
+    };
+    const formData = summary.body.__formData;
+    // 文本字段数与媒体文件数分开：只有 fields 的摘要会让「实际出网带了几张图」不可见。
+    assert.equal(formData.fieldCount, 2);
+    assert.equal(formData.fileCount, 2);
+    assert.equal(formData.files.length, 2);
+    const first = formData.files[0];
+    assert.ok(first);
+    assert.equal(first['name'], 'reference_image');
+    assert.equal(first['filename'], 'file');
+    assert.equal(first['contentType'], 'application/octet-stream');
+    assert.equal(first['sourceFilename'], 'media.png');
+    assert.equal(first['mimeType'], 'image/png');
+    assert.equal(first['assetId'], 'asset-1');
+    assert.equal(first['slotId'], 'reference_image');
+    assert.deepEqual(first['dataBase64'], { kind: 'omitted_base64', size: 1024 });
+    // base64 内容本身不进摘要。
+    assert.equal(row.requestJson?.includes('c'.repeat(256)), false);
+  });
+
   void it('projects startedAt/finishedAt into the task row and defaults to null (not undefined)', () => {
     const withTimes = buildRuntimeTaskRow({
       id: 'task-times',

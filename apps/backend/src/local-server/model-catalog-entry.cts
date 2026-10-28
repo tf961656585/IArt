@@ -10,9 +10,17 @@ import {
   type ExecutableModelFailureCode,
 } from '@iart/contracts';
 import * as loggingModule from './logging.cts';
-import { buildDeclaredGenerationProjection } from './generation-declaration-projection.cts';
-import { getFamilyTemplate } from './generation-family-templates.registry.cts';
-import { listCustomGenerationModels } from './provider-connection/custom-generation-model-store.cts';
+import { buildDeclaredGenerationProjection, resolveReferencedRecipe } from './generation-declaration-projection.cts';
+import { getInterfaceFormat } from './interface-format/registry.cts';
+import { collectMediaSlotOfficialFields } from './generation-family-templates.cts';
+import {
+  getFamilyTemplate,
+  type GenerationFamilyTemplateEntry,
+} from './generation-family-templates.registry.cts';
+import {
+  getCustomGenerationModelByRecordId,
+  listCustomGenerationModels,
+} from './provider-connection/custom-generation-model-store.cts';
 import {
   getActiveDeploymentId,
   resolveActiveTarget,
@@ -54,10 +62,13 @@ type ExecutabilityJudgement = {
  * 判定单个 model_id 当前的可执行性（spec 45 §3 / spec 03 §6）。
  *
  * 判定顺序与 spec 45 §3 一行对应，code 稳定可测试；不回退、不补选。
- * active 目标是该模型的**用户模型记录**（spec 03 §6.2）：解析出记录后走连接/凭证/适配器判定。
- * 协议由模型自带（2026-09-26 起协议归属模型级；2026-09-29 起连接不再承载接口类型预选），
- * 取值就是记录上的协议字段；记录无协议即判 adapter_missing——不按 model_id 名称或正则推断，
- * 连接遗留键也不再是协议来源。
+ * active 目标是该模型的**用户模型记录**（spec 03 §6.2）：解析出记录后走连接/凭证/协议判定。
+ *
+ * 协议判定按来源分族（2026-10-27）：
+ * - 生成记录：协议是**接口格式 id**。判定格式是否存在、是否就绪；用户自建格式还必须能解析到
+ *   一份接口配方（自建格式没有内置行为默认，缺配方即不可提交，接口配方-design §8.4）。
+ *   不再查代码适配器——生成侧内置适配器已退场。
+ * - 对话记录：协议是内置对话适配器 id，仍走适配器注册表。
  */
 const judgeExecutability = (modelId: string): ExecutabilityJudgement => {
   const activeDeploymentId = getActiveDeploymentId(modelId);
@@ -105,9 +116,37 @@ const judgeExecutability = (modelId: string): ExecutabilityJudgement => {
       failureCode: 'credential_missing',
     };
   }
-  const protocolAdapterId = access.protocol_adapter_id;
-  const adapter = protocolAdapterId ? getAdapter(protocolAdapterId) : null;
-  if (!adapter) {
+  const protocolId = access.protocol_adapter_id;
+  if (access.source === 'custom_generation') {
+    const formatLookup = getInterfaceFormat(protocolId);
+    if (formatLookup.kind === 'unknown') {
+      return {
+        hasActiveDeployment: true,
+        activeDeploymentId,
+        deployable: false,
+        failureCode: 'format_missing',
+      };
+    }
+    if (formatLookup.kind === 'pending') {
+      return {
+        hasActiveDeployment: true,
+        activeDeploymentId,
+        deployable: false,
+        failureCode: 'format_not_ready',
+      };
+    }
+    if (formatLookup.format.origin === 'user') {
+      const record = getCustomGenerationModelByRecordId(access.target_id);
+      if (record === null || resolveReferencedRecipe(record) === null) {
+        return {
+          hasActiveDeployment: true,
+          activeDeploymentId,
+          deployable: false,
+          failureCode: 'recipe_missing',
+        };
+      }
+    }
+  } else if (!protocolId || !getAdapter(protocolId)) {
     return {
       hasActiveDeployment: true,
       activeDeploymentId,
@@ -209,6 +248,37 @@ const projectParameterFields = (projection: unknown): ExecutableModelDirectoryEn
 };
 
 /**
+ * 素材位的中文显示名（字段键 → 名字），按族缓存一次。
+ *
+ * 为什么绕到族模板而不是直接读参数 schema 的 `label`：投影后的 `label` 是本地化键
+ * （形如 `model-asset/<pkg>:fields.inputReference.label`），按「末段」取会把内部字段键
+ * 当成显示名上屏（`inputReference` / `lastFrame`），契约要求这里是中文名、缺失给空串。
+ * 解析实现只有参数描述符那一份（`collectMediaSlotOfficialFields`），这里复用，不另写。
+ *
+ * 模板是随代码固定的事实，缓存无需失效；一次构建只发生在该族首次投影时。
+ */
+const mediaSlotLabelsByFamily = new Map<string, ReadonlyMap<string, string>>();
+
+const mediaSlotLabelsOf = (
+  familyAdapterId: string,
+  entry: Extract<GenerationFamilyTemplateEntry, { status: 'ready' }>,
+): ReadonlyMap<string, string> => {
+  const cached = mediaSlotLabelsByFamily.get(familyAdapterId);
+  if (cached !== undefined) return cached;
+  const labels = new Map<string, string>();
+  const fields = collectMediaSlotOfficialFields(
+    entry.buildBaseSources('catalog-media-labels', { acceptedMediaSlots: entry.supportsMediaSlots }),
+    entry.mediaSlotFieldKeys,
+  );
+  for (const field of fields) {
+    // 解析不到时 `collectMediaSlotOfficialFields` 回落字段键；契约口径是空串，交给消费端回退。
+    if (field.label !== field.field_key) labels.set(field.field_key, field.label);
+  }
+  mediaSlotLabelsByFamily.set(familyAdapterId, labels);
+  return labels;
+};
+
+/**
  * 媒体素材位投影：给 Editor 渲染「参考区用途」选项用。
  *
  * 事实源两处合一，都来自既有权威，不新建表：
@@ -216,8 +286,8 @@ const projectParameterFields = (projection: unknown): ExecutableModelDirectoryEn
  * - 记录实际启用了哪些位：记录上的 `accepted_media_slots`。
  *
  * 必填口径与 `parameter_schema.required_fields` 同源（某字段键在其中即 required），不另算一套。
- * 中文名取参数 schema 下发的本地化键末段，取不到留空由消费端回退——不在后端硬编码中文，
- * 否则就是第二份界面词表。
+ * 中文名取族模板的 zh-CN 本地化资源（与参数描述符共用同一份解析实现），解析不到给空串由
+ * 消费端回退——不在后端硬编码中文，也不把本地化键末段（内部字段键）当显示名。
  */
 const projectMediaSlots = (options: {
   familyAdapterId: string;
@@ -226,6 +296,7 @@ const projectMediaSlots = (options: {
 }): ExecutableCatalogMediaSlot[] => {
   const entry = getFamilyTemplate(options.familyAdapterId);
   if (entry === null || entry.status !== 'ready') return [];
+  const labelsByFieldKey = mediaSlotLabelsOf(options.familyAdapterId, entry);
   const accepted = new Set(options.acceptedMediaSlots);
   const required = new Set(options.parameterSchema.required_fields);
   const byFieldKey = new Map(options.parameterSchema.fields.map((field) => [field.fieldKey, field]));
@@ -249,9 +320,6 @@ const projectMediaSlots = (options: {
       loggingModule.logDebug('[model-catalog] drop media slot with unknown slot id', { slotId });
       continue;
     }
-    const rawLabel = field.label;
-    const afterNs = rawLabel.includes(':') ? rawLabel.slice(rawLabel.indexOf(':') + 1) : rawLabel;
-    const labelTail = afterNs.split('.').filter((s) => s.length > 0 && s !== 'label').pop() ?? '';
     const mediaKind = ((): 'image' | 'video' | 'audio' => {
       const component = field.component.toLowerCase();
       if (component === 'videoupload') return 'video';
@@ -270,7 +338,7 @@ const projectMediaSlots = (options: {
       required: required.has(fieldKey),
       maxFiles,
       mediaKind,
-      label: labelTail,
+      label: labelsByFieldKey.get(fieldKey) ?? '',
     });
   }
   return slots;
@@ -328,6 +396,14 @@ const buildCatalogEntry = (item: {
    * 不传即视为「无素材位」，输出空数组。
    */
   mediaSlotSource?: { familyAdapterId: string; acceptedMediaSlots: readonly string[] };
+  /**
+   * 记录合成失败的兜底原因码（可选）。
+   *
+   * 只在 `judgeExecutability` 判为可执行时生效：格式就绪、配方可解析，但投影构建失败
+   * （记录被外部改坏）时用它把状态降级为 `deployment_invalid`，而不是让模型从目录里消失。
+   * 更具体的原因（连接、凭证、格式缺失等）优先，不被覆盖。
+   */
+  executabilityFallback?: ExecutableModelFailureCode;
 }): ExecutableModelDirectoryEntry | null => {
   const modelId = item.modelId;
   const projection = item.projection as {
@@ -347,7 +423,11 @@ const buildCatalogEntry = (item: {
     if (!Array.isArray(value)) return [];
     return value.filter((v): v is 'text' | 'image' | 'video' | 'audio' => v === 'text' || v === 'image' || v === 'video' || v === 'audio');
   };
-  const judgement = judgeExecutability(modelId);
+  const judged = judgeExecutability(modelId);
+  const judgement: ExecutabilityJudgement =
+    judged.failureCode === 'none' && item.executabilityFallback !== undefined
+      ? { ...judged, deployable: false, failureCode: item.executabilityFallback }
+      : judged;
   // 展示分组 / 排序取运行时资产已声明的投影值，不在消费端从模态反推、也不新增模型包字段。
   const defaultTaskType =
     typeof projection.runtime?.default_task_type === 'string' ? projection.runtime.default_task_type : '';
@@ -447,39 +527,64 @@ const projectCustomChatModelToCatalogItem = (model: {
 
 /**
  * 可执行目录条目列表（spec 45 §1/§3、spec 03 §6.1/PC-15）：呈现哪些模型只有一个来源——
- * **用户模型记录 × 该族模板的合成投影**。软件不内置任何具体模型，因此本函数不扫描模型包
+ * **用户模型记录 × 该接口格式的合成投影**。软件不内置任何具体模型，因此本函数不扫描模型包
  * 目录、也不按 `model_id` 名称/正则推断族归属（AGENTS.md「禁止按名称推断适配器」）。
  *
- * 准入判据只有一条：该记录的 `family_adapter_id` 指向一个**已就绪**的族模板
- * （`getFamilyTemplate(...).status === 'ready'`）。族模板未就绪或未登记时，记录没有参数表单与
- * 请求/结果规则，不构成可提交模型；对话族记录不走本入口（它只进 `/api/chat-model-catalog`）。
+ * 2026-10-27 起**记录一律进目录**，可执行性只由 `deployable` + `failure_code` 表达：
+ * 格式被删除或未就绪时记录仍在列表里，状态显式标为 `format_missing` / `format_not_ready`，
+ * 用户能看到「哪条模型挂了、去哪修」——此前这类记录被整条跳过，界面只剩「状态未知」。
+ * 这类条目没有参数表单与传输规则，因此 capability / parameter_schema 为空投影，`deployable`
+ * 恒为 false，PromptDock 据此禁用并展示原因。
  *
  * 「没有记录就没有模型」：目录为空即模型为空，不存在任何绕过记录进入目录的路径。
  *
  * 消费方：GET /api/executable-model-catalog 路由与 agent 工具注册表（同一投影，不复制过滤口径）。
  */
+const EMPTY_DECLARATION_PROJECTION = {
+  capability: { input_modalities: [], output_modalities: [] },
+  runtime: { default_task_type: '' },
+  parameter_schema: { fields: [], required_fields: [] },
+} as const;
+
 const listExecutableCatalogEntries = (): ExecutableModelDirectoryEntry[] => {
   const entries: ExecutableModelDirectoryEntry[] = [];
   for (const record of listCustomGenerationModels()) {
-    // 族模板就绪是唯一准入判据（契约值域已保证 family_adapter_id 合法，这里只判就绪与否）。
+    const mediaSlotSource = {
+      familyAdapterId: record.family_adapter_id,
+      acceptedMediaSlots: record.accepted_media_slots,
+    };
+    // 格式就绪是合成前提（契约值域已保证 family_adapter_id 合法，这里只判就绪与否）。
     const template = getFamilyTemplate(record.family_adapter_id);
     if (template === null || template.status !== 'ready') {
-      loggingModule.logDebug('[model-catalog] skip record whose family template is not ready', {
+      loggingModule.logDebug('[model-catalog] include record whose family template is not ready (marked invalid)', {
         modelId: record.model_id,
         familyAdapterId: record.family_adapter_id,
         templateStatus: template === null ? 'unknown' : template.status,
       });
+      const entry = buildCatalogEntry({
+        modelId: record.model_id,
+        projection: EMPTY_DECLARATION_PROJECTION,
+        mediaSlotSource,
+      });
+      if (entry !== null) entries.push(entry);
       continue;
     }
     const built = buildDeclaredGenerationProjection(record);
-    if (built === null) continue;
+    if (built === null) {
+      // 格式就绪但投影构建失败：记录被外部改坏，仍进目录并标为配置不完整，不让它静默消失。
+      const entry = buildCatalogEntry({
+        modelId: record.model_id,
+        projection: EMPTY_DECLARATION_PROJECTION,
+        mediaSlotSource,
+        executabilityFallback: 'deployment_invalid',
+      });
+      if (entry !== null) entries.push(entry);
+      continue;
+    }
     const entry = buildCatalogEntry({
       modelId: record.model_id,
       projection: built.projection,
-      mediaSlotSource: {
-        familyAdapterId: record.family_adapter_id,
-        acceptedMediaSlots: record.accepted_media_slots,
-      },
+      mediaSlotSource,
     });
     if (entry !== null) entries.push(entry);
   }

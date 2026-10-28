@@ -24,6 +24,12 @@ const CUSTOM_CHAT_MODELS_FILENAME = 'custom-chat-models.json';
 // 用户自建生成模型声明（生成模型自建声明试点 §3.2）：模型声明的本机持久化文件
 const CUSTOM_GENERATION_MODELS_VERSION = 1;
 const CUSTOM_GENERATION_MODELS_FILENAME = 'custom-generation-models.json';
+// 接口配方公共库（docs/custom-providers/接口配方-design.md §4/§9）：跨连接共享的判定与结果形态数据
+const INTERFACE_RECIPES_VERSION = 1;
+const INTERFACE_RECIPES_FILENAME = 'interface-recipes.json';
+// 用户自建接口格式库（2026-10-26 批次 B5a）：用户声明的格式实体，与随软件分发的预设分离
+const INTERFACE_FORMATS_VERSION = 1;
+const INTERFACE_FORMATS_FILENAME = 'interface-formats.json';
 // 首次指引展示态记忆（docs/hub/首次指引-design.md §4.1）：已看标记独立小文件
 // （先例 announcement.json；不走 backend.json，引导记忆不是本机配置）
 const ONBOARDING_STATE_FILENAME = 'onboarding-state.json';
@@ -275,6 +281,10 @@ export {
   CUSTOM_CHAT_MODELS_FILENAME,
   CUSTOM_GENERATION_MODELS_VERSION,
   CUSTOM_GENERATION_MODELS_FILENAME,
+  INTERFACE_RECIPES_VERSION,
+  INTERFACE_RECIPES_FILENAME,
+  INTERFACE_FORMATS_VERSION,
+  INTERFACE_FORMATS_FILENAME,
   ONBOARDING_STATE_FILENAME,
   TASK_RESULT_INLINE_LIMIT,
   DEFAULT_POLL_INTERVAL_MS,

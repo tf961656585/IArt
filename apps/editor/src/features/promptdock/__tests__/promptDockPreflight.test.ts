@@ -265,4 +265,75 @@ describe('runPromptDockPreflight：参考区用途', () => {
     expect(issue?.message).toBe('「参考素材」的用途在这个模型上用不了，请重新选一个用途。');
     expect(issue?.slot).toEqual({ slotId: 'first_frame', mediaType: 'image' });
   });
+
+  it('某用途绑定条数超过声明张数 → slot-capacity-exceeded，文案点名差额与出处', () => {
+    const cappedEntry: PromptDockCatalogEntry = {
+      ...buildEntry([]),
+      media_slots: [
+        {
+          slotId: 'reference_image',
+          fieldKey: 'image',
+          required: false,
+          maxFiles: 2,
+          mediaKind: 'image',
+          label: '参考图',
+        },
+      ],
+    };
+    const assets = createMediaAssetMapFixture([
+      createMediaAssetFixture({ id: 'asset_1' }),
+      createMediaAssetFixture({ id: 'asset_2' }),
+      createMediaAssetFixture({ id: 'asset_3' }),
+    ]);
+    const draft: PromptDockDraft = {
+      ...buildDraft('改图', {}),
+      references: [
+        { refId: 'asset_1', assetId: 'asset_1', mediaType: 'image', label: '图一', slotId: 'reference_image' },
+        { refId: 'asset_2', assetId: 'asset_2', mediaType: 'image', label: '图二', slotId: 'reference_image' },
+        { refId: 'asset_3', assetId: 'asset_3', mediaType: 'image', label: '图三', slotId: 'reference_image' },
+      ],
+    };
+
+    const result = runPromptDockPreflight(draft, cappedEntry, assets);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected blocking issues');
+    const issue = result.issues.find((item) => item.code === 'slot-capacity-exceeded');
+    expect(issue).toBeDefined();
+    expect(issue?.message).toBe('「参考图」最多 2 张，现在有 3 张，请先移除 1 张。');
+    expect(issue?.slot).toEqual({
+      slotId: 'reference_image',
+      mediaType: 'image',
+      capacity: { count: 3, maxFiles: 2 },
+    });
+  });
+
+  it('绑定条数恰好等于上限 → 不阻断', () => {
+    const cappedEntry: PromptDockCatalogEntry = {
+      ...buildEntry([]),
+      media_slots: [
+        {
+          slotId: 'reference_image',
+          fieldKey: 'image',
+          required: false,
+          maxFiles: 2,
+          mediaKind: 'image',
+          label: '参考图',
+        },
+      ],
+    };
+    const assets = createMediaAssetMapFixture([
+      createMediaAssetFixture({ id: 'asset_1' }),
+      createMediaAssetFixture({ id: 'asset_2' }),
+    ]);
+    const draft: PromptDockDraft = {
+      ...buildDraft('改图', {}),
+      references: [
+        { refId: 'asset_1', assetId: 'asset_1', mediaType: 'image', label: '图一', slotId: 'reference_image' },
+        { refId: 'asset_2', assetId: 'asset_2', mediaType: 'image', label: '图二', slotId: 'reference_image' },
+      ],
+    };
+
+    expect(runPromptDockPreflight(draft, cappedEntry, assets)).toEqual({ ok: true });
+  });
 });

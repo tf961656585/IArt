@@ -208,6 +208,9 @@ describe('程序化提交共享核心（与界面提交同一构造路径）', (
           mime_type: 'image/png',
           filename: null,
           field_key: 'image',
+          // 资产身份与产品级用途随媒体条目下发（档案据此把出网文件对回资产与用途）。
+          asset_id: 'asset_1',
+          slot_id: 'reference_image',
         },
       ],
       reference_asset_ids: ['asset_1'],
@@ -699,6 +702,45 @@ describe('引用用途：意图携带 / §8 兜底 / 阻断文案可执行', () 
     expect(result.error.code).toBe('command_rejected');
     expect(result.error.message).toContain('last_frame');
     expect(result.error.message).toContain('reference_image');
+    expect(submitGenerationBatchMock).not.toHaveBeenCalled();
+  });
+
+  it('参考图超过声明张数 → 阻断，CLI 文案给「减少 --ref 条目」而不是「指定用途」', async () => {
+    usePromptDockStore.setState({
+      catalog: [
+        createCatalogEntryWithSlots([
+          {
+            slotId: 'reference_image',
+            fieldKey: 'image',
+            required: false,
+            maxFiles: 2,
+            mediaKind: 'image',
+            label: '参考图',
+          },
+        ]),
+      ],
+    });
+    useCanvasStore.setState((state) => {
+      state.mediaAssets = {
+        ...state.mediaAssets,
+        asset_2: mediaAsset('asset_2'),
+        asset_3: mediaAsset('asset_3'),
+      };
+    });
+
+    const result = await submitGenerationBatchFromIntent(
+      legalIntent({
+        refs: [{ assetId: 'asset_1' }, { assetId: 'asset_2' }, { assetId: 'asset_3' }],
+        count: 1,
+      }),
+    );
+
+    if (result.ok) throw new Error('expected error result');
+    expect(result.error.code).toBe('command_rejected');
+    expect(result.error.message).toContain('该用途最多 2 个，当前给了 3 个');
+    expect(result.error.message).toContain('请减少 --ref 中该用途的条目');
+    // 超量的可执行动作是减少条目，不是重新指定用途——两种指引不能混用。
+    expect(result.error.message).not.toContain('指定用途后重试');
     expect(submitGenerationBatchMock).not.toHaveBeenCalled();
   });
 

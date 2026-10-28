@@ -1,7 +1,11 @@
 import { useState, type Dispatch, type SetStateAction } from 'react';
 import { Button, Collapsible, CollapsibleContent, CollapsibleTrigger, cn } from '@iart/ui';
 import { ChevronDown } from 'lucide-react';
-import type { FamilyTemplateParameterDescriptor, ParameterOverrides } from '@iart/contracts';
+import type {
+  FamilyTemplateParameterDescriptor,
+  GenerationMediaSlotId,
+  ParameterOverrides,
+} from '@iart/contracts';
 import {
   collectOverrideIssues,
   ParameterOverridesEditor,
@@ -12,7 +16,7 @@ import {
  * 「高级参数自定义」折叠区（docs/custom-providers/生成模型参数高级自定义-design.md §3.4）。
  *
  * 添加弹层与编辑弹层共用：默认收起，展开时拉一次族模板参数描述（读不到时该区禁用并
- * 显示一行原因，基础动作不受影响；重新展开会再试一次）。添加弹层在接口类型还没选时
+ * 显示一行原因，基础动作不受影响；重新展开会再试一次）。添加弹层在接口格式还没选时
  * 传 `pending`：这不是装载失败，是指引还没到能判断的一步，按专属指引呈现。
  * 参数编辑器是纯受控组件，本文件只负责装载与三态呈现，不掺入提交逻辑——
  * 提交时是否拦截由弹层按 `issues` 判定。
@@ -38,6 +42,7 @@ export type GenerationOverridesSectionState = {
 export function useGenerationOverridesSection(
   loadDescriptor: () => Promise<FamilyTemplateParameterDescriptor>,
   initialValue: ParameterOverrides,
+  liveMediaSlotIds: readonly GenerationMediaSlotId[],
 ): GenerationOverridesSectionState {
   const [open, setOpen] = useState(false);
   const [template, setTemplate] = useState<TemplateLoad>({ kind: 'idle' });
@@ -65,17 +70,21 @@ export function useGenerationOverridesSection(
     value,
     setValue,
     template,
-    // 模板已装载时才算得出即时提示；读不到时不拦提交（权威校验在 Runtime Backend）
-    issues: template.kind === 'loaded' ? collectOverrideIssues(template.descriptor, value) : [],
+    // 模板已装载时才算得出即时提示；读不到时不拦提交（权威校验在 Runtime Backend）。
+    // 素材位行按当前勾选过滤：未勾选位不渲染，也不参与发送名查重。
+    issues: template.kind === 'loaded' ? collectOverrideIssues(template.descriptor, value, liveMediaSlotIds) : [],
   };
 }
 
 export function GenerationOverridesSection({
   state,
+  liveMediaSlotIds,
   pending = false,
 }: {
   state: GenerationOverridesSectionState;
-  /** 接口类型还没选（创建表单空态起步）：优先于装载三态呈现，指引先选接口类型 */
+  /** 当前已勾选的素材位：素材位行只在勾选后出现 */
+  liveMediaSlotIds: readonly GenerationMediaSlotId[];
+  /** 接口格式还没选（创建表单空态起步）：优先于装载三态呈现，指引先选接口格式 */
   pending?: boolean;
 }) {
   return (
@@ -100,7 +109,7 @@ export function GenerationOverridesSection({
       </CollapsibleTrigger>
       <CollapsibleContent className="flex flex-col gap-2">
         {pending ? (
-          <p className="text-xs text-muted-foreground">先选好接口类型，再看能调哪些参数。</p>
+          <p className="text-xs text-muted-foreground">先选好接口格式，再看能调哪些参数。</p>
         ) : state.template.kind === 'loading' ? (
           <p className="text-xs text-muted-foreground">正在读取可调的参数…</p>
         ) : state.template.kind === 'failed' ? (
@@ -112,6 +121,7 @@ export function GenerationOverridesSection({
             descriptor={state.template.descriptor}
             value={state.value}
             onChange={state.setValue}
+            liveMediaSlotIds={liveMediaSlotIds}
           />
         ) : null}
       </CollapsibleContent>

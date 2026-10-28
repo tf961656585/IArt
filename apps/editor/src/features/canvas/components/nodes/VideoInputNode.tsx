@@ -25,21 +25,12 @@ import { importLocalFile } from '../../services/localMediaImport';
 import type { VideoInputNodeData, VideoMeta } from '../../types';
 import { getTaskStatusOverlayText } from '../../utils/taskStatusMeta';
 import { resolveTaskFailurePresentation } from "../../utils/taskFailurePresentation";
-import { clearNodeOutput } from '../../storage';
 import { revealTaskArchive } from '@iart/backend-sdk/electron-bridge';
 import { formatBytesCompact } from '../../utils/mediaSize';
 import { normalizeLocalFileUrlWithQuery, resolveLocalRenderableMediaSource } from '../../utils/mediaUrl';
 import { classifyMediaUrl } from '@/features/models/shared/mediaResolutionTypes';
 import { createFallbackGraphNode, useNodeFromStore } from '../../hooks/useNodeFromStore';
 import { resolveMediaPresentation } from '../../services/mediaPresentation';
-import { VideoNodeToolbar } from './VideoNodeToolbar';
-import { VideoSpriteSheetDialog, type SpriteSheetDialogPayload } from '../dialogs/VideoSpriteSheetDialog';
-import { VideoTrimDialog, type VideoTrimDialogPayload } from '../dialogs/VideoTrimDialog';
-import { VideoFrameCaptureDialog, type VideoFrameCaptureDialogPayload } from '../dialogs/VideoFrameCaptureDialog';
-import { runVideoFrameCaptureDerivation, runVideoTrimDerivation } from '../../services/videoMediaToolDerivation';
-import { processVideoSpriteSheet } from '@/client/api/videoSpriteSheet';
-import { createDerivedImageInputNode } from '../../utils/imageDerivation';
-import { useCanvasSelectionBridge } from '../canvas/useCanvasSelectionBridge';
 
 export const VideoInputNode = memo(function VideoInputNode({ id, data: _data, selected }: NodeProps) {
   const fallback = useMemo(
@@ -50,22 +41,6 @@ export const VideoInputNode = memo(function VideoInputNode({ id, data: _data, se
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const updateNodeData = useCanvasStore((state) => state.updateNodeData);
   const nodeGraphId = useCanvasStore((state) => (state.nodeGraph !== null && state.nodeGraph !== undefined ? state.nodeGraph.id : undefined) ?? '');
-
-  // toolbarVisible 计算（复用 ImageInputNode 模式）
-  const isSoloSelectedInStore = useCanvasStore(
-    (state) => state.selectedNodeIds.length === 1 && state.selectedNodeIds[0] === id,
-  );
-  const selectedNodeCountInStore = useCanvasStore(
-    (state) => state.selectedNodeIds.length,
-  );
-  const toolbarVisible =
-    selectedNodeCountInStore === 0 ? Boolean(selected) : isSoloSelectedInStore;
-
-  // 对话框状态
-  const [spriteSheetDialogOpen, setSpriteSheetDialogOpen] = useState(false);
-  const [trimDialogOpen, setTrimDialogOpen] = useState(false);
-  const [frameCaptureDialogOpen, setFrameCaptureDialogOpen] = useState(false);
-  const { selectNodes } = useCanvasSelectionBridge();
 
   const { videoUrl, videoMeta, valueSource, taskInfo, mediaError, assetId } = useMemo(() => {
     const dataSource = (nodeData ?? null) as VideoInputNodeData | null;
@@ -189,22 +164,6 @@ export const VideoInputNode = memo(function VideoInputNode({ id, data: _data, se
     }
   }, []);
 
-    const handleRemoveVideo = useCallback(() => {
-      // 同时清除前端状态和后端索引，防止轮询同步恢复已删除的视频
-      updateNodeData(id, {
-        videoUrl: null,
-        videoMeta: null,
-        valueSource: undefined,
-        mediaError: undefined,
-        taskInfo: undefined,
-        lastExecutionId: undefined,
-        lastSourceNodeId: undefined,
-        lastSourcePortId: undefined,
-      }, undefined);
-      // 异步清除后端索引（不阻塞 UI）
-      void clearNodeOutput(id);
-    }, [id, updateNodeData]);
-
   const handleVideoMeta = useCallback(
     (meta: VideoMeta) => {
       if (!meta) return;
@@ -240,44 +199,6 @@ export const VideoInputNode = memo(function VideoInputNode({ id, data: _data, se
     updateNodeData(id, { videoMeta: { ...videoMeta, fps: assetFps } }, undefined);
   }, [videoMeta, assetId, mediaAssets, id, updateNodeData]);
 
-  const handleSpriteSheetConfirm = useCallback(
-    async (payload: SpriteSheetDialogPayload) => {
-      if (!videoUrl) {
-        toast.error('还没有可用的视频，请先选择一段');
-        return;
-      }
-      try {
-        const result = await processVideoSpriteSheet(videoUrl, {
-          startTime: payload.startTime,
-          endTime: payload.endTime,
-          fpsMultiplier: payload.fpsMultiplier,
-        });
-        const created = createDerivedImageInputNode({
-          sourceNodeId: id,
-          resultUrl: result.outputUrl,
-          assetId: result.assetId,
-          mediaAsset: result.mediaAsset,
-          derivedOp: {
-            type: 'videoSpriteSheet',
-            rows: result.rows,
-            cols: result.cols,
-            frameWidth: result.frameWidth,
-            frameHeight: result.frameHeight,
-          },
-          selectNodes,
-        });
-        if (!created) {
-          toast.error('没能生成新的视频节点，请重试');
-        }
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : '视频图集生成失败';
-        toast.error(message);
-      }
-    },
-    [id, selectNodes, videoUrl],
-  );
-
   const placeholderText = '拖拽视频到此处，或使用上传按钮';
   const rawVideoUrl = typeof videoUrl === 'string' ? videoUrl.trim() : '';
   const isLocalMedia = classifyMediaUrl(rawVideoUrl).kind === 'local-media';
@@ -285,42 +206,6 @@ export const VideoInputNode = memo(function VideoInputNode({ id, data: _data, se
   const resolvedVideoSource = resolveLocalRenderableMediaSource(rawVideoUrl);
   const resolvedVideoUrl = isLocalMedia ? rawVideoUrl : (resolvedVideoSource.renderUrl ?? undefined);
 
-  // 媒体工具（裁切/截帧）：与结果区 slot 操作、放大预览共用同一执行链路，产出新素材节点
-  const handleTrimConfirm = useCallback(
-    async (payload: VideoTrimDialogPayload) => {
-      if (!rawVideoUrl) {
-        throw new Error('视频缺失');
-      }
-      await runVideoTrimDerivation({
-        sourceNodeId: id,
-        sourceAssetId: assetId ?? undefined,
-        sourceSlotId: undefined,
-        sourceUrl: rawVideoUrl,
-        startTime: payload.startTime,
-        endTime: payload.endTime,
-        withAudio: payload.withAudio,
-        selectNodes,
-      });
-    },
-    [assetId, id, rawVideoUrl, selectNodes],
-  );
-
-  const handleFrameCaptureConfirm = useCallback(
-    async (payload: VideoFrameCaptureDialogPayload) => {
-      if (!rawVideoUrl) {
-        throw new Error('视频缺失');
-      }
-      await runVideoFrameCaptureDerivation({
-        sourceNodeId: id,
-        sourceAssetId: assetId ?? undefined,
-        sourceSlotId: undefined,
-        sourceUrl: rawVideoUrl,
-        timeSec: payload.timeSec,
-        selectNodes,
-      });
-    },
-    [assetId, id, rawVideoUrl, selectNodes],
-  );
   const mediaErrorText = mediaError || (rawVideoUrl && !isLocalMedia && !localRuntimePath ? '结果还没取回本地，暂时无法预览' : '');
   const surfacePlaceholder = mediaErrorText ? (
     <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-4 text-center">
@@ -361,11 +246,9 @@ export const VideoInputNode = memo(function VideoInputNode({ id, data: _data, se
   const sourceBadgeLabel =
     valueSource === 'upload'
       ? '本地上传'
-      : valueSource === 'processed'
-        ? '处理结果'
-        : valueSource === 'upstream'
-          ? '上游节点'
-          : null;
+      : valueSource === 'upstream'
+        ? '上游节点'
+        : null;
 
   const presentationHoverMeta =
     presentation !== null && presentation !== undefined
@@ -503,17 +386,6 @@ export const VideoInputNode = memo(function VideoInputNode({ id, data: _data, se
                   >
                     <IconUpload size={14} />
                   </button>
-                  <button
-                    type="button"
-                    className="pointer-events-auto inline-flex h-6 w-6 items-center justify-center rounded-full bg-white/90 text-destructive shadow hover:bg-white"
-                    aria-label="删除视频"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleRemoveVideo();
-                    }}
-                  >
-                    <IconX size={14} />
-                  </button>
                 </div>
               )}
             </>
@@ -532,42 +404,6 @@ export const VideoInputNode = memo(function VideoInputNode({ id, data: _data, se
         accept="video/*"
         onChange={handleFileChange}
         tabIndex={-1}
-      />
-
-      {/* 视频节点工具栏 */}
-      <VideoNodeToolbar
-        nodeId={id}
-        videoUrl={videoUrl}
-        videoMeta={videoMeta}
-        visible={toolbarVisible}
-        onSpriteSheetClick={() => setSpriteSheetDialogOpen(true)}
-        onTrimClick={() => setTrimDialogOpen(true)}
-        onFrameCaptureClick={() => setFrameCaptureDialogOpen(true)}
-      />
-      {/* 序列帧图集对话框 */}
-      <VideoSpriteSheetDialog
-        open={spriteSheetDialogOpen}
-        onOpenChange={setSpriteSheetDialogOpen}
-        videoUrl={videoUrl}
-        videoMeta={videoMeta}
-        fps={videoMeta !== null && videoMeta !== undefined ? videoMeta.fps : undefined}
-        onConfirm={(payload) => {
-          void handleSpriteSheetConfirm(payload);
-        }}
-      />
-      {/* 裁切视频弹窗（媒体工具） */}
-      <VideoTrimDialog
-        open={trimDialogOpen}
-        onOpenChange={setTrimDialogOpen}
-        videoUrl={resolvedVideoUrl ?? null}
-        onConfirm={handleTrimConfirm}
-      />
-      {/* 截取帧弹窗（媒体工具） */}
-      <VideoFrameCaptureDialog
-        open={frameCaptureDialogOpen}
-        onOpenChange={setFrameCaptureDialogOpen}
-        videoUrl={resolvedVideoUrl ?? null}
-        onConfirm={handleFrameCaptureConfirm}
       />
     </ContentNodeCard>
   );

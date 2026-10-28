@@ -2,26 +2,25 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  ADAPTER_REGISTRY,
   GENERATION_FAMILY_ADAPTER_IDS,
+  type FamilyTemplateParameterDescriptor,
   type GenerationFamilyAdapterId,
   type GenerationMediaSlotId,
 } from '@iart/contracts';
-import {
-  GEMINI_IMAGE_INTERACTIONS_V1_FAMILY_ADAPTER_ID,
-  GEMINI_IMAGE_INTERACTIONS_V1_SUPPORTED_MEDIA_SLOTS,
-  buildGeminiImageInteractionsV1BaseTemplateSources,
-  buildGeminiImageInteractionsV1ParameterDescriptor,
-} from '../generation-family-templates.gemini-image.cts';
 import { buildProjectionFromPackageSources } from '../model-package-catalog.projection.cts';
 import { isObjectRecord } from '../model-package-catalog.shared.cts';
-import { declaredGenerationPackageId } from '../generation-family-templates.cts';
+import {
+  declaredGenerationPackageId,
+  type GenerationFamilyTemplateSources,
+} from '../generation-family-templates.cts';
 import {
   applyParameterOverrides,
   validateParameterOverrides,
 } from '../generation-parameter-overrides.cts';
+import { buildFormatParameterDescriptor, getInterfaceFormat } from '../interface-format/registry.cts';
 import {
   GENERATION_FAMILY_TEMPLATE_REGISTRY,
+  requireFamilyTemplate,
   buildFamilyTemplateSources,
   checkFamilyMediaSlotSupport,
 } from '../generation-family-templates.registry.cts';
@@ -41,6 +40,33 @@ import {
  */
 
 const MODEL_ID = 'declared-gemini-image-test';
+
+/** 接口格式 id（值域由 contracts 的 `GENERATION_FAMILY_ADAPTER_IDS` 裁定）。 */
+const GEMINI_IMAGE_INTERACTIONS_V1_FAMILY_ADAPTER_ID = 'gemini-image-interactions-v1';
+
+/** 测试侧独立期望的素材位清单（不复用注册表，避免同错同过）。 */
+const GEMINI_IMAGE_INTERACTIONS_V1_SUPPORTED_MEDIA_SLOTS: readonly GenerationMediaSlotId[] = [
+  'reference_image',
+];
+
+/** 经实体门面取本族基础模板 sources（与记录合成同一条链路）。 */
+const buildGeminiImageInteractionsV1BaseTemplateSources = (
+  modelId: string,
+  options: { acceptedMediaSlots: readonly GenerationMediaSlotId[] },
+): GenerationFamilyTemplateSources => {
+  const entry = requireFamilyTemplate(GEMINI_IMAGE_INTERACTIONS_V1_FAMILY_ADAPTER_ID);
+  assert.equal(entry.status, 'ready', 'gemini-image-interactions-v1 必须已就绪');
+  if (entry.status !== 'ready') throw new Error('unreachable: family template not ready');
+  return entry.buildBaseSources(modelId, options);
+};
+
+/** 经实体层取本族参数描述符（与 GET 端点同一份构建器）。 */
+const buildGeminiImageInteractionsV1ParameterDescriptor = (): FamilyTemplateParameterDescriptor => {
+  const result = buildFormatParameterDescriptor(GEMINI_IMAGE_INTERACTIONS_V1_FAMILY_ADAPTER_ID);
+  assert.equal(result.kind, 'ready', 'gemini-image-interactions-v1 描述符必须就绪');
+  if (result.kind !== 'ready') throw new Error('unreachable: descriptor not ready');
+  return result.descriptor;
+};
 
 /** 取模板 runtime 段（模板由本仓构建，形状受控；仍按 unknown 收窄不用断言）。 */
 const runtimeOf = (sources: { runtimeModel: { runtime: unknown } }): Record<string, unknown> => {
@@ -160,10 +186,13 @@ void test('gemini 族模板：参考图形态构建出合法 sources 并走通�
   );
   assert.equal(localizationBundle.namespace, `model-asset/${declaredGenerationPackageId(GEMINI_IMAGE_INTERACTIONS_V1_FAMILY_ADAPTER_ID)}`);
 
-  // 提交端点：模板字面量必须与适配器声明一致（一致性门禁的族侧事实）
-  const adapterEndpoint = ADAPTER_REGISTRY['gemini-image-interactions-v1'].relative_endpoints?.['interactions'];
-  assert.equal(adapterEndpoint, '/v1beta/interactions');
-  assert.equal(projection.runtime.api_defaults?.endpoint, adapterEndpoint);
+  // 提交端点：模板字面量必须与格式声明一致（endpoint 的唯一事实源是接口格式实体）
+  const formatLookup = getInterfaceFormat('gemini-image-interactions-v1');
+  assert.equal(formatLookup.kind, 'ready');
+  if (formatLookup.kind !== 'ready') return;
+  const declaredEndpoint = formatLookup.format.transport.endpoints['interactions'];
+  assert.equal(declaredEndpoint, '/v1beta/interactions');
+  assert.equal(projection.runtime.api_defaults?.endpoint, declaredEndpoint);
   assert.equal(projection.runtime.payload_format, 'json');
   assert.equal(
     projection.runtime.url_input_upload_mode,
@@ -457,7 +486,7 @@ void test('gemini 族模板：model_id 字面量同时落在 body.model 与 meta
 });
 
 void test('gemini 族注册表条目：已就绪、能力事实与适配器同源，参数描述可用', () => {
-  const entry = GENERATION_FAMILY_TEMPLATE_REGISTRY['gemini-image-interactions-v1'];
+  const entry = requireFamilyTemplate('gemini-image-interactions-v1');
   assert.equal(entry.status, 'ready');
   assert.equal(entry.familyAdapterId, GEMINI_IMAGE_INTERACTIONS_V1_FAMILY_ADAPTER_ID);
   assert.deepEqual(
@@ -488,7 +517,7 @@ void test('gemini 族注册表条目：已就绪、能力事实与适配器同�
   // 它们的 wire 键是 response_format 而不是各自的字段名。
   for (const reserved of ['model', 'input', 'response_format', 'prompt']) {
     assert.ok(
-      descriptor.reserved_wire_names.includes(reserved),
+      descriptor.reserved_wire_names.body.includes(reserved),
       `保留键 ${reserved} 必须被声明，否则用户自定义参数可能与协议键撞名`,
     );
   }
@@ -497,7 +526,7 @@ void test('gemini 族注册表条目：已就绪、能力事实与适配器同�
   // （不钉「恰是哪几族」：可灵三族由并行批次逐个转 ready，钉死清单会与那条批次互相踩）。
   assert.equal(Object.keys(GENERATION_FAMILY_TEMPLATE_REGISTRY).length, GENERATION_FAMILY_ADAPTER_IDS.length);
   const pendingIds = GENERATION_FAMILY_ADAPTER_IDS.filter(
-    (id: GenerationFamilyAdapterId) => GENERATION_FAMILY_TEMPLATE_REGISTRY[id].status === 'pending',
+    (id: GenerationFamilyAdapterId) => requireFamilyTemplate(id).status === 'pending',
   );
   const KLING_FAMILY_ADAPTER_IDS: readonly GenerationFamilyAdapterId[] = [
     'kling-text2video-v1',
@@ -509,7 +538,7 @@ void test('gemini 族注册表条目：已就绪、能力事实与适配器同�
     [],
     'openai-image / gemini-image / seedance / veo 之外的 pending 只应是可灵三族',
   );
-  assert.equal(GENERATION_FAMILY_TEMPLATE_REGISTRY['veo-v1'].status, 'ready', 'veo 族已就绪');
+  assert.equal(requireFamilyTemplate('veo-v1').status, 'ready', 'veo 族已就绪');
 });
 
 void test('gemini 族模板：记录级参数覆盖可把尺寸档收窄到 1K（lite 型号的用法）', () => {

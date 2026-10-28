@@ -259,6 +259,9 @@ const executeGenerationTool = async (params: {
       value: brief.url,
       mime_type: null,
       filename: null,
+      // 工具调用只带资产标识（没有界面用途信息）：仍记录来源资产，让派生批次的档案能把
+      // 出网文件对回资产；slot_id 缺省（没有可推断的用途，不猜）。
+      asset_id: brief.assetId,
     }));
   const submitRequest: PromptDockBatchSubmitRequest = {
     model_id: entry.model_id,

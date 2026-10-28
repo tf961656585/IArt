@@ -69,6 +69,34 @@ const isHubLocalWriteGuardedRoute = (method: unknown, pathname: string) => {
       return true;
     }
   }
+  // 接口配方公共库（docs/custom-providers/接口配方-design.md §7/§8）：配方管理在主窗口。
+  // POST /api/interface-recipes（新建）、PUT/DELETE /api/interface-recipes/:recipeId（改/删），
+  // 外加两个计算路由 POST /dry-run、POST /path-discovery（同一信任域、由管理页发起，纯本地计算）。
+  // GET 只读不加。
+  if (pathname === '/api/interface-recipes' && isMethod(method, 'POST')) {
+    return true;
+  }
+  if (pathname.startsWith('/api/interface-recipes/')) {
+    if (isMethod(method, 'POST') || isMethod(method, 'PUT') || isMethod(method, 'DELETE')) {
+      return true;
+    }
+  }
+  // 接口格式写路由（2026-10-26 批次 B5a：Hub 主窗口创建/维护用户自建格式）。
+  // POST /api/interface-formats（创建，草稿 → 实体 + 判定配方）、
+  // POST /api/interface-formats/:formatId/copy（复制，整实体克隆 + 配方处理）、
+  // PUT/DELETE /api/interface-formats/:formatId（改/删用户格式；预设只读，由路由返回 409）。
+  // GET 列表/详情不加；格式侧路径发现是纯本地计算且沿用就接口，本批口径不变。
+  if (pathname === '/api/interface-formats' && isMethod(method, 'POST')) {
+    return true;
+  }
+  if (pathname.startsWith('/api/interface-formats/')) {
+    if (pathname.endsWith('/copy') && isMethod(method, 'POST')) {
+      return true;
+    }
+    if (isMethod(method, 'PUT') || isMethod(method, 'DELETE')) {
+      return true;
+    }
+  }
   // 首次指引展示态写路由（docs/hub/首次指引-design.md §4.1：已看标记在主窗口写）。
   // PUT /api/onboarding-state（写 guideDismissed）受 Hub write token 保护；GET 只读不加。
   if (pathname === '/api/onboarding-state' && isMethod(method, 'PUT')) {

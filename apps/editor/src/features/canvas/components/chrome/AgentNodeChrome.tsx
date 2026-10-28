@@ -7,7 +7,7 @@ import { Ungroup as IconUngroup } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-import { useChromePlacement } from './AssetNodeChrome.hooks';
+import { useChromePlacement } from './MediaNodeChrome.hooks';
 import { useAgentChromeActions, useAgentChromeState } from './AgentNodeChrome.hooks';
 import type { AgentNodeChromeProps } from './AgentNodeChrome.types';
 
@@ -29,7 +29,7 @@ const REF_ACTIVE_CLASS = [
  * Agent 节点选中态工具栏（spec docs/agent/02-Agent节点与画布投影.md「选中态工具栏」；
  * 视觉与结构口径对齐设计层 prototypes/shared/node-chrome.js 的 agent 分支）。
  *
- * 挂于 NodeCanvas 根容器（与 AssetNodeChrome / MarqueeSelectionOverlay 同层）：选中单个
+ * 挂于 NodeCanvas 根容器（与 MediaNodeChrome / MarqueeSelectionOverlay 同层）：选中单个
  * Agent 节点时显示「使用 agent｜解散｜删除」（解散仅容器形态出现），多选只保留
  * 「解散」「删除」。定位、折返与入场动画复用 useChromePlacement，表面样式复用
  * globals.css 的 .node-chrome-bottom 令牌。

@@ -10,6 +10,7 @@ type TaskExecutionPlanView = {
 
 type ResultOutputMappingView = {
   response_mode: unknown | undefined;
+  requires_auth: unknown | undefined;
   download_required_condition: unknown | undefined;
   output_mapping_rules: unknown | undefined;
   note: unknown | undefined;

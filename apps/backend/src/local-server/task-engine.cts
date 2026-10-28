@@ -29,7 +29,6 @@ import {
   patchTaskRecordWithOutputs,
 } from "./task-engine-state.cts";
 import {
-  cancelTaskExecution,
   executeHttpTask,
   resumeIncompletePollingTasks,
 } from "./task-engine-runtime.cts";
@@ -54,6 +53,5 @@ export {
   appendTaskArchiveEventSafely,
   summarizeArchiveResponse,
   executeHttpTask,
-  cancelTaskExecution,
   resumeIncompletePollingTasks,
 };

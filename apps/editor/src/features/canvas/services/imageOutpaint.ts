@@ -59,7 +59,7 @@ const OUTPAINT_PRESET_PROMPT = `
 
 /**
  * 扩图实际提交的 prompt（预设 + 用户补充）。
- * 提交链路（outpaintImageWithModel）与前置校验（useImageOutpaint）共用同一拼装，禁止双实现。
+ * 提交链路（outpaintImageWithModel）与前置校验（imageOutpaintPreflight）共用同一拼装，禁止双实现。
  */
 export const buildOutpaintPrompt = (userPrompt: string | undefined): string => {
   const extra = typeof userPrompt === 'string' ? userPrompt.trim() : '';

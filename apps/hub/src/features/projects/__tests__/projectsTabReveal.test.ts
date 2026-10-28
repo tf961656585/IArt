@@ -62,6 +62,7 @@ const createPlatform = (
     getAppVersion: vi.fn(() => Promise.resolve('9.9.9')),
     checkForUpdates: vi.fn(),
     startUpdateDownload: vi.fn(),
+    cancelUpdateDownload: vi.fn(),
     installUpdate: vi.fn(),
     revealDownloadedUpdate: vi.fn(),
     getUpdateState: vi.fn(() => Promise.resolve(null)),
@@ -80,9 +81,9 @@ const createPlatform = (
     removeTaskStateListeners: vi.fn(),
     onHubFocusSettings: vi.fn(),
     removeHubFocusSettingsListener: vi.fn(),
-    // fixture 以 contracts 接口类型为事实源（ProjectIndexItemSchema infer 的 optional 键
+    // fixture 以 contracts 接口格式为事实源（ProjectIndexItemSchema infer 的 optional 键
     // 与接口 required-with-undefined 在 exactOptionalPropertyTypes 下不兼容，schema parse
-    // 产物喂不进本桩；空列表 fixture 无元素形状需校验，直接按接口类型标注）。
+    // 产物喂不进本桩；空列表 fixture 无元素形状需校验，直接按接口格式标注）。
     storageListProjects: vi.fn(
       (): Promise<StorageListProjectsResult> => Promise.resolve({ projects: [] }),
     ),

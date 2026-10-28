@@ -2,22 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  ADAPTER_REGISTRY,
+  type FamilyTemplateParameterDescriptor,
   type GenerationMediaSlotId,
 } from '@iart/contracts';
-import {
-  SEEDANCE_2_0_V1_FAMILY_ADAPTER_ID,
-  SEEDANCE_2_0_V1_SUPPORTED_MEDIA_SLOTS,
-  buildSeedance20V1BaseTemplateSources,
-  buildSeedance20V1ParameterDescriptor,
-} from '../generation-family-templates.seedance.cts';
 import { buildProjectionFromPackageSources } from '../model-package-catalog.projection.cts';
 import { isObjectRecord } from '../model-package-catalog.shared.cts';
-import { declaredGenerationPackageId } from '../generation-family-templates.cts';
 import {
-  GENERATION_FAMILY_TEMPLATE_REGISTRY,
+  declaredGenerationPackageId,
+  type GenerationFamilyTemplateSources,
+} from '../generation-family-templates.cts';
+import {
+  requireFamilyTemplate,
   buildFamilyTemplateSources,
 } from '../generation-family-templates.registry.cts';
+import { buildFormatParameterDescriptor, getInterfaceFormat } from '../interface-format/registry.cts';
 import { validateParameterOverrides } from '../generation-parameter-overrides.cts';
 import { evaluateRule } from '../request-assembler-runtime.cts';
 import { extractMappedTaskOutputs } from '../task-result-output-mapping.cts';
@@ -42,6 +40,37 @@ import { extractMappedTaskOutputs } from '../task-result-output-mapping.cts';
  */
 
 const MODEL_ID = 'declared-seedance-video-test';
+
+/** 接口格式 id（值域由 contracts 的 `GENERATION_FAMILY_ADAPTER_IDS` 裁定）。 */
+const SEEDANCE_2_0_V1_FAMILY_ADAPTER_ID = 'seedance-2-0-v1';
+
+/** 测试侧独立期望的素材位清单（不复用注册表，避免同错同过）。 */
+const SEEDANCE_2_0_V1_SUPPORTED_MEDIA_SLOTS: readonly GenerationMediaSlotId[] = [
+  'first_frame',
+  'last_frame',
+  'reference_image',
+  'reference_video',
+  'reference_audio',
+];
+
+/** 经实体门面取本族基础模板 sources（与记录合成同一条链路）。 */
+const buildSeedance20V1BaseTemplateSources = (
+  modelId: string,
+  options: { acceptedMediaSlots: readonly GenerationMediaSlotId[] },
+): GenerationFamilyTemplateSources => {
+  const entry = requireFamilyTemplate(SEEDANCE_2_0_V1_FAMILY_ADAPTER_ID);
+  assert.equal(entry.status, 'ready', 'seedance-2-0-v1 必须已就绪');
+  if (entry.status !== 'ready') throw new Error('unreachable: family template not ready');
+  return entry.buildBaseSources(modelId, options);
+};
+
+/** 经实体层取本族参数描述符（与 GET 端点同一份构建器）。 */
+const buildSeedance20V1ParameterDescriptor = (): FamilyTemplateParameterDescriptor => {
+  const result = buildFormatParameterDescriptor(SEEDANCE_2_0_V1_FAMILY_ADAPTER_ID);
+  assert.equal(result.kind, 'ready', 'seedance-2-0-v1 描述符必须就绪');
+  if (result.kind !== 'ready') throw new Error('unreachable: descriptor not ready');
+  return result.descriptor;
+};
 
 /** 取模板 runtime 段（模板由本仓构建，形状受控；仍按 unknown 收窄不用断言）。 */
 const runtimeOf = (sources: { runtimeModel: { runtime: unknown } }): Record<string, unknown> => {
@@ -174,7 +203,7 @@ const roleOfEntry = (entry: unknown): string => {
 };
 
 void test('seedance 族模板：注册条目已就绪，能力事实与适配器 endpoint 同源', () => {
-  const entry = GENERATION_FAMILY_TEMPLATE_REGISTRY['seedance-2-0-v1'];
+  const entry = requireFamilyTemplate('seedance-2-0-v1');
   assert.equal(entry.status, 'ready');
   assert.deepEqual(
     [...entry.supportsMediaSlots],
@@ -184,10 +213,13 @@ void test('seedance 族模板：注册条目已就绪，能力事实与适配器
   assert.deepEqual([...entry.supportsMediaSlots], [...SEEDANCE_2_0_V1_SUPPORTED_MEDIA_SLOTS]);
   assert.deepEqual([...entry.declaredEndpointKeys], ['tasks', 'taskById'], '异步族用到提交与查询两个 endpoint 键');
 
-  // 适配器侧路径是事实源，模板字面量必须逐字相同（一致性门禁会把两边对齐，这里给出显式期望）
-  const adapter = ADAPTER_REGISTRY['seedance-2-0-v1'].relative_endpoints ?? {};
-  assert.equal(adapter['tasks'], '/api/v3/contents/generations/tasks');
-  assert.equal(adapter['taskById'], '/api/v3/contents/generations/tasks/{id}');
+  // 接口格式声明是 endpoint 的唯一事实源，这里给出显式期望值
+  const formatLookup = getInterfaceFormat('seedance-2-0-v1');
+  assert.equal(formatLookup.kind, 'ready');
+  if (formatLookup.kind !== 'ready') return;
+  const declaredEndpoints = formatLookup.format.transport.endpoints;
+  assert.equal(declaredEndpoints['tasks'], '/api/v3/contents/generations/tasks');
+  assert.equal(declaredEndpoints['taskById'], '/api/v3/contents/generations/tasks/{id}');
 });
 
 void test('seedance 族模板：六种素材位形态都构建出合法 sources 并走通合成投影路径', () => {
@@ -227,7 +259,10 @@ void test('seedance 族模板：异步轮询策略逐字段与实测包一致', 
       url_template: '/api/v3/contents/generations/tasks/{id}',
       method: 'GET',
       headers: {},
+      query: [],
       body: null,
+      body_format: 'json',
+      content_type: null,
     }, `形态 ${JSON.stringify(shape)} 的轮询请求形态`);
 
     // 异步响应处理声明：编辑器据此把响应当任务（与在役包同值）。
@@ -475,7 +510,7 @@ void test('seedance 族模板：参数描述端点数据（素材位不进官方
   // 保留键必须覆盖 content / model / prompt 等协议键（含全素材位形态的分支）
   for (const reserved of ['content', 'model', 'prompt', 'input']) {
     assert.ok(
-      descriptor.reserved_wire_names.includes(reserved),
+      descriptor.reserved_wire_names.body.includes(reserved),
       `保留键必须包含 ${reserved}`,
     );
   }

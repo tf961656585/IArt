@@ -1,126 +1,79 @@
 import {
-  GenerationFamilyAdapterIdSchema,
   type FamilyTemplateParameterDescriptor,
-  type GenerationFamilyAdapterId,
   type GenerationMediaSlotId,
 } from '@iart/contracts';
 import * as loggingModule from './logging.cts';
 import {
-  buildFamilyTemplateParameterDescriptorFromSources,
+  collectMediaSlotOfficialFields,
   type GenerationFamilyTemplateBuilder,
   type GenerationFamilyTemplateOptions,
   type GenerationFamilyTemplateSources,
 } from './generation-family-templates.cts';
+import { composeInterfaceFormatSources } from './interface-format/compose.cts';
 import {
-  buildGeminiImageInteractionsV1BaseTemplateSources,
-  buildGeminiImageInteractionsV1ParameterDescriptor,
-  GEMINI_IMAGE_INTERACTIONS_V1_FAMILY_ADAPTER_ID,
-  GEMINI_IMAGE_INTERACTIONS_V1_SUPPORTED_MEDIA_SLOTS,
-} from './generation-family-templates.gemini-image.cts';
-import {
-  buildOpenAiImageV1BaseTemplateSources,
-  buildOpenAiImageV1ParameterDescriptor,
-  OPENAI_IMAGE_V1_FAMILY_ADAPTER_ID,
-  OPENAI_IMAGE_V1_SUPPORTED_MEDIA_SLOTS,
-} from './generation-family-templates.openai-image.cts';
-import {
-  buildSeedance20V1BaseTemplateSources,
-  buildSeedance20V1ParameterDescriptor,
-  SEEDANCE_2_0_V1_FAMILY_ADAPTER_ID,
-  SEEDANCE_2_0_V1_SUPPORTED_MEDIA_SLOTS,
-  SEEDANCE_MEDIA_SLOT_FIELD_KEYS,
-} from './generation-family-templates.seedance.cts';
-import {
-  buildVeoV1BaseTemplateSources,
-  buildVeoV1ParameterDescriptor,
-  VEO_V1_FAMILY_ADAPTER_ID,
-  VEO_V1_SUPPORTED_MEDIA_SLOTS,
-  VEO_MEDIA_SLOT_FIELD_KEYS,
-} from './generation-family-templates.veo.cts';
-import {
-  buildKlingText2VideoV1BaseTemplateSources,
-  buildKlingText2VideoV1ParameterDescriptor,
-  KLING_TEXT2VIDEO_V1_FAMILY_ADAPTER_ID,
-  KLING_TEXT2VIDEO_V1_SUPPORTED_MEDIA_SLOTS,
-} from './generation-family-templates.kling-text2video.cts';
-import {
-  buildKlingImage2VideoV1BaseTemplateSources,
-  buildKlingImage2VideoV1ParameterDescriptor,
-  KLING_IMAGE2VIDEO_V1_FAMILY_ADAPTER_ID,
-  KLING_IMAGE2VIDEO_V1_SUPPORTED_MEDIA_SLOTS,
-} from './generation-family-templates.kling-image2video.cts';
-import {
-  buildKlingOmniVideoV1BaseTemplateSources,
-  buildKlingOmniVideoV1ParameterDescriptor,
-  KLING_OMNI_VIDEO_V1_FAMILY_ADAPTER_ID,
-  KLING_OMNI_VIDEO_V1_SUPPORTED_MEDIA_SLOTS,
-} from './generation-family-templates.kling-omni-video.cts';
-import { klingMediaSlotFieldKey } from './generation-family-templates.kling-protocol.cts';
-import { applyParameterOverrides, EMPTY_PARAMETER_OVERRIDES } from './generation-parameter-overrides.cts';
+  buildFormatParameterDescriptor,
+  composeFormatSources,
+  getInterfaceFormat,
+  loadPresetFormats,
+} from './interface-format/registry.cts';
+import type { InterfaceFormat } from './interface-format/schema.cts';
 
 /**
- * 生成族模板注册表（docs/custom-providers/生成模型自建声明试点-design.md §3.3/§3.4）。
+ * 生成族模板门面（**实体优先的唯一实现**，2026-10-26 切换）。
  *
- * **一张表把「接口类型 → 族模板」的全部事实收在一处**：模板构建器、该族模板能表达哪些素材位、
- * 该族模板用到了适配器声明的哪几个 endpoint 键。三件事必须同源，否则会出现「契约放开了一个
- * 接口类型、界面能选、运行时没有对应模板」这类静默断链。
+ * 历史：本模块曾是「接口类型 → 一族一份 TypeScript 工厂」的静态注册表
+ * （`generation-family-templates.<family>.cts`，8 个族文件）。本批把这些族的事实迁到
+ * **接口格式实体注册表**（`interface-format/` 的随软件分发预设），本模块降级为**门面**：
+ * 导出名与形状保持不变（既有消费方零改动），内部不再 import 任何族文件、也不再保留
+ * 「实体优先、旧代码兜底」的双读路径——生产只有实体一条实现。旧族文件已于 2026-10-26 删除。
  *
- * - 7 个键**必须齐全**：注册表类型是 `Record<GenerationFamilyAdapterId, ...>`，值域 owner 是
- *   `packages/contracts` 的 `GENERATION_FAMILY_ADAPTER_IDS`。少写一个键 = 编译期 TypeScript
- *   报「Property '<id>' is missing」，不是运行时才发现的空模板。
- * - 就绪状态是显式的判别联合：`ready` 才有 `buildBaseSources`；`pending` 表示该族的模板规则
- *   尚未实现（后续批次逐族补齐）。**未知 id 与未就绪族必须可区分**——前者是非法输入（路由
- *   404），后者是合法接口类型但能力未上线（路由 501 + 日志留痕），不得混成一个 null。
- * - `supportsMediaSlots` 是本批新增的**一致性事实源**：记录上的 `accepted_media_slots` 必须是
- *   它的子集（写入侧守卫），创作面只呈现子集内的素材位——「能选但一提交就失败」的入口靠它
- *   在写入时就拦掉。pending 族的取值是 `[]`：模板未就绪时它确实一个素材位也表达不了，允许
- *   写入非空清单就是把失败推迟到运行时。
- * - `declaredEndpointKeys` 是适配器 `relative_endpoints` 的**键名**（不是路径字面量）：路径
- *   事实源仍在 `packages/contracts` ADAPTER_REGISTRY，注册表只声明「本族模板用到了哪几个」，
- *   一致性门禁据此逐键核对模板内的实际 endpoint，防止模板与适配器双向漂移。
+ * 门面的职责只有「把实体的形状翻译回既有调用方期待的形状」：
+ * - 注册条目：`familyAdapterId` / `status` / `supportsMediaSlots` / `requiredMediaSlots` /
+ *   `mediaSlotFieldKeys` / `declaredEndpointKeys` 全部从预设派生（不手抄字面量，避免第二事实源）；
+ * - 合成入口：委派 `composeFormatSources`（预设基础模板 → 素材位片段 → 参数覆盖 → 接口配方）；
+ * - 描述符入口：委派 `buildFormatParameterDescriptor`，只补回描述符分发处统一的「素材位行 +
+ *   格式能力字段」填充（实体层不填这两项：它服务于逐族等价矩阵，形状必须与族构建器一致）。
  *
  * 本模块是 Runtime Backend 内置资源：不进 contracts、不落任何安装目录。
  */
 
-/** 注册表条目的公共事实（就绪与否都要回答「支持哪些素材位」「用到哪些 endpoint 键」）。 */
+/**
+ * 注册表条目的公共事实（就绪与否都要回答「支持哪些素材位」「用到哪些 endpoint 键」）。
+ *
+ * `familyAdapterId` 类型为 `string`：2026-10-26 起 id 值域由实体注册表裁定，
+ * contracts 只约束形状（`InterfaceFormatIdSchema`），不再有封闭枚举类型可依赖。
+ */
 type GenerationFamilyTemplateEntryCommon = {
-  familyAdapterId: GenerationFamilyAdapterId;
+  familyAdapterId: string;
   /**
-   * 该族模板能表达的素材位（受控词表子集，值域 owner 是 contracts 的
+   * 该格式能表达的素材位（受控词表子集，值域 owner 是 contracts 的
    * `GENERATION_MEDIA_SLOT_IDS`）。写入侧守卫与创作面准入共用这一份。
    */
   supportsMediaSlots: readonly GenerationMediaSlotId[];
   /**
-   * 该族**协议强制必选**的素材位（必须是 `supportsMediaSlots` 的子集）。
+   * 该格式**协议强制必选**的素材位（必须是 `supportsMediaSlots` 的子集）。
    *
-   * 与 `supportsMediaSlots` 的区别：后者是「这个族能表达哪些位」（用户可选空间上限），前者是
-   * 「这个族每次提交都必须有哪一位」（用户没有选择空间）。两者都是族能力事实，必须与模板实现
-   * 同源——放到消费侧会立刻成为第二处事实源，改族时漏改一处就产生「能建但一提交就失败」的
-   * 模型（本仓明令禁止的形态）。
-   *
-   * 目前只有可灵图生视频族有必选位：该端点每次提交都必须带首帧。
+   * 与 `supportsMediaSlots` 的区别：后者是「这个格式能表达哪些位」（用户可选空间上限），前者是
+   * 「每次提交都必须有哪一位」（用户没有选择空间）。两者都是格式能力事实，必须与预设同源。
+   * 目前只有可灵图生视频格式有必选位：该端点每次提交都必须带首帧。
    */
   requiredMediaSlots: readonly GenerationMediaSlotId[];
   /**
-   * 该族「素材位 → 参数字段键」的完整映射。
+   * 该格式「素材位 → 参数字段键」的完整映射（来自预设 `media.slots[*].field_key`）。
    *
-   * 为什么放在注册表而不让消费端自己推导：各族内部的映射事实形态与命名不同
-   * （可灵三族是 `KLING_MEDIA_SLOT_FIELD_FACTS` 事实表、Seedance / Veo 是
-   * `MEDIA_SLOT_FIELD_KEYS` 记录）；消费端若自行推导就会变成第二处事实源。此处是唯一的
-   * 跨族出口，取值必须直接来自该族自己的事实表，不许手抄字面量。
-   *
-   * 键集必须与该族 `supportsMediaSlots` **完全一致**（测试钉住）：少一位说明能力事实漏登记，
-   * 多一位说明登记了表达不了的位。`pending` 族取空对象。
+   * 键集必须与该格式 `supportsMediaSlots` 完全一致（预设 schema 已钉住，测试再钉一次）：
+   * 少一位说明能力事实漏登记，多一位说明登记了表达不了的位。`pending` 格式取空对象。
    */
   mediaSlotFieldKeys: Readonly<Partial<Record<GenerationMediaSlotId, string>>>;
   /**
-   * 该族模板用到的适配器 endpoint 键（`ADAPTER_REGISTRY[id].relative_endpoints` 的键名）。
-   * 一致性门禁要求：每个键在适配器里存在，且模板内的 endpoint 字面量恰好落在这些键的值里。
+   * 该格式用到的 endpoint 键（`transport.endpoints` 的键名，来自预设声明）。
+   * 一致性门禁据此逐键核对模板内的实际 endpoint：模板不得引用未声明路径，
+   * 声明的每个 endpoint 也必须在模板里真实出现。
    */
   declaredEndpointKeys: readonly string[];
 };
 
-/** 一族模板的注册条目：就绪（可构建）或未就绪（显式 pending）。 */
+/** 一个格式的注册条目：就绪（可构建）或未就绪（显式 pending）。 */
 export type GenerationFamilyTemplateEntry =
   | (GenerationFamilyTemplateEntryCommon & {
       status: 'ready';
@@ -134,114 +87,148 @@ export type GenerationFamilyTemplateEntry =
 
 const PENDING_REASON_TEMPLATE_NOT_IMPLEMENTED = 'family_template_not_implemented';
 
-/**
- * 7 族注册表。
- *
- * 每族有一份独立文件承载模板规则（2026-10-19 起逐族落地；可灵三族与 veo 随后补齐）。条目仍
- * 保留 `pending` 形态：新增接口类型时先登记条目与能力事实（空清单），再由「逐族实现」批次把
- * `status` 改成 `ready` 并接上 `buildBaseSources` / 真实素材位 / endpoint 键——注册表与门禁
- * 无需改动。
- */
-export const GENERATION_FAMILY_TEMPLATE_REGISTRY: Record<GenerationFamilyAdapterId, GenerationFamilyTemplateEntry> = {
-  [OPENAI_IMAGE_V1_FAMILY_ADAPTER_ID]: {
-    familyAdapterId: OPENAI_IMAGE_V1_FAMILY_ADAPTER_ID,
-    status: 'ready',
-    buildBaseSources: buildOpenAiImageV1BaseTemplateSources,
-    supportsMediaSlots: OPENAI_IMAGE_V1_SUPPORTED_MEDIA_SLOTS,
-    requiredMediaSlots: [],
-    mediaSlotFieldKeys: { reference_image: 'image' },
-    declaredEndpointKeys: ['generations', 'edits'],
-  },
-  'gemini-image-interactions-v1': {
-    familyAdapterId: GEMINI_IMAGE_INTERACTIONS_V1_FAMILY_ADAPTER_ID,
-    status: 'ready',
-    buildBaseSources: buildGeminiImageInteractionsV1BaseTemplateSources,
-    supportsMediaSlots: GEMINI_IMAGE_INTERACTIONS_V1_SUPPORTED_MEDIA_SLOTS,
-    requiredMediaSlots: [],
-    mediaSlotFieldKeys: { reference_image: 'image' },
-    declaredEndpointKeys: ['interactions'],
-  },
-  'seedance-2-0-v1': {
-    familyAdapterId: SEEDANCE_2_0_V1_FAMILY_ADAPTER_ID,
-    status: 'ready',
-    buildBaseSources: buildSeedance20V1BaseTemplateSources,
-    supportsMediaSlots: SEEDANCE_2_0_V1_SUPPORTED_MEDIA_SLOTS,
-    requiredMediaSlots: [],
-    mediaSlotFieldKeys: SEEDANCE_MEDIA_SLOT_FIELD_KEYS,
-    declaredEndpointKeys: ['tasks', 'taskById'],
-  },
-  'veo-v1': {
-    familyAdapterId: VEO_V1_FAMILY_ADAPTER_ID,
-    status: 'ready',
-    buildBaseSources: buildVeoV1BaseTemplateSources,
-    supportsMediaSlots: VEO_V1_SUPPORTED_MEDIA_SLOTS,
-    requiredMediaSlots: [],
-    // 族上限是首帧/尾帧；构建器可表达的 reference_image 不在上限内，故不登记（键集必须等于族上限）。
-    mediaSlotFieldKeys: {
-      first_frame: VEO_MEDIA_SLOT_FIELD_KEYS.first_frame,
-      last_frame: VEO_MEDIA_SLOT_FIELD_KEYS.last_frame,
-    },
-    declaredEndpointKeys: ['predictLongRunning', 'operation'],
-  },
-  'kling-text2video-v1': {
-    familyAdapterId: KLING_TEXT2VIDEO_V1_FAMILY_ADAPTER_ID,
-    status: 'ready',
-    buildBaseSources: buildKlingText2VideoV1BaseTemplateSources,
-    supportsMediaSlots: KLING_TEXT2VIDEO_V1_SUPPORTED_MEDIA_SLOTS,
-    requiredMediaSlots: [],
-    mediaSlotFieldKeys: {},
-    declaredEndpointKeys: ['textToVideo', 'taskById'],
-  },
-  'kling-image2video-v1': {
-    familyAdapterId: KLING_IMAGE2VIDEO_V1_FAMILY_ADAPTER_ID,
-    status: 'ready',
-    buildBaseSources: buildKlingImage2VideoV1BaseTemplateSources,
-    supportsMediaSlots: KLING_IMAGE2VIDEO_V1_SUPPORTED_MEDIA_SLOTS,
-    requiredMediaSlots: ['first_frame'],
-    // 字段键从可灵族自己的事实表取，不手抄字面量。
-    mediaSlotFieldKeys: {
-      first_frame: klingMediaSlotFieldKey('first_frame') ?? '',
-      last_frame: klingMediaSlotFieldKey('last_frame') ?? '',
-    },
-    declaredEndpointKeys: ['imageToVideo', 'taskById'],
-  },
-  'kling-omni-video-v1': {
-    familyAdapterId: KLING_OMNI_VIDEO_V1_FAMILY_ADAPTER_ID,
-    status: 'ready',
-    buildBaseSources: buildKlingOmniVideoV1BaseTemplateSources,
-    supportsMediaSlots: KLING_OMNI_VIDEO_V1_SUPPORTED_MEDIA_SLOTS,
-    requiredMediaSlots: [],
-    mediaSlotFieldKeys: {
-      first_frame: klingMediaSlotFieldKey('first_frame') ?? '',
-      last_frame: klingMediaSlotFieldKey('last_frame') ?? '',
-      reference_image: klingMediaSlotFieldKey('reference_image') ?? '',
-      feature_video: klingMediaSlotFieldKey('feature_video') ?? '',
-      base_video: klingMediaSlotFieldKey('base_video') ?? '',
-    },
-    declaredEndpointKeys: ['omniVideo', 'taskById'],
-  },
+/** 参数描述符基线用的合成模型 id（与实体描述符构建器同值，描述符不含 model_id）。 */
+const DESCRIPTOR_BASELINE_MODEL_ID = 'descriptor-baseline';
+
+/** 素材位 → 字段键映射：直接取自预设，不手抄字面量（值与键都由预设声明）。 */
+const buildMediaSlotFieldKeys = (
+  format: InterfaceFormat,
+): Readonly<Partial<Record<GenerationMediaSlotId, string>>> => {
+  const fieldKeys: Partial<Record<GenerationMediaSlotId, string>> = {};
+  for (const [slotId, slot] of Object.entries(format.media.slots)) {
+    fieldKeys[slotId as GenerationMediaSlotId] = slot.field_key;
+  }
+  return fieldKeys;
 };
 
 /**
- * 按 id 取注册条目；未知 id 返回 null（**只返回 null 给「不是已登记的接口类型」**）。
+ * 预设 → 注册条目。
  *
- * 入参是路由路径里的任意字符串，先过契约 enum 收窄再查表：这样 `getFamilyTemplate('kling-v1')`
- * 这类已删掉的旧 id 与拼写错误都落到同一条「未知族」分支，不会因为下标访问拿到原型上的属性。
+ * `pending` 格式的能力事实**必须是空清单**：格式未就绪时它确实一个素材位也表达不了，
+ * 允许写入非空清单就是把失败推迟到运行时。字段键集合同理取空。
+ */
+const buildRegistryEntry = (format: InterfaceFormat): GenerationFamilyTemplateEntry => {
+  const common = {
+    familyAdapterId: format.format_id,
+    declaredEndpointKeys: Object.keys(format.transport.endpoints),
+  };
+  if (format.status === 'pending') {
+    return {
+      ...common,
+      status: 'pending',
+      pendingReason: PENDING_REASON_TEMPLATE_NOT_IMPLEMENTED,
+      supportsMediaSlots: [],
+      requiredMediaSlots: [],
+      mediaSlotFieldKeys: {},
+    };
+  }
+  return {
+    ...common,
+    status: 'ready',
+    supportsMediaSlots: format.media.supports,
+    requiredMediaSlots: format.media.required,
+    mediaSlotFieldKeys: buildMediaSlotFieldKeys(format),
+    // 基础模板 = 格式基础 sources（**不应用**记录覆盖与配方）；覆盖与配方由合成入口统一应用。
+    buildBaseSources: (modelId, options) =>
+      composeInterfaceFormatSources({
+        format,
+        modelId,
+        acceptedMediaSlots: options.acceptedMediaSlots,
+      }),
+  };
+};
+
+const buildRegistry = (): Readonly<Record<string, GenerationFamilyTemplateEntry>> => {
+  const registry: Record<string, GenerationFamilyTemplateEntry> = {};
+  for (const format of loadPresetFormats()) {
+    registry[format.format_id] = buildRegistryEntry(format);
+  }
+  return registry;
+};
+
+/**
+ * 格式注册表（键 = 预设 `format_id`，值 = 该格式的能力事实与基础构建器）。
+ *
+ * 键集来自 `loadPresetFormats()`（manifest + 预设 JSON 是唯一事实源），不是手写清单：
+ * 新增格式只改预设与 manifest，本表自动跟随；某条预设加载失败会被 `loadPresetFormats`
+ * 丢弃并留痕，这里也不会凭空多出一条。
+ *
+ * **本表只是预设快照**：用户自建格式在运行时由 `getFamilyTemplate` 动态补齐（见该函数），
+ * 因此本表恒为 8 条预设，不随用户库增删变化——测试与一致性检查以此为基准。
+ */
+export const GENERATION_FAMILY_TEMPLATE_REGISTRY: Readonly<
+  Record<string, GenerationFamilyTemplateEntry>
+> = buildRegistry();
+
+/**
+ * 按 id 取注册条目；未知 id 返回 null。
+ *
+ * 入参是路由路径里的任意字符串：直接查实体注册表（不过任何枚举收窄），
+ * `getFamilyTemplate('kling-v1')` 这类已删掉的旧 id 与拼写错误都落到同一条「未知格式」分支。
+ *
+ * 查找顺序：预设快照 → 用户库（`getInterfaceFormat` 走 `loadAllFormats()`）。用户格式不预建
+ * 条目：它可以在运行时创建/删除，静态快照会在第一次增删后变成假话。用户格式条目按需构建
+ * （一次对象分配，无缓存），能力事实始终与用户库一致。
  */
 export const getFamilyTemplate = (familyAdapterId: string): GenerationFamilyTemplateEntry | null => {
-  const parsed = GenerationFamilyAdapterIdSchema.safeParse(familyAdapterId);
-  if (!parsed.success) return null;
-  return GENERATION_FAMILY_TEMPLATE_REGISTRY[parsed.data];
+  if (Object.prototype.hasOwnProperty.call(GENERATION_FAMILY_TEMPLATE_REGISTRY, familyAdapterId)) {
+    return GENERATION_FAMILY_TEMPLATE_REGISTRY[familyAdapterId] ?? null;
+  }
+  const lookup = getInterfaceFormat(familyAdapterId);
+  if (lookup.kind !== 'ready') return null;
+  return buildRegistryEntry(lookup.format);
 };
 
-/** 族模板基础 sources 的构建结果（不含记录覆盖；保存期覆盖校验的基线）。 */
+/**
+ * 按 id 取条目，未登记即抛（**测试与内部一致性检查用**）。
+ *
+ * 这些调用点的 id 来自预置清单或注册表自身的键集，缺失属于「清单与注册表漂移」的缺陷，
+ * 应当立刻失败而不是静默跳过；生产消费方一律用 `getFamilyTemplate` 显式处理 null。
+ */
+export const requireFamilyTemplate = (familyAdapterId: string): GenerationFamilyTemplateEntry => {
+  const entry = getFamilyTemplate(familyAdapterId);
+  if (entry === null) {
+    throw new Error(`generation_family_template_unknown: ${familyAdapterId}`);
+  }
+  return entry;
+};
+
+/**
+ * 把记录声明的素材位收窄到该格式能表达的范围（**静默过滤 + debug 留痕**）。
+ *
+ * 合成入口用它吸收越界位：写入侧守卫已拒绝越界写入，这里兜的是守卫落地前的存量记录。
+ * 越界位不阻断整条记录的合成（旧实现同样是「忽略表达不了的位」），但必须留痕，
+ * 否则「某个素材位怎么都不生效」会变成只能人工追函数的谜题。
+ */
+const filterSlotsForEntry = (
+  entry: GenerationFamilyTemplateEntryCommon,
+  acceptedMediaSlots: readonly GenerationMediaSlotId[],
+  modelId: string,
+): readonly GenerationMediaSlotId[] => {
+  const supported = new Set<string>(entry.supportsMediaSlots);
+  const dropped = acceptedMediaSlots.filter((slotId) => !supported.has(slotId));
+  if (dropped.length === 0) return acceptedMediaSlots;
+  loggingModule.logDebug(
+    '[generation-family-templates] dropped media slots the interface format cannot express',
+    {
+      modelId,
+      familyAdapterId: entry.familyAdapterId,
+      acceptedMediaSlots,
+      droppedMediaSlots: dropped,
+      supportsMediaSlots: entry.supportsMediaSlots,
+    },
+  );
+  return acceptedMediaSlots.filter((slotId) => supported.has(slotId));
+};
+
+/** 格式基础 sources 的构建结果（不含记录覆盖；保存期覆盖校验的基线）。 */
 export type GenerationFamilyBaseTemplateSourcesResult =
-  | { kind: 'ready'; familyAdapterId: GenerationFamilyAdapterId; sources: GenerationFamilyTemplateSources }
-  | { kind: 'pending'; familyAdapterId: GenerationFamilyAdapterId }
+  | { kind: 'ready'; familyAdapterId: string; sources: GenerationFamilyTemplateSources }
+  | { kind: 'pending'; familyAdapterId: string }
   | { kind: 'unknown' };
 
 /**
- * 构建族的**基础**模板（不应用记录覆盖）。
+ * 构建格式的**基础**模板（不应用记录覆盖与配方）。
  *
  * 保存期的参数覆盖校验必须在未应用覆盖的模板上运行（设计 §3.3「校验唯一实现」）：以覆盖后的
  * 模板做基线会把用户的改动当既有事实，非法覆盖就有机会自证合法。
@@ -257,24 +244,25 @@ export const buildFamilyTemplateBaseSources = (
   return {
     kind: 'ready',
     familyAdapterId: entry.familyAdapterId,
-    sources: entry.buildBaseSources(modelId, options),
+    sources: entry.buildBaseSources(modelId, {
+      acceptedMediaSlots: filterSlotsForEntry(entry, options.acceptedMediaSlots, modelId),
+    }),
   };
 };
 
-/** 族模板的合成结果：就绪族给出 sources；未就绪/未知族各自可区分（调用方必须显式处理）。 */
+/** 格式模板的合成结果：就绪给出 sources；未就绪/未知各自可区分（调用方必须显式处理）。 */
 export type GenerationFamilyTemplateBuildResult =
-  | { kind: 'ready'; familyAdapterId: GenerationFamilyAdapterId; sources: GenerationFamilyTemplateSources }
-  | { kind: 'pending'; familyAdapterId: GenerationFamilyAdapterId }
+  | { kind: 'ready'; familyAdapterId: string; sources: GenerationFamilyTemplateSources }
+  | { kind: 'pending'; familyAdapterId: string }
   | { kind: 'unknown' };
 
 /**
- * 族模板合成唯一入口（基础模板 × 记录参数覆盖 → 合成 sources）。
+ * 格式模板合成唯一入口（格式基础模板 × 记录参数覆盖 × 接口配方 → 合成 sources）。
  *
- * 覆盖应用与校验的唯一实现在 generation-parameter-overrides.cts（设计 §3.3）；空覆盖快速路径
- * 原样返回基础模板（同一引用），保证无覆盖记录与模板基线完全一致（S8）。
- *
- * 未就绪族**不回落**到任何已实现族的模板：返回 `pending` 让调用方显式失败并留痕。回落会让
- * 用户以为模型可用，实际请求打到别的协议的端点上——这是本模块最需要避免的静默失败。
+ * 委派实体层的 `composeFormatSources`：覆盖应用与校验的唯一实现仍在
+ * generation-parameter-overrides.cts，配方应用在 interface-recipe-apply.cts，
+ * 本门面不重复实现任何一步。未就绪格式**不回落**到任何已就绪格式，返回 `pending`
+ * 让调用方显式失败并留痕。
  */
 export const buildFamilyTemplateSources = (
   familyAdapterId: string,
@@ -284,100 +272,109 @@ export const buildFamilyTemplateSources = (
   const entry = getFamilyTemplate(familyAdapterId);
   if (entry === null) return { kind: 'unknown' };
   if (entry.status === 'pending') return { kind: 'pending', familyAdapterId: entry.familyAdapterId };
-  return {
-    kind: 'ready',
-    familyAdapterId: entry.familyAdapterId,
-    sources: applyParameterOverrides(
-      entry.buildBaseSources(modelId, options),
-      options.parameterOverrides ?? EMPTY_PARAMETER_OVERRIDES,
-    ),
-  };
+  // 素材位先按能力收窄再合成：实体层对越界位是显式拒绝（unsupported_media_slots），
+  // 而门面的既有语义是「忽略表达不了的位并留痕」，两者在这里对齐。
+  const acceptedMediaSlots = filterSlotsForEntry(entry, options.acceptedMediaSlots, modelId);
+  const composed = composeFormatSources(entry.familyAdapterId, modelId, {
+    acceptedMediaSlots,
+    ...(options.parameterOverrides === undefined
+      ? {}
+      : { parameterOverrides: options.parameterOverrides }),
+    ...(options.recipe === undefined ? {} : { recipe: options.recipe }),
+  });
+  if (composed.kind === 'ready') {
+    return { kind: 'ready', familyAdapterId: entry.familyAdapterId, sources: composed.sources };
+  }
+  // 同一份注册表刚刚命中过该 id，因此这里只可能是「合成期拒绝」（理论不可达）。
+  // 不回落任何其它格式，按显式失败处理并留痕。
+  loggingModule.logDebug(
+    '[generation-family-templates] interface format compose did not produce sources',
+    { modelId, familyAdapterId: entry.familyAdapterId, resultKind: composed.kind },
+  );
+  return composed.kind === 'pending'
+    ? { kind: 'pending', familyAdapterId: entry.familyAdapterId }
+    : { kind: 'unknown' };
 };
 
-/** 族模板参数描述的读取结果：未知族（404）与未就绪族（501）必须可区分。 */
+/** 格式参数描述的读取结果：未知格式（404）与未就绪格式（501）必须可区分。 */
 export type FamilyTemplateParameterDescriptorResult =
-  | { kind: 'ready'; familyAdapterId: GenerationFamilyAdapterId; descriptor: FamilyTemplateParameterDescriptor }
-  | { kind: 'pending'; familyAdapterId: GenerationFamilyAdapterId }
+  | { kind: 'ready'; familyAdapterId: string; descriptor: FamilyTemplateParameterDescriptor }
+  | { kind: 'pending'; familyAdapterId: string }
   | { kind: 'unknown' };
 
 /**
- * 族模板参数描述（GET /api/generation-family-templates/:familyAdapterId 的数据构建）。
+ * 格式参数描述（GET /api/generation-family-templates/:familyAdapterId 的数据构建）。
  *
- * 逐族分发：已就绪族优先用自己的专属描述构建器（openai 族在 openai-image 文件里、gemini
- * 族在 gemini-image 文件里、seedance 族在 seedance 文件里——它们需要把「声明可能接受素材位」
- * 那一支的 payload_rules 并入保留键），没有专属构建器的就地从基础模板（不带任何素材位）推导：
- * 素材位字段会被通用构建过滤掉，其余字段与保留键完全来自该族模板本身。未就绪族按 pending 返回。
- * 未知 id 返回 unknown——路由据此落 404，未就绪族落 501，两者不共用一条错误文案。
+ * 委派实体层的 `buildFormatParameterDescriptor`（字段、保留键、文案解析口径只有一份实现）。
+ * 实体层产出的描述符**不含**素材位行与格式能力字段（它的形状要与逐族构建器一致：两者都是
+ * 「不接受任何素材位」的基线）；这两项历来由本分发处统一补填，避免各格式各自声明一份：
+ * - 素材位行从「该格式全部素材位同时接受」的 sources 上取，反向映射用条目的
+ *   `mediaSlotFieldKeys`（唯一出口）；
+ * - `supports_media_slots` / `required_media_slots` 取条目的能力事实。
+ * 这里给的是**格式能力全量**，不是某条记录的勾选结果；消费端按当前勾选清单过滤后渲染。
  */
-const FAMILY_PARAMETER_DESCRIPTOR_BUILDERS: ReadonlyMap<
-  GenerationFamilyAdapterId,
-  () => FamilyTemplateParameterDescriptor
-> = new Map([
-  [OPENAI_IMAGE_V1_FAMILY_ADAPTER_ID, buildOpenAiImageV1ParameterDescriptor],
-  [GEMINI_IMAGE_INTERACTIONS_V1_FAMILY_ADAPTER_ID, buildGeminiImageInteractionsV1ParameterDescriptor],
-  [SEEDANCE_2_0_V1_FAMILY_ADAPTER_ID, buildSeedance20V1ParameterDescriptor],
-  [VEO_V1_FAMILY_ADAPTER_ID, buildVeoV1ParameterDescriptor],
-  [KLING_TEXT2VIDEO_V1_FAMILY_ADAPTER_ID, buildKlingText2VideoV1ParameterDescriptor],
-  [KLING_IMAGE2VIDEO_V1_FAMILY_ADAPTER_ID, buildKlingImage2VideoV1ParameterDescriptor],
-  [KLING_OMNI_VIDEO_V1_FAMILY_ADAPTER_ID, buildKlingOmniVideoV1ParameterDescriptor],
-]);
-
 export const buildFamilyTemplateParameterDescriptor = (
   familyAdapterId: string,
 ): FamilyTemplateParameterDescriptorResult => {
   const entry = getFamilyTemplate(familyAdapterId);
   if (entry === null) return { kind: 'unknown' };
   if (entry.status === 'pending') {
-    loggingModule.logDebug('[generation-family-templates] parameter descriptor unavailable: family template pending', {
-      familyAdapterId: entry.familyAdapterId,
-      pendingReason: entry.pendingReason,
-    });
+    loggingModule.logDebug(
+      '[generation-family-templates] parameter descriptor unavailable: interface format pending',
+      { familyAdapterId: entry.familyAdapterId, pendingReason: entry.pendingReason },
+    );
     return { kind: 'pending', familyAdapterId: entry.familyAdapterId };
   }
-  const dedicatedBuilder = FAMILY_PARAMETER_DESCRIPTOR_BUILDERS.get(entry.familyAdapterId);
-  const descriptor =
-    dedicatedBuilder !== undefined
-      ? dedicatedBuilder()
-      : buildFamilyTemplateParameterDescriptorFromSources({
-          familyAdapterId: entry.familyAdapterId,
-          baselineSources: entry.buildBaseSources('descriptor-baseline', { acceptedMediaSlots: [] }),
-        });
-  // 素材位能力只在这里填：各族描述构建器产出的 `supports_media_slots` / `required_media_slots`
-  // 恒为空数组（它们不掌握族能力事实），注册表条目才是唯一来源。填在分发处而不是各构建器里，
-  // 族数量增长时不会漏填；消费侧因此不需要各自维护一份「哪族支持哪些位 / 哪一点必选」。
+  const result = buildFormatParameterDescriptor(entry.familyAdapterId);
+  if (result.kind !== 'ready') {
+    loggingModule.logDebug(
+      '[generation-family-templates] parameter descriptor unavailable: interface format not ready',
+      { familyAdapterId: entry.familyAdapterId, resultKind: result.kind },
+    );
+    return result.kind === 'pending'
+      ? { kind: 'pending', familyAdapterId: entry.familyAdapterId }
+      : { kind: 'unknown' };
+  }
+  const mediaSlotFields = collectMediaSlotOfficialFields(
+    entry.buildBaseSources(DESCRIPTOR_BASELINE_MODEL_ID, {
+      acceptedMediaSlots: entry.supportsMediaSlots,
+    }),
+    entry.mediaSlotFieldKeys,
+  );
   return {
     kind: 'ready',
     familyAdapterId: entry.familyAdapterId,
     descriptor: {
-      ...descriptor,
+      ...result.descriptor,
+      official_fields: [...mediaSlotFields, ...result.descriptor.official_fields],
       supports_media_slots: [...entry.supportsMediaSlots],
       required_media_slots: [...entry.requiredMediaSlots],
     },
   };
 };
 
-/** 素材位越界检查结果：ok = 全部落在该族模板可表达范围内。 */
+/** 素材位越界检查结果：ok = 全部落在该格式能表达范围内。 */
 export type FamilyMediaSlotSupportResult =
-  | { kind: 'ok'; familyAdapterId: GenerationFamilyAdapterId; supportsMediaSlots: readonly GenerationMediaSlotId[] }
-  /** 接口类型未登记（契约 enum 之外）：写入侧理论上不可达，按非法输入处理。 */
+  | { kind: 'ok'; familyAdapterId: string; supportsMediaSlots: readonly GenerationMediaSlotId[] }
+  /** 格式未登记（实体注册表里不存在）：写入侧理论上不可达，按非法输入处理。 */
   | { kind: 'unknown_family' }
   /**
-   * 该族模板表达不了这些素材位。`supportsMediaSlots` 为空数组时即「该族模板尚未就绪，
-   * 一个素材位也表达不了」——调用方据此区分「这族不支持这一位」与「这族模板还没做」。
+   * 该格式表达不了这些素材位。`supportsMediaSlots` 为空数组时即「该格式尚未就绪，
+   * 一个素材位也表达不了」——调用方据此区分「这格式不支持这一位」与「这格式还没做」。
    */
   | {
       kind: 'unsupported';
-      familyAdapterId: GenerationFamilyAdapterId;
+      familyAdapterId: string;
       supportsMediaSlots: readonly GenerationMediaSlotId[];
       unsupportedMediaSlots: readonly GenerationMediaSlotId[];
     };
 
 /**
- * 素材位 ↔ 族能力的一致性检查（写入侧守卫的唯一实现）。
+ * 素材位 ↔ 格式能力的一致性检查（写入侧守卫的唯一实现）。
  *
- * 批次 2 遗留风险：契约只保证素材位在受控词表内，不保证「这个族的模板能表达这个素材位」——
- * 于是可以给文生视频族勾上首帧图，记录写得进去、创作面也照勾选呈现，直到提交才失败。
- * 本函数把该判断收在注册表的能力事实上：记录的素材位必须是 `supportsMediaSlots` 的子集。
+ * 契约只保证素材位在受控词表内，不保证「这个格式能表达这个素材位」——于是可以给文生视频
+ * 格式勾上首帧图：记录写得进去、创作面也照勾选呈现，直到提交才失败。本函数把该判断收在
+ * 格式的能力事实上：记录的素材位必须是 `supportsMediaSlots` 的子集。
  */
 export const checkFamilyMediaSlotSupport = (
   familyAdapterId: string,
@@ -399,29 +396,26 @@ export const checkFamilyMediaSlotSupport = (
 };
 
 /**
- * 把记录的素材位清单收窄到该族模板能表达的范围内（投影侧的防御口径）。
+ * 把记录的素材位清单收窄到该格式能表达的范围内（投影侧的防御口径）。
  *
- * 写入侧守卫已经拒绝越界写入，但存量文件里的记录可能是在守卫落地前写的（批次 2 期间放行的
- * 数据）。投影侧不因越界而丢掉整条记录，而是按能力过滤并留痕——越界位在创作面不存在，
- * 其余能力照常可用。
+ * 写入侧守卫已经拒绝越界写入，但存量文件里的记录可能是在守卫落地前写的。投影侧不因越界而
+ * 丢掉整条记录，而是按能力过滤并留痕——越界位在创作面不存在，其余能力照常可用。
+ * 未登记格式返回空清单（该记录本身也进不了目录，见 model-catalog-entry 的准入判据）。
  */
 export const filterAcceptedMediaSlotsForFamily = (
-  familyAdapterId: GenerationFamilyAdapterId,
+  familyAdapterId: string,
   acceptedMediaSlots: readonly GenerationMediaSlotId[],
   modelId: string,
 ): readonly GenerationMediaSlotId[] => {
-  const entry = GENERATION_FAMILY_TEMPLATE_REGISTRY[familyAdapterId];
-  const supported = new Set<string>(entry.supportsMediaSlots);
-  const filtered = acceptedMediaSlots.filter((slot) => supported.has(slot));
-  if (filtered.length !== acceptedMediaSlots.length) {
-    loggingModule.logDebug('[generation-family-templates] dropped media slots not expressible by the family template', {
-      modelId,
-      familyAdapterId,
-      acceptedMediaSlots,
-      supportedMediaSlots: entry.supportsMediaSlots,
-    });
+  const entry = getFamilyTemplate(familyAdapterId);
+  if (entry === null) {
+    loggingModule.logDebug(
+      '[generation-family-templates] media slots dropped: interface format not registered',
+      { modelId, familyAdapterId, acceptedMediaSlots },
+    );
+    return [];
   }
-  return filtered;
+  return filterSlotsForEntry(entry, acceptedMediaSlots, modelId);
 };
 
 export { PENDING_REASON_TEMPLATE_NOT_IMPLEMENTED };

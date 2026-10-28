@@ -18,15 +18,18 @@ const { extractContentHashFromFileKey, extractMediaFileKey } = mediaFileKeyModul
  * buildGenerationArchive 产出同一档案形状（契约 CliGenerationArchiveSchema），
  * 任何入口不得出现字段子集——三入口档案字段一致性由接缝测试 deep-equal 机械守护。
  *
- * 引用解析口径（2026-10-15 拍板）：
- * - 快照带 reference_asset_ids 时优先直接用；
- * - 否则由 media_refs 的 fileKey 推导资产 id——复用既有推导（Editor assetReuse 的 fileKey
+ * 引用解析口径（2026-10-26 更新）：
+ * - 新快照 media_refs 带 asset_id 时由它构建（一次拿到资产 + 用途 + 字段绑定）；
+ * - 其次 reference_asset_ids（旧提交面只带 id）；
+ * - 再次由 media_refs 的 fileKey 推导资产 id——复用既有推导（Editor assetReuse 的 fileKey
  *   反查思路 + asset get 等价类的「同媒体类型 + 同内容指纹」判据，判据解析单一入口
  *   extractContentHashFromFileKey，资产 id 公式文档源 docs/architecture/contracts/storage-schema.md，
  *   不在此内联公式）；
  * - 能查到资产实体就附媒体类型、文件键与本地文件路径（复用 asset get 现有实体读取与
  *   resolveLocalMediaFilePath 路径解析），查不到只给 asset_id；
  * - media_refs 缺省时 references 为空数组。
+ * - params 里被媒体实际占用的字段键在投影层剥离（快照本身不可变）：档案不再出现
+ *   「references 有图、params 里却是空数组」的假事实。
  *
  * prompt 承载提交提示词全文：任务 metadata 里的提示词预览是 512 字符截断摘要
  * （task-storage-summary-projector 写入口径），本档案是 CLI 面唯一的全文读取位。
@@ -104,19 +107,55 @@ const buildContentKeyIndex = (assets: readonly RuntimeMediaAssetView[]): Map<str
 };
 
 /**
- * 引用解析：reference_asset_ids 优先直接用；旧快照无该字段时由 media_refs 反查兜底
- * （attachment 引用的 value 是提交时资产 original.url，与 Editor assetReuse 同思路；
- * 非 attachment 引用不对应画布资产，跳过并留痕）。
+ * 引用解析（2026-10-26 口径）：
+ * - 新快照的 media_refs 自带资产身份（提交面 `asset_id`）时优先由它构建——一次拿到资产、
+ *   产品级用途（slot_id）与执行层字段键（field_key），不再靠内容指纹反推；
+ * - reference_asset_ids 里未被 media_refs 覆盖的资产补在末尾（旧提交面仍只带 id）；
+ * - 旧快照没有 asset_id 时沿用 reference_asset_ids 直接用；再旧时才由 media_refs 的
+ *   fileKey 反查（attachment 引用的 value 是提交时资产 original.url，与 Editor assetReuse
+ *   同思路；非 attachment 引用不对应画布资产，跳过并留痕）。
  */
 const resolveReferences = (
   snapshot: BatchIntentSnapshot,
   projectPath: string,
   assets: CliGenerationArchiveAssetSource,
 ): CliGenerationArchiveReference[] => {
-  if (snapshot.reference_asset_ids !== undefined && snapshot.reference_asset_ids.length > 0) {
-    return snapshot.reference_asset_ids.map((assetId) => buildReferenceFromAsset(projectPath, assetId, assets));
-  }
   const mediaRefs = snapshot.media_refs ?? [];
+  const referenceAssetIds = snapshot.reference_asset_ids ?? [];
+  const buildWithBinding = (
+    assetId: string,
+    binding: { fieldKey: string | undefined; slotId: string | undefined },
+  ): CliGenerationArchiveReference => ({
+    ...buildReferenceFromAsset(projectPath, assetId, assets),
+    ...(binding.fieldKey ? { field_key: binding.fieldKey } : {}),
+    ...(binding.slotId ? { slot_id: binding.slotId } : {}),
+  });
+
+  if (mediaRefs.some((ref) => typeof ref.asset_id === "string" && ref.asset_id.length > 0)) {
+    const references: CliGenerationArchiveReference[] = [];
+    const seen = new Set<string>();
+    for (const ref of mediaRefs) {
+      const assetId = ref.asset_id;
+      if (typeof assetId !== "string" || assetId.length === 0 || seen.has(assetId)) continue;
+      seen.add(assetId);
+      references.push(
+        buildWithBinding(assetId, {
+          fieldKey: typeof ref.field_key === "string" ? ref.field_key : undefined,
+          slotId: typeof ref.slot_id === "string" ? ref.slot_id : undefined,
+        }),
+      );
+    }
+    for (const assetId of referenceAssetIds) {
+      if (seen.has(assetId)) continue;
+      seen.add(assetId);
+      references.push(buildReferenceFromAsset(projectPath, assetId, assets));
+    }
+    return references;
+  }
+
+  if (referenceAssetIds.length > 0) {
+    return referenceAssetIds.map((assetId) => buildReferenceFromAsset(projectPath, assetId, assets));
+  }
   if (mediaRefs.length === 0) return [];
   const contentKeyToAssetId = buildContentKeyIndex(assets.listAssets());
   const references: CliGenerationArchiveReference[] = [];
@@ -152,9 +191,43 @@ const resolveReferences = (
       });
       continue;
     }
-    references.push(buildReferenceFromAsset(projectPath, assetId, assets));
+    references.push(
+      buildWithBinding(assetId, {
+        fieldKey: typeof ref.field_key === "string" ? ref.field_key : undefined,
+        slotId: undefined,
+      }),
+    );
   }
   return references;
+};
+
+/**
+ * 模型参数快照（开放结构：键集合由模型目录的 parameter_schema 决定）。
+ * 别名在此表达边界，避免在稳定业务区出现裸 Record<string, unknown>。
+ */
+type DynamicParamsMap = Record<string, unknown>;
+
+/**
+ * 剥离「已被媒体绑定占用」的参数键。
+ *
+ * 参数表单会把媒体位的默认值（空数组）一并写进快照；媒体真实内容走 media_refs。两处并存时
+ * 档案里会出现「references 有 2 条、params.referenceImage 却是 []」的假事实。这里只剥掉
+ * **确实有媒体绑定**的字段键（media_refs 的 field_key），未绑定的媒体位保持原样（空数组此时
+ * 表达的是「没有媒体」，是准确事实）。
+ */
+const stripBoundMediaParams = (
+  params: DynamicParamsMap,
+  mediaRefs: readonly { field_key?: string | undefined }[],
+): DynamicParamsMap => {
+  const boundKeys = new Set(
+    mediaRefs.map((ref) => ref.field_key).filter((key): key is string => typeof key === "string" && key.length > 0),
+  );
+  if (boundKeys.size === 0) return params;
+  const stripped: DynamicParamsMap = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (!boundKeys.has(key)) stripped[key] = value;
+  }
+  return stripped;
 };
 
 /**
@@ -179,7 +252,7 @@ export const buildGenerationArchive = (params: {
     batch_id: snapshot.batch_id,
     model_id: snapshot.model_id,
     prompt: snapshot.prompt,
-    params: snapshot.params,
+    params: stripBoundMediaParams(snapshot.params, snapshot.media_refs ?? []),
     references: resolveReferences(snapshot, params.projectPath, params.assets),
     task_ids: [...snapshot.task_ids],
     created_at: snapshot.created_at,

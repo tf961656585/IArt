@@ -10,6 +10,7 @@ import {
   useGenerationModelForm,
   type GenerationModelFormPayload,
 } from '../GenerationModelForm';
+import { PRESET_FORMAT_OPTIONS } from './formatOptionsFixture';
 
 /**
  * 自建生成模型的表单体（docs/custom-providers/生成模型自建声明试点-design.md §3.7）。
@@ -19,11 +20,11 @@ import {
  * 字段树在 `GenerationModelFields`。这里的 Harness 按合并弹窗的真实接线组装两者，
  * 底部按钮与弹窗 footer 同构（disabled = busy 或不可提交）。
  *
- * 2026-10-19 起素材位改为**按所选接口类型的族能力逐项勾选**（能力来自族模板描述符的
+ * 2026-10-19 起素材位改为**按所选接口格式的族能力逐项勾选**（能力来自族模板描述符的
  * `supports_media_slots`），本文件保护：
- * - 接口类型空态起步、必选（2026-09-29 起连接级预选摘除）；模型 ID 必填、格式非法即拦；
+ * - 接口格式空态起步、必选（2026-09-29 起连接级预选摘除）；模型 ID 必填、格式非法即拦；
  * - 只呈现该族支持的素材位（OpenAI / Gemini 一位、Seedance 五位），0 位族不渲染素材区块；
- * - 换接口类型时旧勾选被清空并给出可见反馈（不静默清空）；
+ * - 换接口格式时旧勾选被清空并给出可见反馈（不静默清空）；
  * - 协议必填位（可灵图生视频的首帧）进入界面即已勾且不可取消，且必随提交体交回；
  * - 族能力还没读到时不放行提交（否则会落一条素材位未知的记录）；
  * - 没动「高级参数自定义」时提交 parameterOverrides 为 null；失败原因显示在表单底部。
@@ -54,7 +55,7 @@ const REQUIRED_SLOTS: Readonly<Partial<Record<string, GenerationMediaSlotId[]>>>
 const descriptorFor = (familyAdapterId: string): FamilyTemplateParameterDescriptor => ({
   family_adapter_id: familyAdapterId,
   official_fields: [],
-  reserved_wire_names: [],
+  reserved_wire_names: { body: [], query: [], header: [] },
   supports_media_slots: SUPPORTED_SLOTS[familyAdapterId] ?? [],
   required_media_slots: [...(REQUIRED_SLOTS[familyAdapterId] ?? [])],
 });
@@ -70,7 +71,13 @@ const Harness = ({
   loadParameterTemplate: (familyAdapterId: string) => Promise<FamilyTemplateParameterDescriptor>;
   failureText?: string | null;
 }) => {
-  const form = useGenerationModelForm({ loadParameterTemplate, onSubmit, onClose });
+  const form = useGenerationModelForm({
+    loadParameterTemplate,
+    recipes: [],
+    formatOptions: PRESET_FORMAT_OPTIONS,
+    onSubmit,
+    onClose,
+  });
   return (
     <>
       <GenerationModelFields form={form} />
@@ -104,9 +111,9 @@ const renderForm = (
   return { onSubmit, loadParameterTemplate, unmount: view.unmount };
 };
 
-/** 打开「接口类型」下拉并选中一个选项（jsdom 无 PointerEvent：键盘开下拉，click 选中）。 */
+/** 打开「接口格式」下拉并选中一个选项（jsdom 无 PointerEvent：键盘开下拉，click 选中）。 */
 const chooseAdapter = (displayName: string): void => {
-  fireEvent.keyDown(screen.getByLabelText('接口类型'), { key: 'Enter' });
+  fireEvent.keyDown(screen.getByLabelText('接口格式'), { key: 'Enter' });
   fireEvent.click(screen.getByRole('option', { name: displayName }));
 };
 
@@ -114,12 +121,12 @@ const chooseAdapter = (displayName: string): void => {
 const slotCheckbox = (label: string) => screen.getByRole('checkbox', { name: label });
 
 describe('GenerationModelForm（添加）', () => {
-  it('接口类型空态起步且必填：填了模型 ID 没选接口类型仍不能提交', () => {
+  it('接口格式空态起步且必填：填了模型 ID 没选接口格式仍不能提交', () => {
     renderForm();
 
     fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
     expect(screen.getByRole('button', { name: '添加' })).toBeDisabled();
-    expect(screen.getByLabelText('接口类型')).toHaveTextContent('请选择接口类型');
+    expect(screen.getByLabelText('接口格式')).toHaveTextContent('请选择接口格式');
   });
 
   it('选 OpenAI 图像：只出现「参考图」一项，勾选随提交体交回', async () => {
@@ -147,6 +154,7 @@ describe('GenerationModelForm（添加）', () => {
         remoteModelId: 'remote-name',
         acceptedMediaSlots: ['reference_image'],
         parameterOverrides: null,
+        recipeId: null,
       });
     });
   });
@@ -176,6 +184,7 @@ describe('GenerationModelForm（添加）', () => {
         remoteModelId: null,
         acceptedMediaSlots: ['first_frame', 'reference_video'],
         parameterOverrides: null,
+        recipeId: null,
       });
     });
   });
@@ -188,7 +197,7 @@ describe('GenerationModelForm（添加）', () => {
 
     // 素材区块加载完成后仍然没有勾选框，也没有区块标题
     await waitFor(() => {
-      expect(screen.queryByText('正在读取这个接口类型能用的素材…')).not.toBeInTheDocument();
+      expect(screen.queryByText('正在读取这个接口格式能用的素材…')).not.toBeInTheDocument();
     });
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
     expect(screen.queryByText('这个模型接受的素材')).not.toBeInTheDocument();
@@ -201,11 +210,12 @@ describe('GenerationModelForm（添加）', () => {
         remoteModelId: null,
         acceptedMediaSlots: [],
         parameterOverrides: null,
+        recipeId: null,
       });
     });
   });
 
-  it('换接口类型：旧勾选被清空，并给出可见反馈（不静默清空）', async () => {
+  it('换接口格式：旧勾选被清空，并给出可见反馈（不静默清空）', async () => {
     renderForm();
 
     fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'my-model' } });
@@ -224,7 +234,7 @@ describe('GenerationModelForm（添加）', () => {
 
     expect(screen.queryByRole('checkbox', { name: '参考图' })).not.toBeInTheDocument();
     expect(slotCheckbox('尾帧')).not.toBeChecked();
-    // 反馈点名换成了哪个接口类型，并说清旧勾选已清掉
+    // 反馈点名换成了哪个接口格式，并说清旧勾选已清掉
     expect(screen.getByText('已换成「Kling 图生视频」，之前勾的素材都清掉了。')).toBeInTheDocument();
   });
 
@@ -252,6 +262,7 @@ describe('GenerationModelForm（添加）', () => {
         remoteModelId: null,
         acceptedMediaSlots: ['first_frame'],
         parameterOverrides: null,
+        recipeId: null,
       });
     });
   });
@@ -266,7 +277,7 @@ describe('GenerationModelForm（添加）', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText('暂时读不到这个接口类型能用的素材。关掉这个窗口后点「刷新」再试。'),
+        screen.getByText('暂时读不到这个接口格式能用的素材。关掉这个窗口后点「刷新」再试。'),
       ).toBeInTheDocument();
     });
     expect(screen.getByRole('button', { name: '添加' })).toBeDisabled();
@@ -323,27 +334,27 @@ describe('GenerationModelForm（添加）', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('「my-image-model」已经添加到这个服务商了。');
   });
 
-  it('尚未选择接口类型时展开高级区不拉参数描述；选好后再展开按所选接口类型拉取', async () => {
+  it('尚未选择接口格式时展开高级区不拉参数描述；选好后再展开按所选接口格式拉取', async () => {
     const loadParameterTemplate = vi.fn<(familyAdapterId: string) => Promise<FamilyTemplateParameterDescriptor>>(
       (familyAdapterId: string) => Promise.resolve(descriptorFor(familyAdapterId)),
     );
     renderForm({ loadParameterTemplate });
 
-    // 接口类型未选：展开高级区不发起装载，折叠区按「先选接口类型」指引呈现
+    // 接口格式未选：展开高级区不发起装载，折叠区按「先选接口格式」指引呈现
     fireEvent.click(screen.getByRole('button', { name: '高级参数自定义' }));
     await waitFor(() => {
-      expect(screen.getByText('先选好接口类型，再看能调哪些参数。')).toBeInTheDocument();
+      expect(screen.getByText('先选好接口格式，再看能调哪些参数。')).toBeInTheDocument();
     });
     expect(loadParameterTemplate).not.toHaveBeenCalled();
 
-    // 选好接口类型：收起再展开，按所选接口类型拉取
+    // 选好接口格式：收起再展开，按所选接口格式拉取
     fireEvent.click(screen.getByRole('button', { name: '高级参数自定义' }));
     chooseAdapter('OpenAI Image');
     await waitFor(() => {
       expect(slotCheckbox('参考图')).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole('button', { name: '高级参数自定义' }));
-    // 素材位装载已按所选接口类型拉过一次（高级区复用同一份描述符装载）
+    // 素材位装载已按所选接口格式拉过一次（高级区复用同一份描述符装载）
     await waitFor(() => {
       expect(loadParameterTemplate).toHaveBeenCalledWith('openai-image-v1');
     });

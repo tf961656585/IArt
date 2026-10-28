@@ -1,0 +1,654 @@
+{
+  "schema_version": 1,
+  "format_id": "kling-image2video-v1",
+  "version": "1.0.0",
+  "display_name": "Kling 图生视频",
+  "family": "generation",
+  "origin": "preset",
+  "status": "ready",
+  "order": 70,
+  "transport": {
+    "auth": {
+      "kind": "bearer",
+      "header_name": "Authorization",
+      "prefix": "Bearer"
+    },
+    "endpoints": {
+      "imageToVideo": "/image-to-video/kling-3.0",
+      "taskById": "/tasks?task_ids={id}"
+    },
+    "submit": {
+      "endpoint_key": "imageToVideo",
+      "method": "POST",
+      "content_type": "application/json",
+      "payload_format": "json",
+      "response_id_path": "/data/id"
+    },
+    "async": {
+      "identity_path": "/data/id",
+      "polling": {
+        "endpoint_key": "taskById",
+        "method": "GET",
+        "interval_ms": 3000,
+        "max_attempts": 500
+      }
+    },
+    "payload_rules": {
+      "api.endpoint": { "kind": "literal", "value": "{{endpoint:imageToVideo}}" },
+      "api.method": { "kind": "literal", "value": "{{method:submit}}" },
+      "api.contentType": { "kind": "literal", "value": "{{content_type:submit}}" },
+      "api.responseHandling.mode": {
+        "kind": "literal",
+        "value": "async"
+      },
+      "body.contents": {
+        "kind": "compute",
+        "operator": "compact_array",
+        "cache_key": "klingV3Image2Video.contents",
+        "note": "按记录的素材位组装官方 contents 数组：文本块 + 首帧（必填，assert_non_empty）+ 尾帧（条件追加）；compact_array 压掉未填写的分支。",
+        "args": [
+          {
+            "kind": "compute",
+            "operator": "object",
+            "entries": {
+              "type": {
+                "kind": "literal",
+                "value": "prompt"
+              },
+              "text": {
+                "kind": "compute",
+                "operator": "assert_non_empty",
+                "cache_key": "klingV3Image2Video.prompt",
+                "args": [
+                  {
+                    "kind": "field",
+                    "field_key": "__prompt",
+                    "transforms": ["trim"]
+                  }
+                ],
+                "options": {
+                  "message": "请填写提示词。"
+                }
+              }
+            }
+          },
+          {
+            "$if": { "$slot_present": "first_frame" },
+            "then": {
+              "kind": "compute",
+              "operator": "object",
+              "entries": {
+                "type": {
+                  "kind": "literal",
+                  "value": "first_frame"
+                },
+                "url": {
+                  "kind": "compute",
+                  "operator": "assert_non_empty",
+                  "cache_key": "klingV3Image2Video.firstFrame",
+                  "args": [
+                    {
+                      "kind": "field",
+                      "field_key": "firstFrameImage",
+                      "transforms": ["extractFirstUrl"],
+                      "media_target": "public_url"
+                    }
+                  ],
+                  "options": {
+                    "message": "请上传首帧图。"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "$if": { "$slot_present": "last_frame" },
+            "then": {
+              "kind": "when",
+              "condition": {
+                "op": "ne",
+                "field": "lastFrameImage",
+                "value": []
+              },
+              "truthy": {
+                "kind": "compute",
+                "operator": "object",
+                "entries": {
+                  "type": {
+                    "kind": "literal",
+                    "value": "last_frame"
+                  },
+                  "url": {
+                    "kind": "field",
+                    "field_key": "lastFrameImage",
+                    "transforms": ["extractFirstUrl"],
+                    "media_target": "public_url"
+                  }
+                }
+              },
+              "falsy": {
+                "kind": "literal",
+                "value": null
+              }
+            }
+          }
+        ]
+      },
+      "body.settings.multi_shot": {
+        "kind": "field",
+        "field_key": "multiShot"
+      },
+      "body.settings.audio": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "cache_key": "klingV3Image2Video.audio",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "audio",
+            "transforms": ["trim"]
+          }
+        ],
+        "options": {
+          "allowed_values": ["native", "off"],
+          "fallback": "off"
+        }
+      },
+      "body.settings.resolution": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "cache_key": "klingV3Image2Video.resolution",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "resolution",
+            "transforms": ["trim"]
+          }
+        ],
+        "options": {
+          "allowed_values": ["720p", "1080p", "4k"],
+          "fallback": "720p"
+        }
+      },
+      "body.settings.duration": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "cache_key": "klingV3Image2Video.duration",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "duration",
+            "transforms": ["toNumber"]
+          }
+        ],
+        "options": {
+          "allowed_values": [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+          "fallback": 5
+        }
+      },
+      "body.options.watermark_info.enabled": {
+        "kind": "when",
+        "condition": {
+          "op": "truthy",
+          "field": "watermark"
+        },
+        "truthy": {
+          "kind": "literal",
+          "value": true
+        },
+        "falsy": {
+          "kind": "literal",
+          "value": false
+        }
+      },
+      "meta.taskType": {
+        "kind": "literal",
+        "value": "image2video"
+      },
+      "meta.duration": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "cache_key": "klingV3Image2Video.duration",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "duration",
+            "transforms": ["toNumber"]
+          }
+        ],
+        "options": {
+          "allowed_values": [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+          "fallback": 5
+        }
+      },
+      "meta.resolution": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "cache_key": "klingV3Image2Video.resolution",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "resolution",
+            "transforms": ["trim"]
+          }
+        ],
+        "options": {
+          "allowed_values": ["720p", "1080p", "4k"],
+          "fallback": "720p"
+        }
+      },
+      "meta.audio": {
+        "kind": "compute",
+        "operator": "normalize_enum",
+        "cache_key": "klingV3Image2Video.audio",
+        "args": [
+          {
+            "kind": "field",
+            "field_key": "audio",
+            "transforms": ["trim"]
+          }
+        ],
+        "options": {
+          "allowed_values": ["native", "off"],
+          "fallback": "off"
+        }
+      },
+      "prompt": {
+        "kind": "field",
+        "field_key": "__prompt",
+        "transforms": ["trim"]
+      },
+      "input": {
+        "kind": "field",
+        "field_key": "__prompt",
+        "transforms": ["trim"]
+      }
+    }
+  },
+  "parameters": {
+    "schema": {
+      "schema_type": "object",
+      "fields": [
+        {
+          "field_key": "duration",
+          "label": "fields.duration.label",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            { "value": 3, "label": "fields.duration.options.3.label" },
+            { "value": 4, "label": "fields.duration.options.4.label" },
+            { "value": 5, "label": "fields.duration.options.5.label" },
+            { "value": 6, "label": "fields.duration.options.6.label" },
+            { "value": 7, "label": "fields.duration.options.7.label" },
+            { "value": 8, "label": "fields.duration.options.8.label" },
+            { "value": 9, "label": "fields.duration.options.9.label" },
+            { "value": 10, "label": "fields.duration.options.10.label" },
+            { "value": 11, "label": "fields.duration.options.11.label" },
+            { "value": 12, "label": "fields.duration.options.12.label" },
+            { "value": 13, "label": "fields.duration.options.13.label" },
+            { "value": 14, "label": "fields.duration.options.14.label" },
+            { "value": 15, "label": "fields.duration.options.15.label" }
+          ],
+          "component_props": {}
+        },
+        {
+          "field_key": "resolution",
+          "label": "fields.resolution.label",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            { "value": "720p", "label": "fields.resolution.options.720p.label" },
+            { "value": "1080p", "label": "fields.resolution.options.1080p.label" },
+            { "value": "4k", "label": "fields.resolution.options.4k.label" }
+          ],
+          "component_props": {}
+        },
+        {
+          "field_key": "audio",
+          "label": "fields.audio.label",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            { "value": "native", "label": "fields.audio.options.native.label" },
+            { "value": "off", "label": "fields.audio.options.off.label" }
+          ],
+          "component_props": {}
+        },
+        {
+          "field_key": "multiShot",
+          "label": "fields.multiShot.label",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "switch",
+          "component_props": {}
+        },
+        {
+          "field_key": "watermark",
+          "label": "fields.watermark.label",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "switch",
+          "component_props": {}
+        }
+      ],
+      "required_fields": ["firstFrameImage"],
+      "validation_rules": []
+    },
+    "defaults": {
+      "duration": 5,
+      "resolution": "720p",
+      "audio": "off",
+      "multiShot": true,
+      "watermark": false
+    },
+    "prompt_field": {
+      "field_key": "__prompt",
+      "required": true,
+      "validation_rules": []
+    }
+  },
+  "media": {
+    "supports": ["first_frame", "last_frame"],
+    "required": ["first_frame"],
+    "slots": {
+      "first_frame": {
+        "field_key": "firstFrameImage",
+        "component": "imageUpload",
+        "wire_name": "firstFrameImage",
+        "max_files": 1
+      },
+      "last_frame": {
+        "field_key": "lastFrameImage",
+        "component": "imageUpload",
+        "wire_name": "lastFrameImage",
+        "max_files": 1
+      }
+    }
+  },
+  "projection": {
+    "provider_id": "kling",
+    "group_key": "kling",
+    "capability": {
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["video"],
+      "supports_async_task": true,
+      "supports_streaming": false,
+      "supports_multi_image": false,
+      "supports_reference_media": true,
+      "constraints": []
+    },
+    "execution_profile": {
+      "task_type": "video",
+      "supports_async_task": true
+    },
+    "display": {
+      "visible": true,
+      "order": 9000
+    },
+    "workspace": {
+      "task_list_position": "right"
+    },
+    "execution_driver": "http_formal_task",
+    "runtime_extras": {
+      "url_input_upload_mode": {
+        "$if": { "$any_slot_present": true },
+        "then": "public_relay"
+      },
+      "url_input_upload_target_type": {
+        "$if": { "$any_slot_present": true },
+        "then": "self_hosted_image_public_url"
+      }
+    },
+    "node": {
+      "node_type": "model",
+      "output_ports": [
+        {
+          "id": "video",
+          "name": "ports.outputs.video.name",
+          "data_type": "video",
+          "field_key": "output_video",
+          "multiple": true
+        }
+      ]
+    }
+  },
+  "builtin_behavior": {
+    "result_rule": {
+      "mode": "async"
+    },
+    "polling_status": {
+      "status_paths": ["data.0.status", "data.status", "status"],
+      "success_values": ["succeeded"],
+      "failure_values": ["failed", "failure", "error"],
+      "success_field_paths": ["data.0.outputs.0.url", "data.0.status"],
+      "failure_code_paths": [],
+      "failure_message_paths": ["data.0.message", "data.message", "message"]
+    },
+    "result_output_mapping": {
+      "response_mode": "structured_payload",
+      "output_mapping_rules": [
+        {
+          "target": "output.video_url",
+          "source": {
+            "kind": "response",
+            "path": "data[].outputs[].url"
+          },
+          "required": false,
+          "default_value": null
+        }
+      ],
+      "note": "可灵新标准统一查询端点 GET /tasks?task_ids={id}；响应 data[] → outputs[] 取 url（spec 07 §9.2）"
+    }
+  },
+  "composition": {
+    "fragments": {
+      "first_frame": {
+        "schema_field": {
+          "label": "fields.firstFrameImage.label",
+          "description": "fields.firstFrameImage.description",
+          "required": true,
+          "default_value": [],
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 2
+          },
+          "component_props": {
+            "accept": "image/png,image/jpeg,image/webp,image/*"
+          }
+        },
+        "input_port": {
+          "id": "firstFrameImage",
+          "name": "ports.inputs.firstFrameImage.name",
+          "data_type": "image",
+          "required": true,
+          "max_connections": 1,
+          "description": "ports.inputs.firstFrameImage.description"
+        }
+      },
+      "last_frame": {
+        "schema_field": {
+          "label": "fields.lastFrameImage.label",
+          "description": "fields.lastFrameImage.description",
+          "required": false,
+          "default_value": [],
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 2
+          },
+          "component_props": {
+            "accept": "image/png,image/jpeg,image/webp,image/*"
+          }
+        },
+        "input_port": {
+          "id": "lastFrameImage",
+          "name": "ports.inputs.lastFrameImage.name",
+          "data_type": "image",
+          "required": false,
+          "max_connections": 1,
+          "description": "ports.inputs.lastFrameImage.description"
+        }
+      }
+    },
+    "variants": []
+  },
+  "localization": {
+    "zh-CN": {
+      "fields": {
+        "firstFrameImage": {
+          "label": "首帧",
+          "description": "必填，作为视频起始画面。支持 JPG / PNG / WebP，单张不超过 50 MB，宽高均不小于 300 px，宽高比 1:2.5–2.5:1。"
+        },
+        "lastFrameImage": {
+          "label": "尾帧",
+          "description": "可选，作为视频结束画面；官方不支持只给尾帧、不给首帧。约束与首帧图相同。"
+        },
+        "duration": {
+          "label": "视频时长",
+          "options": {
+            "3": { "label": "3 秒" },
+            "4": { "label": "4 秒" },
+            "5": { "label": "5 秒" },
+            "6": { "label": "6 秒" },
+            "7": { "label": "7 秒" },
+            "8": { "label": "8 秒" },
+            "9": { "label": "9 秒" },
+            "10": { "label": "10 秒" },
+            "11": { "label": "11 秒" },
+            "12": { "label": "12 秒" },
+            "13": { "label": "13 秒" },
+            "14": { "label": "14 秒" },
+            "15": { "label": "15 秒" }
+          }
+        },
+        "resolution": {
+          "label": "清晰度",
+          "description": "默认 720P，可选 1080P 与 4K；档位越高生成越慢。",
+          "options": {
+            "720p": { "label": "720P" },
+            "1080p": { "label": "1080P" },
+            "4k": { "label": "4K" }
+          }
+        },
+        "audio": {
+          "label": "音频",
+          "description": "选择「原生音频」时生成与画面匹配的声音；默认无音频。",
+          "options": {
+            "native": { "label": "原生音频" },
+            "off": { "label": "无音频" }
+          }
+        },
+        "multiShot": {
+          "label": "多镜头",
+          "description": "开启后可用多镜头提示词语法生成多镜头视频，默认开启。"
+        },
+        "watermark": {
+          "label": "水印",
+          "description": "开启后生成带水印的结果，默认关闭。"
+        }
+      },
+      "ports": {
+        "inputs": {
+          "firstFrameImage": {
+            "name": "首帧",
+            "description": "接入素材或资产节点作为视频起始画面（必填）。"
+          },
+          "lastFrameImage": {
+            "name": "尾帧",
+            "description": "接入素材或资产节点作为视频结束画面。"
+          }
+        },
+        "outputs": {
+          "video": { "name": "视频" }
+        }
+      }
+    },
+    "en": {
+      "fields": {
+        "firstFrameImage": {
+          "label": "First frame",
+          "description": "Required. The starting frame. JPG / PNG / WebP, up to 50 MB, edges at least 300 px, aspect ratio 1:2.5–2.5:1."
+        },
+        "lastFrameImage": {
+          "label": "Last frame",
+          "description": "Optional ending frame. A last frame alone (without a first frame) is not supported. Same constraints as the first frame."
+        },
+        "duration": {
+          "label": "Duration",
+          "options": {
+            "3": { "label": "3 seconds" },
+            "4": { "label": "4 seconds" },
+            "5": { "label": "5 seconds" },
+            "6": { "label": "6 seconds" },
+            "7": { "label": "7 seconds" },
+            "8": { "label": "8 seconds" },
+            "9": { "label": "9 seconds" },
+            "10": { "label": "10 seconds" },
+            "11": { "label": "11 seconds" },
+            "12": { "label": "12 seconds" },
+            "13": { "label": "13 seconds" },
+            "14": { "label": "14 seconds" },
+            "15": { "label": "15 seconds" }
+          }
+        },
+        "resolution": {
+          "label": "Resolution",
+          "description": "Defaults to 720P. 1080P and 4K are available; higher tiers take longer.",
+          "options": {
+            "720p": { "label": "720P" },
+            "1080p": { "label": "1080P" },
+            "4k": { "label": "4K" }
+          }
+        },
+        "audio": {
+          "label": "Audio",
+          "description": "Choose native audio to generate matching sound. Defaults to no audio.",
+          "options": {
+            "native": { "label": "Native audio" },
+            "off": { "label": "No audio" }
+          }
+        },
+        "multiShot": {
+          "label": "Multi-shot",
+          "description": "Allow multi-shot prompt syntax to produce a multi-shot video. On by default."
+        },
+        "watermark": {
+          "label": "Watermark",
+          "description": "Generate watermarked results when on. Off by default."
+        }
+      },
+      "ports": {
+        "inputs": {
+          "firstFrameImage": {
+            "name": "First frame",
+            "description": "Connect an asset as the starting frame (required)."
+          },
+          "lastFrameImage": {
+            "name": "Last frame",
+            "description": "Connect an asset as the ending frame."
+          }
+        },
+        "outputs": {
+          "video": { "name": "Video" }
+        }
+      }
+    }
+  }
+}

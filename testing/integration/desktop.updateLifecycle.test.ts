@@ -31,6 +31,7 @@ type UpdaterController = {
   scheduleStartupCheck: () => void;
   checkForUpdates: (manual: boolean | undefined) => Promise<AppUpdateCommandResult>;
   startDownload: () => Promise<AppUpdateCommandResult>;
+  cancelDownload: () => Promise<AppUpdateCommandResult>;
   installUpdate: () => AppUpdateCommandResult;
   buildUpdateStateSnapshot: () => AppUpdateState;
   revealDownloadedUpdate: () => Promise<AppUpdateCommandResult>;
@@ -90,6 +91,24 @@ type MockUpdaterLogger = {
   error: (message?: unknown) => void;
   debug: (message: string) => void;
 };
+
+// electron-updater 顶层导出的 CancellationToken 替身：
+// 真实的 cancel() 只置位并触发监听回调，不是抛错；downloadUpdate 侧的 reject 由 mock 自行实现。
+class MockCancellationToken {
+  cancelled = false;
+
+  private readonly cancelHandlers: Array<() => void> = [];
+
+  onCancelRequested(handler: () => void): void {
+    this.cancelHandlers.push(handler);
+    if (this.cancelled) handler();
+  }
+
+  cancel(): void {
+    this.cancelled = true;
+    for (const handler of this.cancelHandlers) handler();
+  }
+}
 
 type LoadedUpdater = {
   controller: UpdaterController;
@@ -240,7 +259,7 @@ const loadUpdater = async (options: {
     },
     './update/app-update-runtime.cjs': runtimeMock,
     './app-update-runtime.cjs': runtimeMock,
-    'electron-updater': { autoUpdater: mockAutoUpdater },
+    'electron-updater': { autoUpdater: mockAutoUpdater, CancellationToken: MockCancellationToken },
   });
   const restore = (): void => {
     restoreModuleLoad();
@@ -296,9 +315,26 @@ const loadUpdater = async (options: {
 };
 
 const countSentEvents = (loaded: LoadedUpdater, type: string): number =>
-  loaded.mainWindow.webContents.send.mock.calls.filter(
-    (call) => (call[0] as unknown) === 'app-update:event' && (call[1] as { type: string }).type === type,
-  ).length;
+  loaded.mainWindow.webContents.send.mock.calls.filter((call) => (call[0] as unknown) === 'app-update:event' && (call[1] as { type: string }).type === type).length;
+
+const pendingFileOf = (seam: LoadedUpdater): string => path.join(seam.tempRoot, 'userData', 'pending-update.json');
+const downloadedFilePath = (seam: LoadedUpdater, fileName: string): string => path.join(seam.tempRoot, fileName);
+const advancePastAutoCheckWindow = (): void => { vi.setSystemTime(new Date(Date.now() + 31 * 60 * 1000)); };
+
+const mockAvailableCheck = (seam: LoadedUpdater, info: MockUpdateInfo = UPDATE_INFO_DARWIN): void => {
+  seam.mockAutoUpdater.checkForUpdates.mockImplementation(async () => {
+    seam.emit('checking-for-update');
+    seam.emit('update-available', info);
+    return null;
+  });
+};
+const mockFailingCheck = (seam: LoadedUpdater, message: string): void => {
+  seam.mockAutoUpdater.checkForUpdates.mockImplementation(async () => {
+    seam.emit('checking-for-update');
+    seam.emit('error', new Error(message));
+    throw new Error(message);
+  });
+};
 
 describe('desktop updater lifecycle (electron-updater bridge)', () => {
   afterEach(() => {
@@ -347,15 +383,11 @@ describe('desktop updater lifecycle (electron-updater bridge)', () => {
     expect(loaded.appOn).not.toHaveBeenCalledWith('browser-window-focus', expect.any(Function));
   });
 
-  it('发现更新后自动触发下载；下载失败时状态变为 error', async () => {
+  it('检查发现更新后停在 available，不自动下载；显式 startDownload 后才下载，失败落 error', async () => {
     loaded = await loadUpdater({ packaged: true, platform: undefined });
     loaded.controller.setupAutoUpdater();
 
-    loaded.mockAutoUpdater.checkForUpdates.mockImplementation(async () => {
-      loaded?.emit('checking-for-update');
-      loaded?.emit('update-available', UPDATE_INFO_DARWIN);
-      return null;
-    });
+    mockAvailableCheck(loaded, UPDATE_INFO_DARWIN);
     loaded.mockAutoUpdater.downloadUpdate.mockImplementation(async () => {
       throw new Error('download failed for test');
     });
@@ -364,24 +396,26 @@ describe('desktop updater lifecycle (electron-updater bridge)', () => {
     await flushMicrotasks();
 
     expect(result.status).toBe('success');
-    // 发现更新后自动触发下载（downloadUpdate 已被调用），下载失败落入 error 状态。
+    // 发现更新只停在 available：桥接不得自动触发下载。
+    expect(loaded.mockAutoUpdater.downloadUpdate).not.toHaveBeenCalled();
+    expect(loaded.controller.buildUpdateStateSnapshot().status).toBe('available');
+
+    const downloadResult = await loaded.controller.startDownload();
+    await flushMicrotasks();
+
     expect(loaded.mockAutoUpdater.downloadUpdate).toHaveBeenCalledTimes(1);
+    expect(downloadResult.status).toBe('failed');
     const state = loaded.controller.buildUpdateStateSnapshot();
-    expect(['available', 'error', 'downloading', 'downloaded']).toContain(state.status);
     expect(state.status).toBe('error');
   });
 
-  it('检查发现更新后自动下载：模拟下载进度，写入 downloaded 状态和 pending', async () => {
+  it('显式 startDownload 后模拟下载进度，写入 downloaded 状态和 pending', async () => {
     loaded = await loadUpdater({ packaged: true, platform: undefined });
     loaded.controller.setupAutoUpdater();
 
     const downloadedFile = path.join(loaded.tempRoot, 'update-cache', 'IARTStudio-0.5.1-mac-arm64.dmg');
 
-    loaded.mockAutoUpdater.checkForUpdates.mockImplementation(async () => {
-      loaded?.emit('checking-for-update');
-      loaded?.emit('update-available', UPDATE_INFO_DARWIN);
-      return null;
-    });
+    mockAvailableCheck(loaded, UPDATE_INFO_DARWIN);
     loaded.mockAutoUpdater.downloadUpdate.mockImplementation(async () => {
       loaded?.emit('download-progress', { percent: 42, bytesPerSecond: 2048, transferred: 420, total: 2048 });
       loaded?.emit('update-downloaded', { ...UPDATE_INFO_DARWIN, downloadedFile: downloadedFile });
@@ -389,15 +423,21 @@ describe('desktop updater lifecycle (electron-updater bridge)', () => {
     });
 
     const checkResp = await loaded.controller.checkForUpdates(false);
+    expect(checkResp.status).toBe('success');
+    expect(loaded.controller.buildUpdateStateSnapshot().status).toBe('available');
+
+    const downloadResp = await loaded.controller.startDownload();
     await flushMicrotasks();
 
-    expect(checkResp.status).toBe('success');
+    expect(downloadResp.status).toBe('success');
     const state = loaded.controller.buildUpdateStateSnapshot();
     expect(state.status).toBe('downloaded');
     if (state.status === 'downloaded') {
       expect(state.latestVersion).toBe('0.5.1');
       expect(state.downloadPath).toBe(downloadedFile);
       expect(state.installActions).toContain('open-installer');
+      // 安装动作投影不再产出 quit-and-install（枚举保留在契约里）。
+      expect(state.installActions).not.toContain('quit-and-install');
     }
     expect(loaded.mainWindow.webContents.send).toHaveBeenCalledWith(
       'app-update:event',
@@ -417,18 +457,13 @@ describe('desktop updater lifecycle (electron-updater bridge)', () => {
     loaded = await loadUpdater({ packaged: true, platform: undefined });
     loaded.controller.setupAutoUpdater();
 
-    loaded.mockAutoUpdater.checkForUpdates.mockImplementation(async () => {
-      loaded?.emit('checking-for-update');
-      loaded?.emit('update-available', UPDATE_INFO_DARWIN);
-      return null;
-    });
-    // 下载永远挂起，冻结在 available/downloading 以便检查 available 状态本身
-    loaded.mockAutoUpdater.downloadUpdate.mockImplementation(
-      () => new Promise<string[]>(() => undefined),
-    );
+    mockAvailableCheck(loaded, UPDATE_INFO_DARWIN);
 
     await loaded.controller.checkForUpdates(false);
     await flushMicrotasks();
+
+    expect(loaded.mockAutoUpdater.downloadUpdate).not.toHaveBeenCalled();
+    expect(loaded.controller.buildUpdateStateSnapshot().status).toBe('available');
 
     const events = loaded.mainWindow.webContents.send.mock.calls.filter(
       (call) => (call[0] as unknown) === 'app-update:event',
@@ -472,15 +507,12 @@ describe('desktop updater lifecycle (electron-updater bridge)', () => {
     loaded = await loadUpdater({ packaged: true, platform: 'darwin' });
     loaded.controller.setupAutoUpdater();
 
-    loaded.mockAutoUpdater.checkForUpdates.mockImplementation(async () => {
-      loaded?.emit('checking-for-update');
-      loaded?.emit('update-available', UPDATE_INFO_DARWIN);
-      return null;
-    });
+    mockAvailableCheck(loaded, UPDATE_INFO_DARWIN);
     const downloadedDmg = path.join(loaded.tempRoot, 'IARTStudio-0.5.1-mac-arm64.dmg');
     loaded.mockAutoUpdater.downloadUpdate.mockImplementation(async () => [downloadedDmg]);
 
     await loaded.controller.checkForUpdates(false);
+    await loaded.controller.startDownload();
     await flushMicrotasks();
 
     const state = loaded.controller.buildUpdateStateSnapshot();
@@ -507,15 +539,12 @@ describe('desktop updater lifecycle (electron-updater bridge)', () => {
         { url: 'IARTStudio-0.5.1-mac-arm64.zip', sha512: 'c2hhNTEyLWRlbW8temlw', size: 1024 },
       ],
     };
-    loaded.mockAutoUpdater.checkForUpdates.mockImplementation(async () => {
-      loaded?.emit('checking-for-update');
-      loaded?.emit('update-available', zipOnlyInfo);
-      return null;
-    });
+    mockAvailableCheck(loaded, zipOnlyInfo);
     const downloadedZip = path.join(loaded.tempRoot, 'IARTStudio-0.5.1-mac-arm64.zip');
     loaded.mockAutoUpdater.downloadUpdate.mockImplementation(async () => [downloadedZip]);
 
     await loaded.controller.checkForUpdates(false);
+    await loaded.controller.startDownload();
     await flushMicrotasks();
 
     const state = loaded.controller.buildUpdateStateSnapshot();
@@ -534,19 +563,19 @@ describe('desktop updater lifecycle (electron-updater bridge)', () => {
     loaded = await loadUpdater({ packaged: true, platform: 'win32' });
     loaded.controller.setupAutoUpdater();
 
-    loaded.mockAutoUpdater.checkForUpdates.mockImplementation(async () => {
-      loaded?.emit('checking-for-update');
-      loaded?.emit('update-available', UPDATE_INFO_WIN32);
-      return null;
-    });
+    mockAvailableCheck(loaded, UPDATE_INFO_WIN32);
     const downloadedExe = path.join(loaded.tempRoot, 'IARTStudio-Setup-0.5.1-x64.exe');
     loaded.mockAutoUpdater.downloadUpdate.mockImplementation(async () => [downloadedExe]);
 
     await loaded.controller.checkForUpdates(false);
+    await loaded.controller.startDownload();
     await flushMicrotasks();
 
     const state = loaded.controller.buildUpdateStateSnapshot();
     expect(state.status).toBe('downloaded');
+    if (state.status === 'downloaded') {
+      expect(state.installActions).not.toContain('quit-and-install');
+    }
 
     fs.mkdirSync(path.dirname(downloadedExe), { recursive: true });
     fs.writeFileSync(downloadedExe, 'fake-exe', 'utf8');
@@ -568,7 +597,7 @@ describe('desktop updater lifecycle (electron-updater bridge)', () => {
     }
   });
 
-  it('节流验证：连续两次 checkForUpdates，第二次被节流跳过', async () => {
+  it('节流验证：连续两次 checkForUpdates，第二次被节流跳过并携带 retryAfterMs', async () => {
     loaded = await loadUpdater({ packaged: true, platform: undefined });
     loaded.controller.setupAutoUpdater();
 
@@ -581,10 +610,44 @@ describe('desktop updater lifecycle (electron-updater bridge)', () => {
     expect(second.status).toBe('skipped');
     if (second.status === 'skipped') {
       expect(second.reason).toBe('throttled');
+      // 剩余等待时间：未超过 30 分钟自动检查窗口，且非负。
+      expect(second.retryAfterMs).toBeGreaterThan(0);
+      expect(second.retryAfterMs).toBeLessThanOrEqual(30 * 60 * 1000);
+    }
+
+    // 非节流的跳过路径不带 retryAfterMs。
+    loaded.setSupportedTarget(false);
+    const unsupported = await loaded.controller.checkForUpdates(true);
+    expect(unsupported.status).toBe('skipped');
+    if (unsupported.status === 'skipped') {
+      expect(unsupported.reason).toBe('unsupported-target');
+      expect(unsupported.retryAfterMs).toBeUndefined();
     }
 
     // the library's checkForUpdates was only called once (first time)
     expect(loaded.mockAutoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('手动检查节流的 retryAfterMs 是 2 分钟窗口内的剩余毫秒', async () => {
+    vi.useFakeTimers();
+    loaded = await loadUpdater({ packaged: true, platform: undefined });
+    loaded.controller.setupAutoUpdater();
+
+    const first = await loaded.controller.checkForUpdates(true);
+    expect(first.status).toBe('success');
+
+    vi.setSystemTime(new Date(Date.now() + 60_000));
+    const second = await loaded.controller.checkForUpdates(true);
+    expect(second.status).toBe('skipped');
+    if (second.status === 'skipped') {
+      expect(second.reason).toBe('throttled');
+      expect(second.retryAfterMs).toBe(60_000);
+    }
+
+    // 窗口过去后可再次检查。
+    vi.setSystemTime(new Date(Date.now() + 61_000));
+    const third = await loaded.controller.checkForUpdates(true);
+    expect(third.status).toBe('success');
   });
 
   it('节流按尝试计：检查失败后立即二次 check 也被节流跳过', async () => {
@@ -628,6 +691,222 @@ describe('desktop updater lifecycle (electron-updater bridge)', () => {
     if (state.status === 'error') {
       expect(state.error.message).toBe('network failure');
     }
+    expect(countSentEvents(loaded, 'error')).toBe(1);
+  });
+
+  it('下载中取消：回到 available、无 error、不写 pending，可再次下载；非下载态取消 skipped', async () => {
+    loaded = await loadUpdater({ packaged: true, platform: 'darwin' });
+    loaded.controller.setupAutoUpdater();
+    mockAvailableCheck(loaded);
+    let downloadCalls = 0;
+    const downloadRoot = loaded.tempRoot;
+    loaded.mockAutoUpdater.downloadUpdate.mockImplementation((token: MockCancellationToken) => {
+      downloadCalls += 1;
+      if (downloadCalls === 1) {
+        // 首次下载：等待取消，并在取消时以普通 Error reject（取消判定不得依赖异常类型）。
+        return new Promise<string[]>((_resolve, reject) => {
+          token.onCancelRequested(() => reject(new Error('cancelled')));
+        });
+      }
+      return Promise.resolve([path.join(downloadRoot, 'IARTStudio-0.5.1-mac-arm64.dmg')]);
+    });
+
+    await loaded.controller.checkForUpdates(false);
+    expect(loaded.controller.buildUpdateStateSnapshot().status).toBe('available');
+    const downloadPromise = loaded.controller.startDownload();
+    expect(loaded.controller.buildUpdateStateSnapshot().status).toBe('downloading');
+    const cancelResult = await loaded.controller.cancelDownload();
+    const downloadResult = await downloadPromise;
+    expect(cancelResult.status).toBe('success');
+    expect(cancelResult.state.status).toBe('available');
+    expect(downloadResult.status).toBe('skipped');
+    if (downloadResult.status === 'skipped') expect(downloadResult.reason).toBe('download-cancelled');
+    expect(countSentEvents(loaded, 'error')).toBe(0);
+    expect(fs.existsSync(pendingFileOf(loaded))).toBe(false);
+    // 取消后保留「下载」入口：可以再次下载并正常完成。
+    const retry = await loaded.controller.startDownload();
+    expect(retry.status).toBe('success');
+    expect(loaded.controller.buildUpdateStateSnapshot().status).toBe('downloaded');
+    expect(loaded.mockAutoUpdater.downloadUpdate).toHaveBeenCalledTimes(2);
+    // 非下载态取消是幂等的：返回 skipped 且不改变当前状态。
+    const idleCancel = await loaded.controller.cancelDownload();
+    expect(idleCancel.status).toBe('skipped');
+    if (idleCancel.status === 'skipped') {
+      expect(idleCancel.reason).toBe('no-active-download');
+      expect(idleCancel.state.status).toBe('downloaded');
+    }
+  });
+
+  it('取消与下载完成竞争：以已落盘的 downloaded 为准，返回 skipped（download-completed）', async () => {
+    loaded = await loadUpdater({ packaged: true, platform: 'darwin' });
+    loaded.controller.setupAutoUpdater();
+    mockAvailableCheck(loaded);
+    const dmgPath = downloadedFilePath(loaded, 'IARTStudio-0.5.1-mac-arm64.dmg');
+    let resolveDownload: (paths: string[]) => void = () => undefined;
+    loaded.mockAutoUpdater.downloadUpdate.mockImplementation(
+      () => new Promise<string[]>((resolve) => {
+        resolveDownload = resolve;
+      }),
+    );
+    await loaded.controller.checkForUpdates(false);
+    const downloadPromise = loaded.controller.startDownload();
+    // 取消请求先发出（置本地标志并 cancel），但下载已完成落盘：不得丢弃安装包。
+    const cancelPromise = loaded.controller.cancelDownload();
+    resolveDownload([dmgPath]);
+    const [downloadResult, cancelResult] = await Promise.all([downloadPromise, cancelPromise]);
+    expect(downloadResult.status).toBe('success');
+    expect(cancelResult.status).toBe('skipped');
+    if (cancelResult.status === 'skipped') {
+      expect(cancelResult.reason).toBe('download-completed');
+      expect(cancelResult.state.status).toBe('downloaded');
+    }
+    expect(loaded.controller.buildUpdateStateSnapshot().status).toBe('downloaded');
+    expect(countSentEvents(loaded, 'error')).toBe(0);
+    expect(fs.existsSync(pendingFileOf(loaded))).toBe(true);
+  });
+
+  it('同版本检查保持 downloaded：不回到 available、不重复下载、刷新 lastCheckedAt', async () => {
+    vi.useFakeTimers();
+    loaded = await loadUpdater({ packaged: true, platform: 'darwin' });
+    loaded.controller.setupAutoUpdater();
+    mockAvailableCheck(loaded);
+    const dmgPath = downloadedFilePath(loaded, 'IARTStudio-0.5.1-mac-arm64.dmg');
+    loaded.mockAutoUpdater.downloadUpdate.mockImplementation(async () => [dmgPath]);
+    await loaded.controller.checkForUpdates(false);
+    await loaded.controller.startDownload();
+    fs.writeFileSync(dmgPath, 'fake-dmg', 'utf8');
+    const before = loaded.controller.buildUpdateStateSnapshot();
+    expect(before.status).toBe('downloaded');
+    const downloadCallsAfterFirst = loaded.mockAutoUpdater.downloadUpdate.mock.calls.length;
+    const firstCheckedAt = before.lastCheckedAt ?? 0;
+    // 越过 30 分钟自动检查窗口后再次检查，feed 仍是同一版本。
+    advancePastAutoCheckWindow();
+    const second = await loaded.controller.checkForUpdates(false);
+    expect(second.status).toBe('success');
+    const after = loaded.controller.buildUpdateStateSnapshot();
+    expect(after.status).toBe('downloaded');
+    expect(after.latestVersion).toBe('0.5.1');
+    expect(after.lastCheckedAt ?? 0).toBeGreaterThan(firstCheckedAt);
+    expect(loaded.mockAutoUpdater.downloadUpdate.mock.calls.length).toBe(downloadCallsAfterFirst);
+    // 下载完成一次 + 同版本检查重发一次 downloaded 事件。
+    expect(countSentEvents(loaded, 'downloaded')).toBe(2);
+    expect(fs.existsSync(pendingFileOf(loaded))).toBe(true);
+  });
+
+  it('检查发现更高版本时清理旧 pending 并进入 available，不自动下载', async () => {
+    vi.useFakeTimers();
+    loaded = await loadUpdater({ packaged: true, platform: 'darwin' });
+    loaded.controller.setupAutoUpdater();
+    mockAvailableCheck(loaded);
+    const dmgPath = downloadedFilePath(loaded, 'IARTStudio-0.5.1-mac-arm64.dmg');
+    loaded.mockAutoUpdater.downloadUpdate.mockImplementation(async () => [dmgPath]);
+    await loaded.controller.checkForUpdates(false);
+    await loaded.controller.startDownload();
+    fs.writeFileSync(dmgPath, 'fake-dmg', 'utf8');
+    expect(fs.existsSync(pendingFileOf(loaded))).toBe(true);
+    mockAvailableCheck(loaded, {
+      version: '0.5.2',
+      releaseDate: '2026-06-01T00:00:00.000Z',
+      files: [{ url: 'IARTStudio-0.5.2-mac-arm64.dmg', sha512: 'c2hhNTEyLWRlbW8tMDVyMg==', size: 4096 }],
+    });
+    advancePastAutoCheckWindow();
+    const second = await loaded.controller.checkForUpdates(false);
+    expect(second.status).toBe('success');
+    const state = loaded.controller.buildUpdateStateSnapshot();
+    expect(state.status).toBe('available');
+    if (state.status === 'available') expect(state.latestVersion).toBe('0.5.2');
+    expect(fs.existsSync(pendingFileOf(loaded))).toBe(false);
+    expect(loaded.mockAutoUpdater.downloadUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('已下载文件缺失时清理 pending 并回到 available，允许重新下载', async () => {
+    vi.useFakeTimers();
+    loaded = await loadUpdater({ packaged: true, platform: 'darwin' });
+    loaded.controller.setupAutoUpdater();
+    mockAvailableCheck(loaded);
+    const dmgPath = downloadedFilePath(loaded, 'IARTStudio-0.5.1-mac-arm64.dmg');
+    loaded.mockAutoUpdater.downloadUpdate.mockImplementation(async () => [dmgPath]);
+    await loaded.controller.checkForUpdates(false);
+    await loaded.controller.startDownload();
+    fs.writeFileSync(dmgPath, 'fake-dmg', 'utf8');
+    expect(fs.existsSync(pendingFileOf(loaded))).toBe(true);
+    // 安装包被外部清理：同版本检查不得假装仍可安装。
+    fs.rmSync(dmgPath, { force: true });
+    advancePastAutoCheckWindow();
+    const second = await loaded.controller.checkForUpdates(false);
+    expect(second.status).toBe('success');
+    const state = loaded.controller.buildUpdateStateSnapshot();
+    expect(state.status).toBe('available');
+    if (state.status === 'available') expect(state.latestVersion).toBe('0.5.1');
+    expect(fs.existsSync(pendingFileOf(loaded))).toBe(false);
+    const retry = await loaded.controller.startDownload();
+    expect(retry.status).toBe('success');
+    expect(loaded.controller.buildUpdateStateSnapshot().status).toBe('downloaded');
+  });
+
+  it('检查失败在 available 时保留状态（error 事件先到也不覆盖），命令返回 failed', async () => {
+    vi.useFakeTimers();
+    loaded = await loadUpdater({ packaged: true, platform: 'darwin' });
+    loaded.controller.setupAutoUpdater();
+    mockAvailableCheck(loaded);
+    const first = await loaded.controller.checkForUpdates(false);
+    expect(first.status).toBe('success');
+    expect(loaded.controller.buildUpdateStateSnapshot().status).toBe('available');
+    mockFailingCheck(loaded, 'feed 502');
+    advancePastAutoCheckWindow();
+    const second = await loaded.controller.checkForUpdates(false);
+    expect(second.status).toBe('failed');
+    if (second.status === 'failed') {
+      expect(second.error.message).toBe('feed 502');
+      expect(second.state.status).toBe('available');
+    }
+    const state = loaded.controller.buildUpdateStateSnapshot();
+    expect(state.status).toBe('available');
+    if (state.status === 'available') expect(state.latestVersion).toBe('0.5.1');
+    expect(countSentEvents(loaded, 'error')).toBe(0);
+    // 首次 available + 检查失败后恢复 available。
+    expect(countSentEvents(loaded, 'available')).toBe(2);
+  });
+
+  it('检查失败在 downloaded 时保留状态（含安装入口），命令返回 failed', async () => {
+    vi.useFakeTimers();
+    loaded = await loadUpdater({ packaged: true, platform: 'darwin' });
+    loaded.controller.setupAutoUpdater();
+    mockAvailableCheck(loaded);
+    const zipPath = downloadedFilePath(loaded, 'IARTStudio-0.5.1-mac-arm64.zip');
+    loaded.mockAutoUpdater.downloadUpdate.mockImplementation(async () => [zipPath]);
+    await loaded.controller.checkForUpdates(false);
+    await loaded.controller.startDownload();
+    fs.writeFileSync(zipPath, 'fake-zip', 'utf8');
+    expect(loaded.controller.buildUpdateStateSnapshot().status).toBe('downloaded');
+    mockFailingCheck(loaded, 'feed 503');
+    advancePastAutoCheckWindow();
+    const second = await loaded.controller.checkForUpdates(false);
+    expect(second.status).toBe('failed');
+    const state = loaded.controller.buildUpdateStateSnapshot();
+    expect(state.status).toBe('downloaded');
+    if (state.status === 'downloaded') {
+      expect(state.latestVersion).toBe('0.5.1');
+      expect(state.downloadPath).toBe(zipPath);
+    }
+    expect(countSentEvents(loaded, 'error')).toBe(0);
+    expect(countSentEvents(loaded, 'downloaded')).toBe(2);
+  });
+
+  it('检查失败在 not-available 时进入 error（check-error）', async () => {
+    vi.useFakeTimers();
+    loaded = await loadUpdater({ packaged: true, platform: 'darwin' });
+    loaded.controller.setupAutoUpdater();
+    const first = await loaded.controller.checkForUpdates(false);
+    expect(first.status).toBe('success');
+    expect(loaded.controller.buildUpdateStateSnapshot().status).toBe('not-available');
+    mockFailingCheck(loaded, 'feed 404');
+    advancePastAutoCheckWindow();
+    const second = await loaded.controller.checkForUpdates(false);
+    expect(second.status).toBe('failed');
+    const state = loaded.controller.buildUpdateStateSnapshot();
+    expect(state.status).toBe('error');
+    if (state.status === 'error') expect(state.error.message).toBe('feed 404');
     expect(countSentEvents(loaded, 'error')).toBe(1);
   });
 

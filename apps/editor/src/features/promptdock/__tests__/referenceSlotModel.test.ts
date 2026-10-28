@@ -5,7 +5,7 @@
  * - 默认落位三档：唯一候选直绑 / 有多张位绑多张位 / 全单张位落「未指定」；
  * - 换绑：目标单张位已被占用时，原占用者退回未指定，两张图都保留；
  * - 模型切换重判：原用途仍存在则保留；重判出的位已被占用则保持未指定；
- * - 阻断两类：必填位没人占、有图没指定用途。
+ * - 阻断三类：必填位没人占、有图没指定用途、某用途绑定条数超过声明张数。
  */
 import assert from 'node:assert/strict';
 import { describe, expect, it } from 'vitest';
@@ -19,6 +19,10 @@ import {
   legacySlotId,
   reassignSlot,
   rejudgeReferencesForModel,
+  resolveAddPlacement,
+  resolveMediaSupport,
+  slotBindingCount,
+  slotHasRoom,
 } from '../referenceSlotModel';
 import type { PromptDockReference } from '../PromptDock.types';
 
@@ -56,6 +60,23 @@ const mixedSlots: SlotFixture = {
   ],
 };
 
+/** 用户实测形态：只勾选参考图，最多 2 张（`media_max_files` 覆盖后的投影）。 */
+const cappedMultiSlot: SlotFixture = {
+  model_id: 'capped-ref',
+  media_slots: [
+    { slotId: 'reference_image', fieldKey: 'referenceImage', required: false, maxFiles: 2, mediaKind: 'image', label: '参考图' },
+  ],
+};
+
+/** 默认多张位放满、单张位还有余量。 */
+const cappedMultiPlusSingle: SlotFixture = {
+  model_id: 'capped-mixed',
+  media_slots: [
+    { slotId: 'first_frame', fieldKey: 'firstFrameImage', required: false, maxFiles: 1, mediaKind: 'image', label: '首帧' },
+    { slotId: 'reference_image', fieldKey: 'referenceImage', required: false, maxFiles: 1, mediaKind: 'image', label: '参考图' },
+  ],
+};
+
 const makeRef = (id: string, slotId: string | null = null): PromptDockReference => ({
   refId: id,
   assetId: `asset_${id}`,
@@ -71,6 +92,16 @@ describe('候选与默认落位', () => {
       'last_frame',
     ]);
     expect(candidateSlots(twoSingleSlots, 'video')).toEqual([]);
+  });
+
+  it('模型媒体能力：有位且含该类型 → supported；有位但不含 → unsupported；无位/缺省 → no-slot-model', () => {
+    expect(resolveMediaSupport(twoSingleSlots, 'image')).toBe('supported');
+    expect(resolveMediaSupport(twoSingleSlots, 'video')).toBe('unsupported');
+    expect(resolveMediaSupport(twoSingleSlots, 'audio')).toBe('unsupported');
+    // 无素材位（纯文生图/文生视频）= 无用途模型，沿用既有允许加入的口径
+    expect(resolveMediaSupport({ media_slots: [] }, 'video')).toBe('no-slot-model');
+    expect(resolveMediaSupport(undefined, 'image')).toBe('no-slot-model');
+    expect(resolveMediaSupport(null, 'audio')).toBe('no-slot-model');
   });
 
   it('唯一候选 → 直接绑定该用途', () => {
@@ -145,6 +176,87 @@ describe('模型切换重判', () => {
     const next = rejudgeReferencesForModel(refs, onlyFirst);
     expect(next.find((r) => r.refId === 'a')?.slotId).toBe('first_frame');
     expect(next.find((r) => r.refId === 'b')?.slotId).toBeNull();
+  });
+});
+
+describe('用途张数（容量）', () => {
+  const slotOf = (entry: SlotFixture, slotId: string) => {
+    const slot = entry.media_slots.find((candidate) => candidate.slotId === slotId);
+    if (slot === undefined) throw new Error(`fixture 缺少素材位 ${slotId}`);
+    return slot;
+  };
+
+  it('绑定条数与余量按用途位分别计算', () => {
+    const refs = [makeRef('a', 'reference_image'), makeRef('b', 'reference_image'), makeRef('c', null)];
+    const slot = slotOf(cappedMultiSlot, 'reference_image');
+    expect(slotBindingCount(refs, slot)).toBe(2);
+    expect(slotHasRoom(slot, refs)).toBe(false);
+    expect(slotHasRoom(slot, refs.slice(0, 1))).toBe(true);
+  });
+
+  it('单张位加入第二张即放满（加入路径不再双占）', () => {
+    const onlyFirst: SlotFixture = { model_id: 'only-first', media_slots: [slotOf(twoSingleSlots, 'first_frame')] };
+    const refs = [makeRef('a', 'first_frame')];
+    expect(resolveAddPlacement(onlyFirst, 'image', refs)).toEqual({
+      kind: 'full',
+      mediaType: 'image',
+      capacity: 1,
+    });
+    expect(resolveAddPlacement(onlyFirst, 'image', [])).toEqual({
+      kind: 'slot',
+      slotId: 'first_frame',
+    });
+  });
+
+  it('多张位还有余量 → 直接绑定；放满 → 拒绝加入并给出该媒体类型的总容量', () => {
+    const slot = slotOf(cappedMultiSlot, 'reference_image');
+    expect(resolveAddPlacement(cappedMultiSlot, 'image', [makeRef('a', slot.slotId)])).toEqual({
+      kind: 'slot',
+      slotId: 'reference_image',
+    });
+    expect(
+      resolveAddPlacement(cappedMultiSlot, 'image', [
+        makeRef('a', slot.slotId),
+        makeRef('b', slot.slotId),
+      ]),
+    ).toEqual({ kind: 'full', mediaType: 'image', capacity: 2 });
+  });
+
+  it('默认多张位放满但别的候选位还有余量 → 落未指定（保住「先加后标」流程）', () => {
+    const refs = [makeRef('a', 'reference_image')];
+    expect(resolveAddPlacement(cappedMultiPlusSingle, 'image', refs)).toEqual({
+      kind: 'unspecified',
+    });
+  });
+
+  it('没有用途模型的媒体类型 → 落未指定（用途域不参与）', () => {
+    const noSlots: SlotFixture = { model_id: 't2v', media_slots: [] };
+    expect(resolveAddPlacement(noSlots, 'image', [])).toEqual({ kind: 'unspecified' });
+  });
+
+  it('绑定数超过声明张数 → 一条 slot-over-capacity（模型切换 / 改小张数 / 复用的兜底）', () => {
+    const refs = [
+      makeRef('a', 'reference_image'),
+      makeRef('b', 'reference_image'),
+      makeRef('c', 'reference_image'),
+    ];
+    const problems = collectSlotProblems(refs, cappedMultiSlot);
+    const over = problems.filter((problem) => problem.kind === 'slot-over-capacity');
+    assert.equal(over.length, 1);
+    expect(over[0]).toMatchObject({
+      slotId: 'reference_image',
+      fieldKey: 'referenceImage',
+      label: '参考图',
+      count: 3,
+      maxFiles: 2,
+    });
+    // 超量位上的图都指定了用途，不再重复报「未指定」。
+    expect(problems.filter((problem) => problem.kind === 'unspecified-reference')).toHaveLength(0);
+  });
+
+  it('恰好等于上限 → 不报超量', () => {
+    const refs = [makeRef('a', 'reference_image'), makeRef('b', 'reference_image')];
+    expect(collectSlotProblems(refs, cappedMultiSlot)).toEqual([]);
   });
 });
 

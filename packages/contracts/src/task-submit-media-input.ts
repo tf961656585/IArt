@@ -24,6 +24,21 @@ export const TaskSubmitMediaInputSchema = z.object({
   filename: z.union([z.string(), z.null()]),
   /** 显式字段绑定：该条媒体要落进的参数字段键。仅在调用方明确知道素材位时给出。 */
   field_key: z.string().min(1).optional(),
+  /**
+   * 资产身份（可选）：该条媒体来自项目资产时的素材标识。
+   *
+   * 用途：提交档案把「实际出网的媒体文件」对回具体资产。没有它时只能按内容指纹/字节数反推，
+   * 一旦同一内容存在多个资产身份或指纹未命中，就静默失去溯源（见生成档案 references 兜底路径）。
+   */
+  asset_id: z.string().min(1).optional(),
+  /**
+   * 素材位标识（可选）：该条媒体绑定到的产品级用途 id（模型目录 `media_slots[].slotId`）。
+   *
+   * 与 field_key 的分工：field_key 是执行层字段键（后端按它分桶），slot_id 是产品层用途标识
+   * （命令行 `--ref <素材>:<用途>` 与界面用途徽章同源）。二者由目录条目关联，提交时一并记录，
+   * 让档案无需再查目录即可读出「哪张图是什么用途」。
+   */
+  slot_id: z.string().min(1).optional(),
 });
 
 export type TaskSubmitMediaInput = z.infer<typeof TaskSubmitMediaInputSchema>;

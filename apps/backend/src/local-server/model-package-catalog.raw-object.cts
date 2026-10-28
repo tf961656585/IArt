@@ -222,9 +222,12 @@ export interface CatalogRawObject extends JsonObject {
   contentType: JsonValue | undefined;
   headers: JsonValue | undefined;
   request_stage: JsonValue | undefined;
-  header_rules: JsonValue | undefined;
-  body_rules: JsonValue | undefined;
-  query_rules: JsonValue | undefined;
+  query: JsonValue | undefined;
+  body_format: JsonValue | undefined;
+  content_type: JsonValue | undefined;
+  request_headers: JsonValue | undefined;
+  form_field_style: JsonValue | undefined;
+  form_array_style: JsonValue | undefined;
   url_template: JsonValue | undefined;
   request: JsonValue | undefined;
   polling: JsonValue | undefined;

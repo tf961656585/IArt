@@ -9,7 +9,7 @@ import { InfoHint } from './InfoHint';
 /**
  * 素材位逐项勾选（2026-10-19 拍板：用户在添加模型时勾选该模型接受哪些素材）。
  *
- * 能力事实来自**该接口类型的族模板**（`GET /api/generation-family-templates/:id` 的
+ * 能力事实来自**该接口格式的族模板**（`GET /api/generation-family-templates/:id` 的
  * `supports_media_slots`），Hub 不另维护一份清单：换族即换可勾的位，用户不会看到该族
  * 表达不了的入口（「能选但一提交就失败」的根因就在这类更宽的能力面）。
  *
@@ -31,7 +31,7 @@ export const GENERATION_MEDIA_SLOT_LABELS: Record<GenerationMediaSlotId, string>
 };
 
 /**
- * 该接口类型下必勾的素材位。
+ * 该接口格式下必勾的素材位。
  *
  * 必选事实来自契约随描述符下发的 `required_media_slots`（族能力事实的唯一来源是 Runtime
  * Backend 的族注册表）——**不在这里另列一份**：消费侧另存一份会在改族时漏改，产出「能建但
@@ -46,7 +46,17 @@ export const requiredMediaSlotsFor = (
 type MediaSlotLoad =
   | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'ready'; supportedSlots: GenerationMediaSlotId[] }
+  | {
+      kind: 'ready';
+      supportedSlots: GenerationMediaSlotId[];
+      /**
+       * 素材位 → 该族模板里的参数字段键。
+       *
+       * 提交时据此裁掉「已取消勾选那位」留下的参数覆盖：覆盖条目按模板字段键存，只有模板
+       * 知道哪个键属于哪个位。字段键是模板事实，用户改名只改发送名，不影响这份映射。
+       */
+      fieldKeyBySlotId: Partial<Record<GenerationMediaSlotId, string>>;
+    }
   | { kind: 'failed' };
 
 export type GenerationMediaSlotsState = {
@@ -57,7 +67,7 @@ export type GenerationMediaSlotsState = {
   /** 必勾位（渲染为已勾且不可取消） */
   requiredSlots: GenerationMediaSlotId[];
   toggle: (slot: GenerationMediaSlotId, next: boolean) => void;
-  /** 换接口类型时清空过勾选的可读反馈；没清过为 null */
+  /** 换接口格式时清空过勾选的可读反馈；没清过为 null */
   resetNotice: string | null;
   /** 素材位还没定下来（读取中/读取失败）：提交必须等到能确定清单 */
   blocked: boolean;
@@ -67,7 +77,7 @@ export type GenerationMediaSlotsState = {
  * 素材位状态（添加与修改两个入口共用）。
  *
  * `loadDescriptor` 每次渲染都可能是新引用（调用方是内联箭头函数），因此用 ref 取最新值、
- * effect 只随接口类型变化触发——否则每次父组件重渲染都会重新发一次请求。
+ * effect 只随接口格式变化触发——否则每次父组件重渲染都会重新发一次请求。
  */
 export function useGenerationMediaSlots({
   familyAdapterId,
@@ -75,9 +85,9 @@ export function useGenerationMediaSlots({
   loadDescriptor,
   initialSelected = [],
 }: {
-  /** 当前接口类型；null = 还没选（创建表单空态起步） */
+  /** 当前接口格式；null = 还没选（创建表单空态起步） */
   familyAdapterId: string | null;
-  /** 接口类型的中文名（清空反馈里点名「换成了哪个」） */
+  /** 接口格式的中文名（清空反馈里点名「换成了哪个」） */
   familyDisplayName: string | null;
   loadDescriptor: (familyAdapterId: string) => Promise<FamilyTemplateParameterDescriptor>;
   /** 修改已添加模型时的回填值（创建表单不传） */
@@ -97,8 +107,8 @@ export function useGenerationMediaSlots({
   const previousFamilyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    // 换接口类型：旧勾选对新族可能不成立（新族表达不了那一位），一律清空——但要留可见反馈，
-    // 静默清空会让用户以为勾选没生效。同一个接口类型重新选中不算换族。
+    // 换接口格式：旧勾选对新族可能不成立（新族表达不了那一位），一律清空——但要留可见反馈，
+    // 静默清空会让用户以为勾选没生效。同一个接口格式重新选中不算换族。
     const previousFamily = previousFamilyRef.current;
     previousFamilyRef.current = familyAdapterId;
     if (previousFamily !== null && familyAdapterId !== null && previousFamily !== familyAdapterId) {
@@ -124,7 +134,11 @@ export function useGenerationMediaSlots({
         if (cancelled) return;
         const supportedSlots = descriptor.supports_media_slots;
         const required = requiredMediaSlotsFor(descriptor.required_media_slots, supportedSlots);
-        setLoad({ kind: 'ready', supportedSlots });
+        const fieldKeyBySlotId: Partial<Record<GenerationMediaSlotId, string>> = {};
+        for (const field of descriptor.official_fields) {
+          if (field.media_slot_id !== undefined) fieldKeyBySlotId[field.media_slot_id] = field.field_key;
+        }
+        setLoad({ kind: 'ready', supportedSlots, fieldKeyBySlotId });
         setRequiredSlots(required);
         // 首次进族或换族：必勾位自动勾上（用户不需要理解「为什么这一位必须接受」）
         setSelected((current) => {
@@ -191,12 +205,12 @@ export function GenerationMediaSlotChecklist({
   label?: string;
 }) {
   if (state.load.kind === 'loading') {
-    return <p className="text-xs text-muted-foreground">正在读取这个接口类型能用的素材…</p>;
+    return <p className="text-xs text-muted-foreground">正在读取这个接口格式能用的素材…</p>;
   }
   if (state.load.kind === 'failed') {
     return (
       <p className="text-xs text-muted-foreground">
-        暂时读不到这个接口类型能用的素材。关掉这个窗口后点「刷新」再试。
+        暂时读不到这个接口格式能用的素材。关掉这个窗口后点「刷新」再试。
       </p>
     );
   }
@@ -233,7 +247,7 @@ export function GenerationMediaSlotChecklist({
               <span>{GENERATION_MEDIA_SLOT_LABELS[slot]}</span>
               {required ? (
                 <InfoHint
-                  text="这个接口类型每次生成都要用首帧，所以不能取消。"
+                  text="这个接口格式每次生成都要用首帧，所以不能取消。"
                   subject={`${GENERATION_MEDIA_SLOT_LABELS[slot]}必勾`}
                 />
               ) : null}

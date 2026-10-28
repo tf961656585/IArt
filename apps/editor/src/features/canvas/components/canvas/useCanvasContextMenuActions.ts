@@ -19,6 +19,10 @@ import { isContainerCollapsed } from "../../services/groupMembership";
 import type { GraphNode } from "../../types/node";
 import { findAnnotationIdForContextMenuTarget } from "./canvasContextMenuAnnotation";
 import { useCanvasSelectionBridge } from "./useCanvasSelectionBridge";
+import type { MediaChromeDirectToolId, MediaChromeToolId } from "../chrome/chromeModel";
+import { openMediaToolDialog } from "../chrome/mediaToolDialogStore";
+import { resolveChromeSubject, type ChromeSubject } from "../chrome/mediaNodeModel";
+import { runDirectTransform } from "../chrome/mediaToolExecutors";
 
 /**
  * 容器对象词唯一判据（菜单 label、picker 无障碍名与 toast 共用此单一来源）。
@@ -58,6 +62,18 @@ const resolveContainerActionNodeId = (
     : target.type === 'containerGap'
       ? target.containerNodeId
       : undefined;
+
+/**
+ * 加工主体的「激活时刻」解析：菜单渲染帧与点击之间节点可能被删除、资产可能失效，
+ * 因此执行前从 store 现读节点与资产注册表，复用 chrome 的同一份主体投影。
+ */
+const resolveMediaToolSubjectAtActivation = (
+  nodeId: string,
+): ChromeSubject | null => {
+  const state = useCanvasStore.getState();
+  const node = state.nodeGraph?.nodes.find((candidate) => candidate.id === nodeId);
+  return node === undefined ? null : resolveChromeSubject(node, state.mediaAssets);
+};
 export function useCanvasContextMenuActions({
   target,
   onRequestBundleExport,
@@ -618,6 +634,44 @@ export function useCanvasContextMenuActions({
     onClose();
   }, [nodeGraph, target, onClose]);
 
+  // 「加工」子菜单的直接变换项（水平/垂直镜像、旋转 90°）：点即执行，产出独立资产节点。
+  // 选中通道复用 useCanvasSelectionBridge（与工具栏同一入口），不另造选择写入口。
+  const handleRunMediaDirectTool = useCallback(
+    (nodeId: string, toolId: MediaChromeDirectToolId) => {
+      const subject = resolveMediaToolSubjectAtActivation(nodeId);
+      onClose();
+      if (subject === null || !subject.available) {
+        // 条件跳过必须留痕（AGENTS.md）：菜单渲染帧持有节点、激活时主体已不可用
+        console.debug("[canvas:contextMenu] media tool skipped: subject unavailable", {
+          nodeId,
+          toolId,
+        });
+        toast.warning("这个素材已经不能用了，请重新选择");
+        return;
+      }
+      void runDirectTransform({ subject, selectNodes }, toolId);
+    },
+    [onClose, selectNodes],
+  );
+
+  // 「加工」子菜单的弹窗工具项：只登记打开请求，弹窗渲染与执行归 MediaToolDialogHost。
+  const handleOpenMediaToolDialog = useCallback(
+    (nodeId: string, toolId: MediaChromeToolId) => {
+      const subject = resolveMediaToolSubjectAtActivation(nodeId);
+      onClose();
+      if (subject === null || !subject.available) {
+        console.debug("[canvas:contextMenu] media tool dialog skipped: subject unavailable", {
+          nodeId,
+          toolId,
+        });
+        toast.warning("这个素材已经不能用了，请重新选择");
+        return;
+      }
+      openMediaToolDialog(nodeId, toolId);
+    },
+    [onClose],
+  );
+
   return {
     nodeGraph,
     selectedNodeIds,
@@ -653,6 +707,8 @@ export function useCanvasContextMenuActions({
     handleRemoveFromGroup,
     handleDeleteGroupWithMembers,
     handleAddToPackageArea,
+    handleRunMediaDirectTool,
+    handleOpenMediaToolDialog,
     addToGroupRequest,
     handleSelectTargetGroup,
     handleCancelAddToGroup,

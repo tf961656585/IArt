@@ -8,7 +8,12 @@ import { TaskSubmitMediaKindSchema } from './task-submit-media-input';
  * 提交意图投影形状。字段口径与 cli-contract 一致（snake_case）。
  */
 
-/** 生成档案的单条引用（批次提交时的参考资产）：asset_id 必载；实体可查才附类型/文件键/本地路径。 */
+/**
+ * 生成档案的单条引用（批次提交时的参考资产）：asset_id 必载；实体可查才附类型/文件键/本地路径。
+ *
+ * slot_id / field_key 来自受理快照的 media_refs（提交面显式绑定）：前者是产品级用途标识
+ * （与 `--ref <素材>:<用途>`、界面用途徽章同源），后者是执行层字段键。旧快照没有这两项时缺省。
+ */
 export const CliGenerationArchiveReferenceSchema = z
   .object({
     asset_id: z.string().min(1),
@@ -18,6 +23,10 @@ export const CliGenerationArchiveReferenceSchema = z
     file_key: z.string().min(1).optional(),
     /** 本地媒体文件绝对路径；实体不可查证或缺本地文件承载时缺省。 */
     local_file_path: z.string().min(1).optional(),
+    /** 提交时绑定的素材位标识（模型目录 media_slots[].slotId）；旧快照或未绑定时缺省。 */
+    slot_id: z.string().min(1).optional(),
+    /** 提交时绑定的执行层字段键（media_inputs[].field_key）；旧快照或未绑定时缺省。 */
+    field_key: z.string().min(1).optional(),
   })
   .strict();
 export type CliGenerationArchiveReference = z.infer<typeof CliGenerationArchiveReferenceSchema>;

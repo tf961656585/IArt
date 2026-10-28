@@ -8,6 +8,7 @@ import type {
   ProviderConnection,
   ThinkingTierPool,
 } from '@iart/contracts';
+import { PRESET_FORMAT_SUMMARIES } from '../provider-connection/__tests__/formatOptionsFixture';
 import { ProviderSection } from '../ProviderSection';
 import { createHubApiClient } from '../../../client/api/hub-api';
 import { createHubHttpClient } from '../../../client/adapters/http-client';
@@ -43,7 +44,7 @@ const connection: ProviderConnection = {
 };
 
 /**
- * 用户对话模型记录（记录即接入）：接口类型、能力值、档位与接入归属都在记录上。
+ * 用户对话模型记录（记录即接入）：接口格式、能力值、档位与接入归属都在记录上。
  * 2026-10-19 起它是模型唯一载体，不存在并列的第二类接入对象。
  */
 const customModel: CustomChatModel = {
@@ -221,11 +222,14 @@ const stubFetch = (
         return jsonResponse({
           family_adapter_id: 'openai-image-v1',
           official_fields: [],
-          reserved_wire_names: ['model', 'prompt', 'input'],
+          reserved_wire_names: { body: ['model', 'prompt', 'input'], query: [], header: [] },
           supports_media_slots: ['reference_image'],
         });
       }
       if (url.includes('/api/active-routes')) return jsonResponse({ model_id: 'gpt-image-2', deployment_id: 'up_dep_new1' });
+      if (url.includes('/api/interface-formats')) {
+        return jsonResponse({ formats: PRESET_FORMAT_SUMMARIES });
+      }
       throw new Error(`未预期的请求：${init?.method ?? 'GET'} ${url}`);
     },
   );
@@ -253,6 +257,8 @@ function Harness({ overrides }: { overrides: Partial<ProviderConnectionData> }) 
     customChatModelsUnavailable: false,
     customGenerationModels: [],
     customGenerationModelsUnavailable: false,
+    interfaceRecipes: [],
+    interfaceRecipesUnavailable: false,
     agentDefaultModelId: null,
     // 与 hook 同一条写入路径：配置写入体经过 buildConfigUpdatePayload 补全，测试因此能核对真实请求体
     saveAgentDefaultModel: async (modelId) => {
@@ -348,9 +354,9 @@ const openGenerationModelDialog = (): void => {
   fireEvent.click(screen.getByRole('menuitem', { name: '生成模型' }));
 };
 
-/** 在弹层里选「接口类型」（下拉渲染在 portal，选项按 body 级查询；jsdom 无 PointerEvent：键盘开下拉，click 选中）。 */
+/** 在弹层里选「接口格式」（下拉渲染在 portal，选项按 body 级查询；jsdom 无 PointerEvent：键盘开下拉，click 选中）。 */
 const chooseDialogAdapter = (optionName: string): void => {
-  fireEvent.keyDown(dialog().getByLabelText('接口类型'), { key: 'Enter' });
+  fireEvent.keyDown(dialog().getByLabelText('接口格式'), { key: 'Enter' });
   fireEvent.click(screen.getByRole('option', { name: optionName }));
 };
 
@@ -736,11 +742,12 @@ describe('服务商详情：生成侧添加模型的失败提示（单一表单�
   /** 生成侧单一表单的弹层查询句柄（按标题取，避免与下层弹层混淆）。 */
   const generationDialog = () => within(screen.getByRole('dialog', { name: '添加模型到「我的绘图服务」' }));
 
-  /** 在生成侧单一表单里填最少信息并提交（模型 ID + 接口类型）。 */
+  /** 在生成侧单一表单里填最少信息并提交（模型 ID + 接口格式）。 */
   const submitGenerationForm = async (): Promise<void> => {
     fireEvent.change(generationDialog().getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
-    fireEvent.keyDown(generationDialog().getByLabelText('接口类型'), { key: 'Enter' });
-    fireEvent.click(screen.getByRole('option', { name: 'OpenAI Image' }));
+    fireEvent.keyDown(generationDialog().getByLabelText('接口格式'), { key: 'Enter' });
+    // 接口格式选项来自列表接口（异步装载）：等它出现再点，不假设同步就绪。
+    fireEvent.click(await screen.findByRole('option', { name: 'OpenAI Image' }));
     // 素材位按所选族能力渲染，读到之后才放行提交
     await waitFor(() => {
       expect(generationDialog().getByRole('checkbox', { name: '参考图' })).toBeInTheDocument();
@@ -842,7 +849,7 @@ describe('服务商设置：添加服务商弹层', () => {
     fireEvent.change(addDialog.getByLabelText('密钥'), { target: { value: 'sk-add-key' } });
     // 与已有服务商同址：只提醒不拦截（提示不在地址时出现）
     expect(addDialog.getByText('已有一个服务商在用这个服务地址。如果不是重复添加，继续保存即可')).toBeInTheDocument();
-    // 表单里没有接口类型字段（2026-09-29 起摘除连接级预选）：填名称/地址/密钥即可提交
+    // 表单里没有接口格式字段（2026-09-29 起摘除连接级预选）：填名称/地址/密钥即可提交
     expect(addDialog.getByRole('button', { name: '添加' })).toBeEnabled();
     fireEvent.click(addDialog.getByRole('button', { name: '添加' }));
 
@@ -858,7 +865,7 @@ describe('服务商设置：添加服务商弹层', () => {
     expect((addDialog.getByLabelText('密钥') as HTMLInputElement).value).toBe('sk-add-key');
   });
 
-  it('创建体只有名称与地址（接口类型不在连接上配置）；与已有服务商同址的提醒不拦提交', async () => {
+  it('创建体只有名称与地址（接口格式不在连接上配置）；与已有服务商同址的提醒不拦提交', async () => {
     const fetchFn = stubFetch();
     render(<Harness overrides={{}} />);
 
@@ -872,7 +879,7 @@ describe('服务商设置：添加服务商弹层', () => {
     fireEvent.click(addDialog.getByRole('button', { name: '添加' }));
 
     await waitFor(() => {
-      // 连接级接口类型已摘除：创建体不再携带 protocol_adapter_id
+      // 连接级接口格式已摘除：创建体不再携带 protocol_adapter_id
       expect(bodyOf(fetchFn, '/api/provider-connections', 'POST')).toEqual({
         display_name: '另一个网关',
         base_url: 'https://other.example.com/v1',
@@ -937,5 +944,19 @@ describe('服务商详情：删除自定义档位', () => {
     });
     // 删的是池子里的档位、不是当前模型的配置：弹层留着，用户还能接着改这个模型
     expect(screen.getByRole('dialog', { name: '修改「my-llm」的模型配置' })).toBeInTheDocument();
+  });
+});
+
+describe('服务商页：接口配方已迁出', () => {
+  /**
+   * 配方区块 2026-10-26 迁到「接口格式」页的第二标签：服务商页不再出现配方列表与新建入口。
+   * 迁移后仍保留配方数据（模型行的配方标记与添加模型时的配方下拉都要用），所以只断言**界面**不再渲染。
+   */
+  it('主分支不再渲染接口配方区块', () => {
+    stubFetch();
+    openDetail();
+
+    expect(screen.queryByText('接口配方')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '新建配方' })).not.toBeInTheDocument();
   });
 });

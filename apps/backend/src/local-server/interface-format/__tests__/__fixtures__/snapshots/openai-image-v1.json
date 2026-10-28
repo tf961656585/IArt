@@ -1,0 +1,753 @@
+{
+  "runtimeModel": {
+    "model_id": "interface-format-golden-model",
+    "provider_id": "openai",
+    "default_task_type": "image",
+    "mode": "image",
+    "role": "generator",
+    "capability": {
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "supports_async_task": false,
+      "supports_streaming": false,
+      "supports_multi_image": true,
+      "supports_reference_media": true,
+      "constraints": []
+    },
+    "parameter_schema": {
+      "schema_type": "object",
+      "fields": [
+        {
+          "label": "fields.image.label",
+          "description": "fields.image.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component_props": {
+            "accept": "image/*",
+            "maxFiles": 16
+          },
+          "data_source": "both",
+          "field_key": "image",
+          "component": "imageUpload",
+          "default_value": []
+        },
+        {
+          "field_key": "size",
+          "label": "fields.size.label",
+          "description": "fields.size.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 2
+          },
+          "component": "imageSize",
+          "component_props": {
+            "mode": "constrainedResolution",
+            "allowAuto": true,
+            "sizeLevels": [
+              {
+                "id": "1k",
+                "label": "fields.size.sizeLevels.1k.label",
+                "pixelBudget": 1048576
+              },
+              {
+                "id": "2k",
+                "label": "fields.size.sizeLevels.2k.label",
+                "pixelBudget": 4194304
+              },
+              {
+                "id": "4k",
+                "label": "fields.size.sizeLevels.4k.label",
+                "pixelBudget": 8294400
+              }
+            ],
+            "aspectPresets": [
+              {
+                "id": "1:1",
+                "label": "fields.size.aspectPresets.1_1.label",
+                "ratio": 1
+              },
+              {
+                "id": "3:2",
+                "label": "fields.size.aspectPresets.3_2.label",
+                "ratio": 1.5
+              },
+              {
+                "id": "2:3",
+                "label": "fields.size.aspectPresets.2_3.label",
+                "ratio": 0.6666666667
+              },
+              {
+                "id": "16:9",
+                "label": "fields.size.aspectPresets.16_9.label",
+                "ratio": 1.7777777778
+              },
+              {
+                "id": "9:16",
+                "label": "fields.size.aspectPresets.9_16.label",
+                "ratio": 0.5625
+              }
+            ],
+            "presetOptions": [
+              {
+                "value": "auto",
+                "label": "fields.size.presetOptions.auto.label",
+                "description": "fields.size.presetOptions.auto.description"
+              }
+            ],
+            "customPresets": [
+              {
+                "value": "1024x1024"
+              },
+              {
+                "value": "1536x1024"
+              },
+              {
+                "value": "1024x1536"
+              },
+              {
+                "value": "1920x1088"
+              },
+              {
+                "value": "2560x1440"
+              },
+              {
+                "value": "3840x2160"
+              }
+            ],
+            "constraints": {
+              "dimensionMultiple": 16,
+              "maxLongEdge": 3840,
+              "minPixels": 655360,
+              "maxPixels": 8294400,
+              "maxAspectRatio": 3
+            }
+          },
+          "default_value": "auto"
+        },
+        {
+          "field_key": "quality",
+          "label": "fields.quality.label",
+          "description": "fields.quality.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            {
+              "value": "auto",
+              "label": "fields.quality.options.auto.label"
+            },
+            {
+              "value": "low",
+              "label": "fields.quality.options.low.label"
+            },
+            {
+              "value": "medium",
+              "label": "fields.quality.options.medium.label"
+            },
+            {
+              "value": "high",
+              "label": "fields.quality.options.high.label"
+            }
+          ],
+          "component_props": {},
+          "default_value": "auto"
+        },
+        {
+          "field_key": "format",
+          "label": "fields.format.label",
+          "description": "fields.format.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            {
+              "value": "png",
+              "label": "fields.format.options.png.label"
+            },
+            {
+              "value": "jpeg",
+              "label": "fields.format.options.jpeg.label"
+            },
+            {
+              "value": "webp",
+              "label": "fields.format.options.webp.label"
+            }
+          ],
+          "component_props": {},
+          "default_value": "jpeg"
+        },
+        {
+          "field_key": "moderation",
+          "label": "fields.moderation.label",
+          "description": "fields.moderation.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            {
+              "value": "auto",
+              "label": "fields.moderation.options.auto.label"
+            },
+            {
+              "value": "low",
+              "label": "fields.moderation.options.low.label"
+            }
+          ],
+          "component_props": {},
+          "default_value": "auto"
+        }
+      ],
+      "required_fields": [],
+      "validation_rules": [],
+      "default_values": {
+        "size": "auto",
+        "quality": "auto",
+        "format": "jpeg",
+        "moderation": "auto",
+        "image": []
+      }
+    },
+    "execution_profile": {
+      "task_type": "image",
+      "supports_async_task": false
+    },
+    "display": {
+      "visible": true,
+      "order": 9000
+    },
+    "runtime": {
+      "provider_id": "openai",
+      "default_task_type": "image",
+      "mode": "image",
+      "aliases": [],
+      "workspace": {
+        "task_list_position": "bottom",
+        "task_queue": {
+          "enabled": true,
+          "max_concurrent": 10
+        }
+      },
+      "api_defaults": {
+        "endpoint": "/v1/images/generations",
+        "method": "POST",
+        "contentType": "application/json"
+      },
+      "payload_rules": {
+        "api.endpoint": {
+          "kind": "when",
+          "condition": {
+            "op": "ne",
+            "field": "image",
+            "value": []
+          },
+          "truthy": {
+            "kind": "literal",
+            "value": "/v1/images/edits"
+          },
+          "falsy": {
+            "kind": "literal",
+            "value": "/v1/images/generations"
+          }
+        },
+        "api.method": {
+          "kind": "literal",
+          "value": "POST"
+        },
+        "api.contentType": {
+          "kind": "when",
+          "condition": {
+            "op": "ne",
+            "field": "image",
+            "value": []
+          },
+          "truthy": {
+            "kind": "literal",
+            "value": null
+          },
+          "falsy": {
+            "kind": "literal",
+            "value": "application/json"
+          }
+        },
+        "api.headers.Accept": {
+          "kind": "literal",
+          "value": "application/json"
+        },
+        "body.model": {
+          "kind": "literal",
+          "value": "interface-format-golden-model"
+        },
+        "body.prompt": {
+          "kind": "field",
+          "field_key": "__prompt",
+          "transforms": [
+            "trim"
+          ]
+        },
+        "body.image": {
+          "kind": "when",
+          "condition": {
+            "op": "ne",
+            "field": "image",
+            "value": []
+          },
+          "truthy": {
+            "kind": "compute",
+            "operator": "assert_array_length",
+            "args": [
+              {
+                "kind": "field",
+                "field_key": "image",
+                "transforms": [
+                  "allUploadFiles"
+                ],
+                "media_target": "multipart_file"
+              }
+            ],
+            "cache_key": "declaredGeneration.image",
+            "options": {
+              "min_items": 1,
+              "max_items": 16,
+              "message": "请至少提供 1 张要编辑的图片。"
+            }
+          },
+          "falsy": {
+            "kind": "literal",
+            "value": null
+          }
+        },
+        "body.n": {
+          "kind": "when",
+          "condition": {
+            "op": "ne",
+            "field": "image",
+            "value": []
+          },
+          "truthy": {
+            "kind": "literal",
+            "value": null
+          },
+          "falsy": {
+            "kind": "literal",
+            "value": 1
+          }
+        },
+        "body.size": {
+          "kind": "field",
+          "field_key": "size"
+        },
+        "body.quality": {
+          "kind": "field",
+          "field_key": "quality"
+        },
+        "body.output_format": {
+          "kind": "field",
+          "field_key": "format"
+        },
+        "body.moderation": {
+          "kind": "field",
+          "field_key": "moderation"
+        },
+        "prompt": {
+          "kind": "field",
+          "field_key": "__prompt",
+          "transforms": [
+            "trim"
+          ]
+        },
+        "input": {
+          "kind": "field",
+          "field_key": "__prompt",
+          "transforms": [
+            "trim"
+          ]
+        },
+        "meta.size": {
+          "kind": "field",
+          "field_key": "size"
+        },
+        "meta.model_id": {
+          "kind": "literal",
+          "value": "interface-format-golden-model"
+        }
+      },
+      "capabilities": {
+        "execution_traits": [
+          "nonBlocking"
+        ]
+      },
+      "schema_defaults": {
+        "size": "auto",
+        "quality": "auto",
+        "format": "jpeg",
+        "moderation": "auto",
+        "image": []
+      },
+      "execution_driver": "http_formal_task",
+      "form_field_style": "dotted",
+      "form_array_style": "repeat",
+      "payload_format_rule": {
+        "kind": "when",
+        "condition": {
+          "op": "ne",
+          "field": "image",
+          "value": []
+        },
+        "truthy": {
+          "kind": "literal",
+          "value": "multipart"
+        },
+        "falsy": {
+          "kind": "literal",
+          "value": "json"
+        }
+      }
+    },
+    "request_strategy": {
+      "request_stage": "submit",
+      "protocol": "http",
+      "endpoint": "/v1/images/generations",
+      "method": "POST"
+    },
+    "prompt_field": {
+      "field_key": "__prompt",
+      "required": true,
+      "validation_rules": []
+    },
+    "result_rule": {
+      "mode": "sync",
+      "failure_condition": {
+        "op": "any",
+        "children": [
+          {
+            "op": "not_empty",
+            "path": "error.message"
+          },
+          {
+            "op": "not_empty",
+            "path": "error.code"
+          },
+          {
+            "op": "not_empty",
+            "path": "error.type"
+          }
+        ]
+      },
+      "error_mapping_rules": [
+        {
+          "target": "code",
+          "source": {
+            "kind": "response",
+            "path": "error.code"
+          },
+          "required": false
+        },
+        {
+          "target": "message",
+          "source": {
+            "kind": "response",
+            "path": "error.message"
+          },
+          "required": false
+        },
+        {
+          "target": "details.remote.type",
+          "source": {
+            "kind": "response",
+            "path": "error.type"
+          },
+          "required": false
+        },
+        {
+          "target": "details.remote.param",
+          "source": {
+            "kind": "response",
+            "path": "error.param"
+          },
+          "required": false
+        }
+      ],
+      "submit_response_id_path": "/id"
+    },
+    "result_output_mapping": {
+      "response_mode": "structured_payload",
+      "output_mapping_rules": [
+        {
+          "target": "output.image_url",
+          "source": {
+            "kind": "response",
+            "path": "data"
+          },
+          "required": true
+        }
+      ],
+      "note": "declared generation model (openai-image-v1 family template)"
+    }
+  },
+  "node": {
+    "node_type": "model",
+    "group_key": "openai",
+    "input_ports": [
+      {
+        "id": "image",
+        "name": "ports.inputs.image.name",
+        "data_type": "image",
+        "required": false,
+        "description": "ports.inputs.image.description",
+        "field_key": "image",
+        "multiple": true
+      }
+    ],
+    "output_ports": [
+      {
+        "id": "image",
+        "name": "ports.outputs.image.name",
+        "data_type": "image",
+        "field_key": "output_image",
+        "multiple": true
+      }
+    ]
+  },
+  "localizationResources": {
+    "zh-CN": {
+      "fields": {
+        "prompt": {
+          "label": "提示词"
+        },
+        "size": {
+          "label": "画面尺寸",
+          "description": "可自动选择尺寸，也可按档位与比例（含自定义比例）设置输出尺寸。",
+          "sizeLevels": {
+            "1k": {
+              "label": "1K"
+            },
+            "2k": {
+              "label": "2K"
+            },
+            "4k": {
+              "label": "4K"
+            }
+          },
+          "aspectPresets": {
+            "1_1": {
+              "label": "1:1"
+            },
+            "3_2": {
+              "label": "3:2"
+            },
+            "2_3": {
+              "label": "2:3"
+            },
+            "16_9": {
+              "label": "16:9"
+            },
+            "9_16": {
+              "label": "9:16"
+            }
+          },
+          "presetOptions": {
+            "auto": {
+              "label": "自动",
+              "description": "由模型决定输出尺寸"
+            }
+          }
+        },
+        "quality": {
+          "label": "图片画质",
+          "description": "默认自动，档位越高画质越精细。",
+          "options": {
+            "auto": {
+              "label": "自动"
+            },
+            "low": {
+              "label": "低"
+            },
+            "medium": {
+              "label": "中"
+            },
+            "high": {
+              "label": "高"
+            }
+          }
+        },
+        "format": {
+          "label": "图片格式",
+          "description": "可选 png、jpeg 或 webp，默认 jpeg。",
+          "options": {
+            "png": {
+              "label": "PNG"
+            },
+            "jpeg": {
+              "label": "JPEG"
+            },
+            "webp": {
+              "label": "WebP"
+            }
+          }
+        },
+        "moderation": {
+          "label": "内容审核",
+          "description": "可选 low 或 auto，默认 auto。",
+          "options": {
+            "auto": {
+              "label": "自动"
+            },
+            "low": {
+              "label": "低"
+            }
+          }
+        },
+        "image": {
+          "label": "参考图",
+          "description": "上传一张或多张要编辑的图片。"
+        }
+      },
+      "ports": {
+        "outputs": {
+          "image": {
+            "name": "图像"
+          }
+        },
+        "inputs": {
+          "prompt": {
+            "name": "提示词",
+            "description": "描述要生成的编辑效果。"
+          },
+          "image": {
+            "name": "参考图",
+            "description": "传入要编辑的图片文件。"
+          }
+        }
+      }
+    },
+    "en": {
+      "fields": {
+        "prompt": {
+          "label": "Prompt"
+        },
+        "size": {
+          "label": "Image size",
+          "description": "Choose auto sizing, or set the output size by level and aspect ratio (custom ratios supported).",
+          "sizeLevels": {
+            "1k": {
+              "label": "1K"
+            },
+            "2k": {
+              "label": "2K"
+            },
+            "4k": {
+              "label": "4K"
+            }
+          },
+          "aspectPresets": {
+            "1_1": {
+              "label": "1:1"
+            },
+            "3_2": {
+              "label": "3:2"
+            },
+            "2_3": {
+              "label": "2:3"
+            },
+            "16_9": {
+              "label": "16:9"
+            },
+            "9_16": {
+              "label": "9:16"
+            }
+          },
+          "presetOptions": {
+            "auto": {
+              "label": "Auto",
+              "description": "Let the model decide the output size"
+            }
+          }
+        },
+        "quality": {
+          "label": "Image quality",
+          "description": "Defaults to auto; higher tiers are more refined.",
+          "options": {
+            "auto": {
+              "label": "Auto"
+            },
+            "low": {
+              "label": "Low"
+            },
+            "medium": {
+              "label": "Medium"
+            },
+            "high": {
+              "label": "High"
+            }
+          }
+        },
+        "format": {
+          "label": "Image format",
+          "description": "Choose png, jpeg, or webp. Defaults to jpeg.",
+          "options": {
+            "png": {
+              "label": "PNG"
+            },
+            "jpeg": {
+              "label": "JPEG"
+            },
+            "webp": {
+              "label": "WebP"
+            }
+          }
+        },
+        "moderation": {
+          "label": "Moderation",
+          "description": "Choose low or auto. Defaults to auto.",
+          "options": {
+            "auto": {
+              "label": "Auto"
+            },
+            "low": {
+              "label": "Low"
+            }
+          }
+        },
+        "image": {
+          "label": "Reference image",
+          "description": "Upload one or more images to edit."
+        }
+      },
+      "ports": {
+        "outputs": {
+          "image": {
+            "name": "Image"
+          }
+        },
+        "inputs": {
+          "prompt": {
+            "name": "Prompt",
+            "description": "Describe the edit to generate."
+          },
+          "image": {
+            "name": "Reference image",
+            "description": "Images to edit."
+          }
+        }
+      }
+    }
+  }
+}

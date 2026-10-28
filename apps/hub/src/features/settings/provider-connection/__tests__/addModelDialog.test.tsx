@@ -3,12 +3,13 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FamilyTemplateParameterDescriptor } from '@iart/contracts';
 
 import { AddModelDialog, type CustomModelFormBinding } from '../AddModelDialog';
+import { PRESET_FORMAT_OPTIONS } from './formatOptionsFixture';
 
 /** 族模板描述符：素材位能力是 2026-10-19 起表单的一部分（这里只给最小合法形状）。 */
 const descriptorFor = (familyAdapterId: string): FamilyTemplateParameterDescriptor => ({
   family_adapter_id: familyAdapterId,
   official_fields: [],
-  reserved_wire_names: [],
+  reserved_wire_names: { body: [], query: [], header: [] },
   supports_media_slots: familyAdapterId === 'openai-image-v1' ? ['reference_image'] : [],
   required_media_slots: [],
 });
@@ -20,7 +21,7 @@ const descriptorFor = (familyAdapterId: string): FamilyTemplateParameterDescript
  * - 弹窗里只有**一个表单**：没有「软件自带的模型」区块、没有来源分段切换——软件不内置任何
  *   具体模型，界面上只有一种对象「模型」（spec 03 §6.1 单一载体 / `docs/ui-copy-standard.md`
  *   禁用「自带 / 自建」来源区分）。原「两区块切换 + 各自保活」的一整组用例因此随之退场。
- * - 自建表单的接口类型空态起步、必选（2026-09-29 起连接级预选摘除），随提交体交回。
+ * - 自建表单的接口格式空态起步、必选（2026-09-29 起连接级预选摘除），随提交体交回。
  * - 表单区块未装配时不渲染提交必然失败的表单，只留一句可读说明、主按钮禁用。
  * - 失败原因显示在 footer 上方（分区顶部的提示条在弹窗期间被遮罩挡住）。
  */
@@ -42,6 +43,8 @@ const renderDialog = (params: {
     <AddModelDialog
       providerName="我的绘图服务"
       customForm={params.customForm === undefined ? customFormBinding() : params.customForm}
+      recipes={[]}
+      formatOptions={PRESET_FORMAT_OPTIONS}
       failureText={params.failureText ?? null}
       onClose={onClose}
     />,
@@ -59,7 +62,7 @@ describe('AddModelDialog 单一表单', () => {
 
     expect(screen.getByRole('textbox', { name: '模型 ID' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: '服务商那边的模型 ID' })).toBeInTheDocument();
-    // 素材位不预渲染成固定勾选框：没选接口类型时区块不出现（能力按所选族才可知）
+    // 素材位不预渲染成固定勾选框：没选接口格式时区块不出现（能力按所选族才可知）
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '高级参数自定义' })).toBeInTheDocument();
     // 来源区块与切换项整体不存在（不是被 hidden 收起）
@@ -83,17 +86,17 @@ describe('AddModelDialog 单一表单', () => {
 });
 
 describe('AddModelDialog 提交', () => {
-  it('接口类型空态起步、选了才可提交，随提交体交回；成功后关掉整个弹窗', async () => {
+  it('接口格式空态起步、选了才可提交，随提交体交回；成功后关掉整个弹窗', async () => {
     const onSubmit = vi.fn(async () => true);
     const onClose = vi.fn();
     renderDialog({ customForm: customFormBinding({ onSubmit }), onClose });
 
-    // 接口类型未选：填了模型 ID 也不能提交
+    // 接口格式未选：填了模型 ID 也不能提交
     fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'my-image-model' } });
     expect(screen.getByRole('button', { name: '添加' })).toBeDisabled();
 
-    // 打开「接口类型」下拉选中一个选项（jsdom 无 PointerEvent：键盘开下拉，click 选中）
-    fireEvent.keyDown(screen.getByLabelText('接口类型'), { key: 'Enter' });
+    // 打开「接口格式」下拉选中一个选项（jsdom 无 PointerEvent：键盘开下拉，click 选中）
+    fireEvent.keyDown(screen.getByLabelText('接口格式'), { key: 'Enter' });
     fireEvent.click(screen.getByRole('option', { name: 'OpenAI Image' }));
     // 素材位按所选族能力渲染，读到之后才放行提交
     await waitFor(() => {
@@ -108,6 +111,7 @@ describe('AddModelDialog 提交', () => {
         remoteModelId: null,
         acceptedMediaSlots: [],
         parameterOverrides: null,
+        recipeId: null,
       });
     });
     await waitFor(() => {

@@ -37,7 +37,11 @@ import { ThinkingTierSchema } from './thinking-tier-contract';
  * - connection_disabled / connection_retired：连接生命周期不可路由。
  * - connection_missing：active deployment 指向的连接不存在。
  * - credential_missing：凭证缺失或不可读。
- * - adapter_missing：ProtocolAdapter 未安装/未注册。
+ * - adapter_missing：对话协议的 ProtocolAdapter 未安装/未注册（2026-10-27 起生成侧不再走代码适配器，
+ *   改用下方三个接口格式码）。
+ * - format_missing：模型记录引用的接口格式不存在（被删除或从未登记）。
+ * - format_not_ready：接口格式已登记但未就绪，给不出参数表单与传输规则。
+ * - recipe_missing：引用的接口配方解析不到；用户自建格式没有内置行为默认，因此不可提交。
  * - remote_model_id_empty：Deployment 未配置 Provider 原生模型 ID。
  * - deployment_invalid：Deployment 本身不满足可执行前置条件（泛化兜底，优先给出更精确码）。
  */
@@ -49,6 +53,9 @@ export const EXECUTABLE_MODEL_FAILURE_CODES = [
   'connection_retired',
   'credential_missing',
   'adapter_missing',
+  'format_missing',
+  'format_not_ready',
+  'recipe_missing',
   'remote_model_id_empty',
   'deployment_invalid',
 ] as const;

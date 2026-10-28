@@ -70,8 +70,9 @@ const MAX_RENDERED_RESULTS = 50;
 
 /** 筛选档位按钮通用样式（原型 finder-chip 同语义）。 */
 const FILTER_CHIP_BASE_CLASS =
-  'rounded-full px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground';
-const FILTER_CHIP_ACTIVE_CLASS = 'bg-secondary text-secondary-foreground';
+  'rounded-full px-2 py-0.5 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-(--ring) focus-visible:outline-offset-2';
+const FILTER_CHIP_ACTIVE_CLASS = 'bg-primary text-primary-foreground font-semibold hover:bg-primary';
+const FILTER_CHIP_IDLE_CLASS = 'text-muted-foreground hover:bg-foreground/5 hover:text-foreground';
 
 /**
  * CanvasObjectFinder 壳：判断 RF 可用性，不可用时返回 null。
@@ -215,7 +216,7 @@ function FinderFilterRow({
             key={option.value}
             type="button"
             aria-pressed={active}
-            className={FILTER_CHIP_BASE_CLASS + (active ? ' ' + FILTER_CHIP_ACTIVE_CLASS : '')}
+            className={FILTER_CHIP_BASE_CLASS + ' ' + (active ? FILTER_CHIP_ACTIVE_CLASS : FILTER_CHIP_IDLE_CLASS)}
             onClick={() => onPick(option.value as never)}
           >
             {option.label}

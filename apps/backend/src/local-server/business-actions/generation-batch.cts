@@ -138,7 +138,9 @@ const acceptGenerationBatch = async (params: {
         model_id: body.model_id,
         batchId,
         batch_id: batchId,
-        intentSnapshot,
+        // 意图快照的唯一归属是批次行（payloadJson）。这里不再逐任务写副本：任务记录元数据
+        // 按白名单归一化，未登记的键会被静默丢弃（写了也读不到），且每任务一份副本会随
+        // 任务数放大存储与通知体积。
         taskIndex: index,
         projectPath: body.project_path,
         nodeGraphId: null,

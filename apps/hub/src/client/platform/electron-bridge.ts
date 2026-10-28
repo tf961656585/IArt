@@ -125,6 +125,17 @@ export const createHubPlatformBridge = (): HubPlatformBridge => {
       }
       return AppUpdateCommandResultSchema.parse(await api.startUpdateDownload());
     },
+    cancelUpdateDownload: async () => {
+      const api = getElectronApi();
+      if (!api || typeof api.cancelUpdateDownload !== 'function') {
+        return AppUpdateCommandResultSchema.parse({
+          status: 'failed',
+          error: { message: 'not-in-electron' },
+          state: emptyUpdateState(),
+        });
+      }
+      return AppUpdateCommandResultSchema.parse(await api.cancelUpdateDownload());
+    },
     installUpdate: async () => {
       const api = getElectronApi();
       if (!api || typeof api.installUpdate !== 'function') {

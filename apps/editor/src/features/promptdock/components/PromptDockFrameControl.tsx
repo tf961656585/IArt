@@ -168,11 +168,11 @@ function FrameRatioGrid({
             onClick={() => {
               if (!option.disabled) onSelect(option.value);
             }}
-            className={`flex cursor-pointer flex-col items-center gap-[3px] rounded-[6px] border border-transparent px-0.5 pb-[5px] pt-1.5 transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-(--chrome-ring) ${
+            className={`flex cursor-pointer flex-col items-center gap-[3px] rounded-[6px] border border-transparent px-0.5 pb-[5px] pt-1.5 transition-colors hover:bg-foreground/5 focus-visible:outline-2 focus-visible:outline-(--chrome-ring) ${
               option.disabled ? 'cursor-not-allowed opacity-55' : ''
             } ${
               selected
-                ? 'border-[color-mix(in_srgb,var(--st-generating)_45%,transparent)] bg-[color-mix(in_srgb,var(--st-generating)_10%,transparent)]'
+                ? 'border-[color-mix(in_srgb,var(--primary)_55%,transparent)] bg-[color-mix(in_srgb,var(--primary)_12%,transparent)]'
                 : ''
             }`}
           >
@@ -220,11 +220,11 @@ function FrameSegmented({
             onClick={() => {
               if (!option.disabled) onSelect(option.value);
             }}
-            className={`h-[26px] min-w-0 flex-1 cursor-pointer rounded-[6px] border border-transparent px-1 text-[11px] whitespace-nowrap transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-(--chrome-ring) ${
+            className={`h-[26px] min-w-0 flex-1 cursor-pointer rounded-[6px] border border-transparent px-1 text-[11px] whitespace-nowrap transition-colors hover:bg-foreground/5 focus-visible:outline-2 focus-visible:outline-(--chrome-ring) ${
               option.disabled ? 'cursor-not-allowed opacity-55' : ''
             } ${
               selected
-                ? 'border-[color-mix(in_srgb,var(--st-generating)_40%,transparent)] bg-[color-mix(in_srgb,var(--st-generating)_12%,transparent)] font-semibold text-foreground'
+                ? 'border-[color-mix(in_srgb,var(--primary)_50%,transparent)] bg-[color-mix(in_srgb,var(--primary)_14%,transparent)] font-semibold text-foreground'
                 : 'text-foreground'
             }`}
           >

@@ -1,4 +1,4 @@
-import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } from '@iart/ui';
+import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn, SELECTION_SOFT_COMPACT_CLASSES } from '@iart/ui';
 import { Activity, AlertCircle, Inbox, LayoutGrid, RefreshCw } from 'lucide-react';
 import { useHubStore } from '../../client/store/hub-store';
 import { TaskItem } from './TaskItem';
@@ -91,7 +91,7 @@ export function TaskMonitorTab() {
         <>
           <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-4 py-2">
             {/* 筛选片选中态按属性驱动（按钮样式标准 §6：不得用形态表达选择态）：
-                aria-pressed + 条件令牌类承载选中填充，视觉与原 secondary 填充一致 */}
+                aria-pressed + 品牌实底 + 反白 + 600（选中态标准 §5.1 L1）；hover 由 ghost 基类给中性提亮 */}
             {FILTER_OPTIONS.map((option) => {
               const active = activeFilter === option.value;
               return (
@@ -100,7 +100,7 @@ export function TaskMonitorTab() {
                   size="sm"
                   variant="ghost"
                   aria-pressed={active}
-                  className={cn(active && 'bg-secondary text-secondary-foreground hover:bg-secondary/80')}
+                  className={cn(active && SELECTION_SOFT_COMPACT_CLASSES)}
                   onClick={() => filterTasks(option.value)}
                 >
                   {option.label}

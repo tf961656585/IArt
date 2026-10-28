@@ -27,22 +27,22 @@ import { ThinkingTierFields, type ThinkingTierChoice } from './ThinkingTierField
  * 自建模型的表单，两个入口共用（spec 03 §6.1「记录即接入」、spec 37）。
  *
  * - `create`：添加一个对话模型到某个服务商。提交一次写入创建自建对话模型记录
- *   （接口类型、能力值、思考档位与接入归属同一次落库，active 接入由后端在创建内完成）。
- *   「接口类型」由用户选择（2026-09-26 起协议归属模型级，记录自带 `protocol_adapter_id`，
+ *   （接口格式、能力值、思考档位与接入归属同一次落库，active 接入由后端在创建内完成）。
+ *   「接口格式」由用户选择（2026-09-26 起协议归属模型级，记录自带 `protocol_adapter_id`，
  *   不再从连接继承；2026-09-29 起连接级预选摘除），空态起步、必选后才可提交。
  * - `edit`：改一个自建对话模型记录的配置——能力值与思考档位（档位随记录走，
- *   服务商详情里该模型行的「修改」入口）。接口类型是记录身份的一部分，不提供修改。
+ *   服务商详情里该模型行的「修改」入口）。接口格式是记录身份的一部分，不提供修改。
  *   带 `onDelete` 时，这个模型还能在同一个弹层里被删掉：
  *   删除入口只此一处（2026-09-18 起不再有独立的「我添加的模型」区块），跟着模型自己的配置走
  *   才不会让人找两个地方。
  *
  * 两个入口字段重叠，所以是同一个组件：各写一份会让同一字段在不同入口上校验与说明分叉。
- * 差别只有标题、模型 ID 与接口类型可不可改、是否带思考档位、以及提交后调用方做什么。
+ * 差别只有标题、模型 ID 与接口格式可不可改、是否带思考档位、以及提交后调用方做什么。
  * 用 `mode` 判别而不是一堆 optional，少写一个分支字段直接编译不过。思考档位随模型记录走
  * （记录归属一条连接，模型不复用到另一条连接），所以它只在有连接上下文时传入；读不到那条
  * 连接时不传，弹层因此不给档位——写进去也没有连接承载它。
  *
- * 档位的可表达性按记录/表单当前的接口类型判定（契约注册表为唯一元数据源）。
+ * 档位的可表达性按记录/表单当前的接口格式判定（契约注册表为唯一元数据源）。
  */
 
 export type CustomModelDialogMode =
@@ -65,7 +65,7 @@ export type CustomModelThinkingContext = {
 
 export type CustomModelDialogPayload = CustomModelCapabilityDraft & {
   modelId: string;
-  /** 本次创建声明的接口类型；null = 本次不涉及（修改入口，协议随记录不可改） */
+  /** 本次创建声明的接口格式；null = 本次不涉及（修改入口，协议随记录不可改） */
   protocolAdapterId: ChatProtocolAdapterId | null;
   /** 本次要写入该接入的启用档位（有序）；null = 本次不涉及档位（提交方按不写处理） */
   enabledThinkingTiers: string[] | null;
@@ -73,7 +73,7 @@ export type CustomModelDialogPayload = CustomModelCapabilityDraft & {
   defaultThinkingTier: string | null;
 };
 
-/** 「接口类型」选项：值域来自契约枚举，展示名取自契约注册表（单一事实源，不另写一份）。 */
+/** 「接口格式」选项：值域来自契约枚举，展示名取自契约注册表（单一事实源，不另写一份）。 */
 const CHAT_ADAPTER_OPTIONS: ReadonlyArray<{ value: ChatProtocolAdapterId; label: string }> =
   CHAT_PROTOCOL_ADAPTER_IDS.map((adapterId) => ({
     value: adapterId,
@@ -105,7 +105,7 @@ export function CustomModelDialog({
 }) {
   const editing = mode.kind === 'edit';
   const [modelId, setModelId] = useState(editing ? mode.model.model_id : '');
-  // 创建态的接口类型空态起步、必选（2026-09-29 起连接级预选摘除）；修改态接口类型随记录
+  // 创建态的接口格式空态起步、必选（2026-09-29 起连接级预选摘除）；修改态接口格式随记录
   // 不可改，不进表单状态
   const [protocolAdapterId, setProtocolAdapterId] = useState<ChatProtocolAdapterId | null>(
     editing ? mode.model.protocol_adapter_id : null,
@@ -118,7 +118,7 @@ export function CustomModelDialog({
   const capability = useCustomModelCapability(editing ? mode.model : null);
 
   const trimmedId = modelId.trim();
-  // 接口类型在创建态必选（与后端契约对齐：对话记录 `protocol_adapter_id` 必填，创建后不可变）；
+  // 接口格式在创建态必选（与后端契约对齐：对话记录 `protocol_adapter_id` 必填，创建后不可变）；
   // 修改态它随记录恒有值，不参与拦截
   const canSubmit = trimmedId !== '' && capability.draft !== null && protocolAdapterId !== null;
 
@@ -176,7 +176,7 @@ export function CustomModelDialog({
           ) : (
             <>
               <div className="flex flex-col gap-2">
-                <FieldLabelRow htmlFor="custom-model-adapter" label="接口类型" />
+                <FieldLabelRow htmlFor="custom-model-adapter" label="接口格式" />
                 <Select
                   {...(protocolAdapterId === null ? {} : { value: protocolAdapterId })}
                   onValueChange={(next) => {
@@ -186,7 +186,7 @@ export function CustomModelDialog({
                   }}
                 >
                   <SelectTrigger id="custom-model-adapter" size="sm" className="w-full">
-                    <SelectValue placeholder="请选择接口类型" />
+                    <SelectValue placeholder="请选择接口格式" />
                   </SelectTrigger>
                   <SelectContent>
                     {CHAT_ADAPTER_OPTIONS.map((option) => (
@@ -225,8 +225,8 @@ export function CustomModelDialog({
               idPrefix={editing ? 'custom-model-edit' : 'custom-model-add'}
               selection={{
                 pool: thinking.pool,
-                // 可表达性按记录/表单当前的接口类型判定（契约注册表是唯一元数据源）；
-                // 尚未选择接口类型时传 null——档位字段按「适配器缺失」呈现（见 ThinkingTierSelection）
+                // 可表达性按记录/表单当前的接口格式判定（契约注册表是唯一元数据源）；
+                // 尚未选择接口格式时传 null——档位字段按「适配器缺失」呈现（见 ThinkingTierSelection）
                 adapter: protocolAdapterId === null ? null : ADAPTER_REGISTRY[protocolAdapterId],
                 unavailable: thinking.unavailable,
                 choice: tierChoice,

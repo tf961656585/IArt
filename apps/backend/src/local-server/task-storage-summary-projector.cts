@@ -37,6 +37,16 @@ type FormDataFieldView = {
   dataBase64: unknown | undefined;
   value: unknown | undefined;
 };
+type FormDataFileView = {
+  name: unknown | undefined;
+  filename: unknown | undefined;
+  contentType: unknown | undefined;
+  dataBase64: unknown | undefined;
+  sourceFilename: unknown | undefined;
+  mimeType: unknown | undefined;
+  assetId: unknown | undefined;
+  slotId: unknown | undefined;
+};
 type FormDataPayloadView = {
   fields: unknown | undefined;
   files: unknown | undefined;
@@ -183,6 +193,7 @@ const summarizeTaskValue = (
   if (contextKey === "__formData") {
     const payload = value as FormDataPayloadView;
     const fields = Array.isArray(payload.fields) ? payload.fields : [];
+    const files = Array.isArray(payload.files) ? payload.files : [];
     return {
       kind: "form_data_summary",
       fieldCount: fields.length,
@@ -195,6 +206,31 @@ const summarizeTaskValue = (
           contentType: normalizeString(formField.contentType) || null,
           hasDataBase64: Boolean(formField.dataBase64),
           value: summarizeTaskValue(formField.value, "value", depth + 1),
+        };
+      }),
+      // 媒体 part 是请求里唯一能证明「实际出网带了几张图」的位置：只列 fields 会让
+      // 摘要看起来像纯文本请求（2026-10-24 排查实例）。出网值 filename/contentType
+      // 与来源描述（sourceFilename/mimeType/assetId/slotId）分开记录，后者供溯源。
+      fileCount: files.length,
+      files: files.slice(0, MAX_PREVIEW_ITEMS).map((file) => {
+        if (!isPlainObject(file)) return summarizeTaskValue(file, "file", depth + 1);
+        const formFile = file as FormDataFileView;
+        const sourceFilename = normalizeString(formFile.sourceFilename);
+        const mimeType = normalizeString(formFile.mimeType);
+        const assetId = normalizeString(formFile.assetId);
+        const slotId = normalizeString(formFile.slotId);
+        return {
+          name: normalizeString(formFile.name) || null,
+          filename: normalizeString(formFile.filename) || null,
+          contentType: normalizeString(formFile.contentType) || null,
+          ...(sourceFilename ? { sourceFilename } : {}),
+          ...(mimeType ? { mimeType } : {}),
+          ...(assetId ? { assetId } : {}),
+          ...(slotId ? { slotId } : {}),
+          dataBase64: {
+            kind: "omitted_base64",
+            size: typeof formFile.dataBase64 === "string" ? formFile.dataBase64.length : null,
+          },
         };
       }),
     };

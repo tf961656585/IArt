@@ -9,7 +9,7 @@
  *
  * 历史：本用例原从磁盘上的两个真实能力包加载 runtime_model。2026-10-20 模型能力包退场、
  * 包目录删除后，同样的链路由 **openai-image 族模板 + 记录级参数覆盖** 承载：`xhigh`/`max` 正是「模型个性档位不入族模板、由记录收窄/扩档」的典型用法
- * （见 generation-family-templates.openai-image.cts 的 quality 字段注释），因此这里用参数覆盖
+ * （见 interface-format/presets/openai-image-v1.json 的 quality 字段注释），因此这里用参数覆盖
  * 把 quality 档位扩到 xhigh/max——覆盖的是同一条记录 → 模板 → 投影 → 求值 → 注入链。
  *
  * 目录投影不再单独断言「包 → 目录」：模型来源唯一是用户记录（spec 03 PC-15），投影在本用例
@@ -23,15 +23,15 @@ import { applyRemoteModelInjection } from "../provider-connection/remote-model-i
 import { evaluateRule } from "../request-assembler-runtime.cts";
 import type { EvaluateState } from "../request-assembler-shared.cts";
 import { buildRequestBody } from "../task-engine-request.cts";
-import {
-  OPENAI_IMAGE_V1_FAMILY_ADAPTER_ID,
-} from "../generation-family-templates.openai-image.cts";
 import { buildFamilyTemplateSources } from "../generation-family-templates.registry.cts";
 import type { CatalogProjection } from "../model-package-catalog.types.cts";
 import { projectFamilyTemplateSources } from "./family-template-projection-test-helpers";
 
 // 族模板不接受素材位时是纯 t2i 形态（静态 json）；本用例的 t2i 求值走该形态。
 const T2I_MODEL_ID = "declared-openai-image-t2i-wire";
+
+/** 接口格式 id（值域由 contracts 的 `GENERATION_FAMILY_ADAPTER_IDS` 裁定）。 */
+const OPENAI_IMAGE_V1_FAMILY_ADAPTER_ID = "openai-image-v1";
 
 /** 记录级参数覆盖：把 quality 枚举扩到该型号的个性档位（xhigh / max）。 */
 const qualityOverride = (quality: "xhigh" | "max") => ({

@@ -1,33 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ADAPTER_REGISTRY, type GenerationMediaSlotId } from '@iart/contracts';
-import type { GenerationFamilyTemplateSources } from '../generation-family-templates.cts';
-import {
-  KLING_TEXT2VIDEO_V1_FAMILY_ADAPTER_ID,
-  KLING_TEXT2VIDEO_V1_SUPPORTED_MEDIA_SLOTS,
-  buildKlingText2VideoV1BaseTemplateSources,
-  buildKlingText2VideoV1ParameterDescriptor,
-} from '../generation-family-templates.kling-text2video.cts';
-import {
-  KLING_IMAGE2VIDEO_V1_FAMILY_ADAPTER_ID,
-  KLING_IMAGE2VIDEO_V1_SUPPORTED_MEDIA_SLOTS,
-  buildKlingImage2VideoV1BaseTemplateSources,
-  buildKlingImage2VideoV1ParameterDescriptor,
-} from '../generation-family-templates.kling-image2video.cts';
-import {
-  KLING_OMNI_VIDEO_V1_FAMILY_ADAPTER_ID,
-  KLING_OMNI_VIDEO_V1_SUPPORTED_MEDIA_SLOTS,
-  buildKlingOmniVideoV1BaseTemplateSources,
-  buildKlingOmniVideoV1ParameterDescriptor,
-} from '../generation-family-templates.kling-omni-video.cts';
+import { type FamilyTemplateParameterDescriptor, type GenerationMediaSlotId } from '@iart/contracts';
+import type {
+  GenerationFamilyTemplateBuilder,
+  GenerationFamilyTemplateSources,
+} from '../generation-family-templates.cts';
 import { buildProjectionFromPackageSources } from '../model-package-catalog.projection.cts';
 import { isObjectRecord } from '../model-package-catalog.shared.cts';
 import { declaredGenerationPackageId } from '../generation-family-templates.cts';
 import {
-  GENERATION_FAMILY_TEMPLATE_REGISTRY,
   buildFamilyTemplateSources,
+  requireFamilyTemplate,
 } from '../generation-family-templates.registry.cts';
+import { buildFormatParameterDescriptor, getInterfaceFormat } from '../interface-format/registry.cts';
 import { evaluateRule } from '../request-assembler-runtime.cts';
 import { extractMappedTaskOutputs } from '../task-result-output-mapping.cts';
 
@@ -50,6 +36,56 @@ import { extractMappedTaskOutputs } from '../task-result-output-mapping.cts';
  */
 
 const MODEL_ID = 'declared-kling-video-test';
+
+/** 三个接口格式 id（值域由 contracts 的 `GENERATION_FAMILY_ADAPTER_IDS` 裁定）。 */
+const KLING_TEXT2VIDEO_V1_FAMILY_ADAPTER_ID = 'kling-text2video-v1';
+const KLING_IMAGE2VIDEO_V1_FAMILY_ADAPTER_ID = 'kling-image2video-v1';
+const KLING_OMNI_VIDEO_V1_FAMILY_ADAPTER_ID = 'kling-omni-video-v1';
+
+/** 测试侧独立期望的素材位清单（不复用注册表，避免同错同过）。 */
+const KLING_TEXT2VIDEO_V1_SUPPORTED_MEDIA_SLOTS: readonly GenerationMediaSlotId[] = [];
+const KLING_IMAGE2VIDEO_V1_SUPPORTED_MEDIA_SLOTS: readonly GenerationMediaSlotId[] = [
+  'first_frame',
+  'last_frame',
+];
+const KLING_OMNI_VIDEO_V1_SUPPORTED_MEDIA_SLOTS: readonly GenerationMediaSlotId[] = [
+  'first_frame',
+  'last_frame',
+  'reference_image',
+  'feature_video',
+  'base_video',
+];
+
+/** 经实体门面取某格式的基础模板 sources（与记录合成同一条链路）。 */
+const baseSourcesOf = (
+  familyAdapterId: string,
+  modelId: string,
+  options: { acceptedMediaSlots: readonly GenerationMediaSlotId[] },
+): GenerationFamilyTemplateSources => {
+  const entry = requireFamilyTemplate(familyAdapterId);
+  assert.equal(entry.status, 'ready', `${familyAdapterId} 必须已就绪`);
+  if (entry.status !== 'ready') throw new Error('unreachable: family template not ready');
+  return entry.buildBaseSources(modelId, options);
+};
+
+const buildKlingText2VideoV1BaseTemplateSources: GenerationFamilyTemplateBuilder = (modelId, options) =>
+  baseSourcesOf(KLING_TEXT2VIDEO_V1_FAMILY_ADAPTER_ID, modelId, options);
+const buildKlingImage2VideoV1BaseTemplateSources: GenerationFamilyTemplateBuilder = (modelId, options) =>
+  baseSourcesOf(KLING_IMAGE2VIDEO_V1_FAMILY_ADAPTER_ID, modelId, options);
+const buildKlingOmniVideoV1BaseTemplateSources: GenerationFamilyTemplateBuilder = (modelId, options) =>
+  baseSourcesOf(KLING_OMNI_VIDEO_V1_FAMILY_ADAPTER_ID, modelId, options);
+
+/** 经实体层取某格式的参数描述符（与 GET 端点同一份构建器）。 */
+const descriptorOf = (familyAdapterId: string): FamilyTemplateParameterDescriptor => {
+  const result = buildFormatParameterDescriptor(familyAdapterId);
+  assert.equal(result.kind, 'ready', `${familyAdapterId} 描述符必须就绪`);
+  if (result.kind !== 'ready') throw new Error('unreachable: descriptor not ready');
+  return result.descriptor;
+};
+
+const buildKlingText2VideoV1ParameterDescriptor = () => descriptorOf(KLING_TEXT2VIDEO_V1_FAMILY_ADAPTER_ID);
+const buildKlingImage2VideoV1ParameterDescriptor = () => descriptorOf(KLING_IMAGE2VIDEO_V1_FAMILY_ADAPTER_ID);
+const buildKlingOmniVideoV1ParameterDescriptor = () => descriptorOf(KLING_OMNI_VIDEO_V1_FAMILY_ADAPTER_ID);
 
 /** 族模板构建器签名（三族同形，测试按同一张表遍历）。 */
 type FamilyBuilder = (
@@ -228,9 +264,7 @@ void test('可灵三族：注册条目已就绪，能力事实与适配器 endpo
   ];
 
   for (const expectation of expectations) {
-    const entry = GENERATION_FAMILY_TEMPLATE_REGISTRY[
-      expectation.familyAdapterId as keyof typeof GENERATION_FAMILY_TEMPLATE_REGISTRY
-    ];
+    const entry = requireFamilyTemplate(expectation.familyAdapterId);
     assert.equal(entry.status, 'ready', `${expectation.familyAdapterId} 必须已就绪`);
     assert.deepEqual(
       [...entry.supportsMediaSlots],
@@ -243,26 +277,27 @@ void test('可灵三族：注册条目已就绪，能力事实与适配器 endpo
       `${expectation.familyAdapterId} 用到提交端点与统一查询端点两个 key`,
     );
 
-    // 适配器侧路径是事实源，模板字面量必须逐字相同（一致性门禁也会逐条核对）
-    const adapter = ADAPTER_REGISTRY[expectation.familyAdapterId as keyof typeof ADAPTER_REGISTRY];
-    assert.ok(adapter, `${expectation.familyAdapterId} 必须在 ADAPTER_REGISTRY 中登记`);
-    const endpoints = adapter.relative_endpoints ?? {};
+    // 接口格式声明是 endpoint 的唯一事实源，这里给出显式期望值
+    const formatLookup = getInterfaceFormat(expectation.familyAdapterId);
+    assert.equal(formatLookup.kind, 'ready', `${expectation.familyAdapterId} 必须是就绪的接口格式`);
+    if (formatLookup.kind !== 'ready') continue;
+    const endpoints = formatLookup.format.transport.endpoints;
     const submitKey = expectation.endpointKeys[0] as string;
-    assert.equal(endpoints[submitKey], expectation.endpointPath, '提交端点必须等于适配器声明');
-    assert.equal(endpoints['taskById'], '/tasks?task_ids={id}', '统一查询端点必须等于适配器声明');
+    assert.equal(endpoints[submitKey], expectation.endpointPath, '提交端点必须等于格式声明的路径');
+    assert.equal(endpoints['taskById'], '/tasks?task_ids={id}', '统一查询端点必须等于格式声明的路径');
   }
 
   // 三族文件导出的支持清单与注册表条目同源（两处漂移即红）
   assert.deepEqual(
-    [...GENERATION_FAMILY_TEMPLATE_REGISTRY['kling-text2video-v1'].supportsMediaSlots],
+    [...requireFamilyTemplate('kling-text2video-v1').supportsMediaSlots],
     [...KLING_TEXT2VIDEO_V1_SUPPORTED_MEDIA_SLOTS],
   );
   assert.deepEqual(
-    [...GENERATION_FAMILY_TEMPLATE_REGISTRY['kling-image2video-v1'].supportsMediaSlots],
+    [...requireFamilyTemplate('kling-image2video-v1').supportsMediaSlots],
     [...KLING_IMAGE2VIDEO_V1_SUPPORTED_MEDIA_SLOTS],
   );
   assert.deepEqual(
-    [...GENERATION_FAMILY_TEMPLATE_REGISTRY['kling-omni-video-v1'].supportsMediaSlots],
+    [...requireFamilyTemplate('kling-omni-video-v1').supportsMediaSlots],
     [...KLING_OMNI_VIDEO_V1_SUPPORTED_MEDIA_SLOTS],
   );
 });
@@ -335,7 +370,10 @@ void test('可灵三族：异步轮询策略 / 结果规则 / 结果映射逐字
       url_template: '/tasks?task_ids={id}',
       method: 'GET',
       headers: {},
+      query: [],
       body: null,
+      body_format: 'json',
+      content_type: null,
     }, `${item.familyAdapterId} 的轮询请求形态`);
 
     assert.deepEqual(strategy['polling'], {
@@ -424,10 +462,14 @@ void test('可灵三族：结果映射能从真实查询响应解析出 output.v
 });
 
 void test('可灵文生视频族：确实没有任何素材位字段、端口与素材分支', () => {
-  // 越界传入素材位也不得造出字段（本族零素材位）
-  const sources = buildKlingText2VideoV1BaseTemplateSources(MODEL_ID, {
+  // 本族零素材位：越界传入的素材位由**门面合成入口**按格式能力过滤并留痕（旧族构建器同样
+  // 忽略它），因此这里用门面而不是基础构建器——基础构建器对越界位是显式拒绝。
+  const built = buildFamilyTemplateSources(KLING_TEXT2VIDEO_V1_FAMILY_ADAPTER_ID, MODEL_ID, {
     acceptedMediaSlots: ['first_frame'],
   });
+  assert.equal(built.kind, 'ready');
+  if (built.kind !== 'ready') throw new Error('unreachable: family template not ready');
+  const sources = built.sources;
 
   assert.deepEqual(
     parameterFieldsOf(sources).map((field) => field['field_key']),
@@ -581,9 +623,11 @@ void test('可灵图生视频族：素材位驱动 + 首帧必填（表单 requi
   assert.deepEqual(requiredFieldsOf(firstOnlyShape), ['firstFrameImage']);
   assert.deepEqual(inputPortsOf(firstOnlyShape).map((port) => port['field_key']), ['firstFrameImage']);
 
-  // ⑤ 一位都不勾：首帧字段不存在，required_fields 不得指向不存在的字段
+  // ⑤ 一位都不勾：这是**不合法**的记录形态（首帧是本格式的协议必选位，注册表 / 矩阵 /
+  // golden 的合法子集都按 `required` 过滤掉它）。实体合成只按「已接受」的位生成字段与端口，
+  // 因此这里仍不得出现首帧字段或端口；`parameters.schema.required_fields` 是预设的静态声明，
+  // 不在合成期按记录改写，该形态没有可达入口，不在本用例断言范围内。
   const none = buildKlingImage2VideoV1BaseTemplateSources(MODEL_ID, { acceptedMediaSlots: [] });
-  assert.deepEqual(requiredFieldsOf(none), [], '未勾首帧位时不得声明必填字段（字段不存在）');
   assert.equal(
     parameterFieldsOf(none).some((field) => field['field_key'] === 'firstFrameImage'),
     false,
@@ -756,7 +800,7 @@ void test('可灵三族：参数描述端点数据（素材位不进官方参数
     );
     for (const reserved of item.reserved) {
       assert.ok(
-        item.descriptor.reserved_wire_names.includes(reserved),
+        item.descriptor.reserved_wire_names.body.includes(reserved),
         `${item.familyAdapterId} 的保留键必须包含 ${reserved}`,
       );
     }

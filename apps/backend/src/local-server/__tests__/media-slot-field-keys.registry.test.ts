@@ -16,6 +16,7 @@ import test from 'node:test';
 
 import {
   GENERATION_FAMILY_TEMPLATE_REGISTRY,
+  requireFamilyTemplate,
   type GenerationFamilyTemplateEntry,
 } from '../generation-family-templates.registry.cts';
 
@@ -73,7 +74,7 @@ void test('注册表：每个登记位的字段键都是非空字符串', () => 
 });
 
 void test('可灵图生视频族：首帧/尾帧字段键与协议事实表一致', () => {
-  const entry = GENERATION_FAMILY_TEMPLATE_REGISTRY['kling-image2video-v1'];
+  const entry = requireFamilyTemplate('kling-image2video-v1');
   assert.equal(entry.status, 'ready', '可灵图生视频族必须已就绪');
   assert.equal(
     entry.mediaSlotFieldKeys.first_frame,
@@ -93,7 +94,7 @@ void test('可灵图生视频族：首帧/尾帧字段键与协议事实表一�
 });
 
 void test('可灵文生视频族：无素材位，映射为空', () => {
-  const entry = GENERATION_FAMILY_TEMPLATE_REGISTRY['kling-text2video-v1'];
+  const entry = requireFamilyTemplate('kling-text2video-v1');
   assert.equal(entry.status, 'ready');
   assert.deepEqual(entry.supportsMediaSlots, [], '文生视频族不该声明素材位');
   assert.deepEqual(

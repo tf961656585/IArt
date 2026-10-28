@@ -42,6 +42,18 @@ export type TaskNodeData = {
   progressPhase: string | null;
   errorMessage: string | null;
   failure: RuntimeTaskFailure | null;
+  /**
+   * 远端任务号（RuntimeTaskView.remoteRequestId 的本地投影）。
+   *
+   * 供「重新查询结果」资格判定消费（contracts `isRequeryEligibleFailure` 要求非空）。
+   * 可选：存量持久化节点没有该键，读作 undefined；投影在通知/快照到达后补真实值。
+   */
+  remoteRequestId?: string | null;
+  /**
+   * 累计重新查询次数（RuntimeTaskView.metadata.requeryCount 的本地投影）。
+   * 仅用于等待态胶囊副行「重新查询结果」；首次提交的普通轮询为 0/undefined。
+   */
+  requeryCount?: number;
   createdAt: number;
   updatedAt: number;
 };

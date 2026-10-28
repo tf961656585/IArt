@@ -70,6 +70,11 @@ const gates = [
     cascade: '按钮样式标准守卫失败说明 Button 几何覆写、原生按钮、variant/size 枚举或 Editor 私有按钮类出现白名单外残留，未收敛到 docs/ui-button-standard.md §7/§8/§9 口径。',
   },
   {
+    name: 'guard:form-control-colors',
+    command: ['pnpm', 'guard:form-control-colors'],
+    cascade: '表单控件颜色守卫失败说明共享控件未钉死 text-foreground、标签容器把 text-muted-foreground 继承给控件，或占位色/占位文案偏离 docs/ui-form-control-standard.md FC-01..FC-03。',
+  },
+  {
     name: 'guard:spec-test-linkage',
     command: ['pnpm', 'guard:spec-test-linkage'],
     cascade: '测试↔spec 关联守卫失败说明 @spec 标注指向已废弃/已退役/不存在的验收 ID（旧行为测试滞留信号），或验收 ID 在多份 Active 产物重复定义。',

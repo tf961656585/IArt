@@ -9,9 +9,13 @@
  *   其 electron.net.request 经 shim 落到真实 node http 客户端，仅做传输面适配）
  *   → 真实 HTTP 请求打到本机假上游（node http server 服务 latest-mac.yml + 假 zip，
  *   服务端捕获请求路径断言 generic provider 语义）
- *   → 检出更新（真实 semver 比较）→ downloadUpdate 真实下载落盘。
+ *   → 检出更新（真实 semver 比较）→ 显式 startDownload 后 downloadUpdate 真实下载落盘；
+ *   取消用例同样走真实 CancellationToken（慢速上游 → 下载中 cancel → 回到 available）。
  *
  * 契约 parse：状态快照经 AppUpdateStateSchema.parse（桥内真实执行）后断言。
+ *
+ * 桥内单例隔离：真实 electron-updater 的 autoUpdater 是模块级单例，每次装配前清除其
+ * require 缓存，避免上一次的 configOnDisk / 已下载缓存污染下一条用例。
  *
  * 配置事实源钉扎：根 package.json build.publish.url 必须等于公开仓 GitHub
  * latest/download 地址（批次 2 终态）。打包态该值由 electron-builder 写入
@@ -134,11 +138,26 @@ const buildMinimalStoredZip = (entryName: string, content: Buffer): Buffer => {
 type FakeUpstream = {
   base: string;
   servedPaths: string[];
+  /** 慢速安装包传输在完整写出前被客户端关闭连接（取消 → abort 生效）时置位。 */
+  readonly downloadAborted: boolean;
   close: () => Promise<void>;
 };
 
-const startFakeUpstream = async (ymlBody: string, zipName: string, zipBytes: Buffer): Promise<FakeUpstream> => {
+const startFakeUpstream = async (
+  ymlBody: string,
+  zipName: string,
+  zipBytes: Buffer,
+  options?: { slowZip: boolean },
+): Promise<FakeUpstream> => {
   const servedPaths: string[] = [];
+  let downloadAborted = false;
+  let slowTimer: NodeJS.Timeout | null = null;
+  const stopSlowTimer = (): void => {
+    if (slowTimer !== null) {
+      clearInterval(slowTimer);
+      slowTimer = null;
+    }
+  };
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
     servedPaths.push(pathname);
@@ -149,7 +168,31 @@ const startFakeUpstream = async (ymlBody: string, zipName: string, zipBytes: Buf
     }
     if (pathname.endsWith(`/${zipName}`)) {
       res.writeHead(200, { 'content-type': 'application/zip', 'content-length': String(zipBytes.length) });
-      res.end(zipBytes);
+      if (!options?.slowZip) {
+        res.end(zipBytes);
+        return;
+      }
+      // 慢速传输：首块立即写出，其余按 4KB / 100ms 推进，给取消留出真实传输窗口。
+      const chunkSize = 4096;
+      let offset = Math.min(chunkSize, zipBytes.length);
+      res.write(zipBytes.subarray(0, offset));
+      // 取消生效的判据：连接关闭时响应尚未完整写出（客户端 abort 而非正常传完）。
+      req.on('aborted', () => {
+        downloadAborted = true;
+      });
+      res.on('close', () => {
+        stopSlowTimer();
+        if (!res.writableEnded) downloadAborted = true;
+      });
+      slowTimer = setInterval(() => {
+        if (offset >= zipBytes.length) {
+          stopSlowTimer();
+          res.end();
+          return;
+        }
+        res.write(zipBytes.subarray(offset, offset + chunkSize));
+        offset += chunkSize;
+      }, 100);
       return;
     }
     res.writeHead(404);
@@ -165,9 +208,14 @@ const startFakeUpstream = async (ymlBody: string, zipName: string, zipBytes: Buf
   return {
     base: `http://127.0.0.1:${address.port}/releases`,
     servedPaths,
+    get downloadAborted() {
+      return downloadAborted;
+    },
     close: () =>
       new Promise<void>((resolve, reject) => {
+        stopSlowTimer();
         server.closeIdleConnections?.();
+        server.closeAllConnections?.();
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   };
@@ -184,12 +232,27 @@ type UpdaterControllerLike = {
     reason?: string;
     state: AppUpdateState;
   }>;
+  startDownload: () => Promise<{
+    status: string;
+    reason?: string;
+    state: AppUpdateState;
+  }>;
+  cancelDownload: () => Promise<{
+    status: string;
+    reason?: string;
+    state: AppUpdateState;
+  }>;
   buildUpdateStateSnapshot: () => AppUpdateState;
+};
+
+type MainWindowLike = {
+  webContents: { send: ReturnType<typeof vi.fn> };
+  isDestroyed: () => boolean;
 };
 
 type UpdaterModule = {
   createUpdaterController: (options: {
-    getMainWindow: () => { webContents: { send: ReturnType<typeof vi.fn> }; isDestroyed: () => boolean } | null;
+    getMainWindow: () => MainWindowLike | null;
     setAllowQuit: (value: boolean) => void;
   }) => UpdaterControllerLike;
   resolveUpdatePublishUrl: () => string;
@@ -199,6 +262,7 @@ type LoadedSeam = {
   controller: UpdaterControllerLike;
   resolveUpdatePublishUrl: () => string;
   upstream: FakeUpstream;
+  mainWindow: MainWindowLike;
   zipBytes: Buffer;
   zipName: string;
   tempRoot: string;
@@ -207,8 +271,27 @@ type LoadedSeam = {
 
 let loaded: LoadedSeam | null = null;
 
+// 真实 electron-updater 的 autoUpdater 是模块级单例：不重建的话，第二次装配会复用
+// 上一次的 configOnDisk / updateInfoAndProvider / 下载缓存，让「取消」用例看到上一次的已完成下载。
+const clearElectronUpdaterCache = (): void => {
+  const resolved = sharedRequire.resolve('electron-updater', {
+    paths: [path.join(process.cwd(), 'apps/desktop-shell')],
+  });
+  const packageRoot = path.dirname(resolved);
+  const builderUtilRoot = path.sep + 'builder-util-runtime' + path.sep;
+  for (const cacheKey of Object.keys(sharedRequire.cache)) {
+    if (cacheKey.startsWith(packageRoot) || cacheKey.includes(builderUtilRoot)) {
+      delete sharedRequire.cache[cacheKey];
+    }
+  }
+};
+
+let seamLoadCount = 0;
+const loadedSeams: LoadedSeam[] = [];
+
 /** 装配真实桥 + 真实 electron-updater + 本机假上游；返回后即可走 checkForUpdates。 */
-const loadSeam = async (): Promise<LoadedSeam> => {
+const loadSeam = async (options?: { slowZip?: boolean }): Promise<LoadedSeam> => {
+  seamLoadCount += 1;
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'iart-update-feed-seam-'));
   const originalHome = process.env['HOME'] ?? '';
   const fakeHome = path.join(tempRoot, 'home');
@@ -257,12 +340,16 @@ const loadSeam = async (): Promise<LoadedSeam> => {
 
   const archSuffix = process.arch === 'arm64' ? 'arm64' : 'x64';
   const zipName = `IARTStudio-0.7.0-mac-${archSuffix}.zip`;
-  const zipContent = Buffer.from('IARTStudio update feed seam payload\n', 'utf8');
+  // 慢速取消用例需要足够长的传输窗口；普通用例用最小载荷。
+  const payloadSize = options?.slowZip ? 96 * 1024 : 'IARTStudio update feed seam payload\n'.length;
+  const zipContent = options?.slowZip
+    ? Buffer.alloc(payloadSize, 'i')
+    : Buffer.from('IARTStudio update feed seam payload\n', 'utf8');
   const zipBytes = buildMinimalStoredZip('IARTStudio.app/Contents/Info.plist', zipContent);
   const zipSha512 = sha512Base64(zipBytes);
   const ymlBody = [
     'provider: generic',
-    `updaterCacheDirName: iart-update-feed-seam-${Date.now().toString(36)}`,
+    `updaterCacheDirName: iart-update-feed-seam-${seamLoadCount}-${Date.now().toString(36)}`,
     'url: REPLACE_FEED_BASE',
     'version: 0.7.0',
     'files:',
@@ -275,7 +362,7 @@ const loadSeam = async (): Promise<LoadedSeam> => {
     '',
   ].join('\n');
 
-  const upstream = await startFakeUpstream(ymlBody, zipName, zipBytes);
+  const upstream = await startFakeUpstream(ymlBody, zipName, zipBytes, { slowZip: options?.slowZip ?? false });
   fs.writeFileSync(
     path.join(resourcesDir, 'app-update.yml'),
     ymlBody.replace('REPLACE_FEED_BASE', upstream.base),
@@ -318,9 +405,10 @@ const loadSeam = async (): Promise<LoadedSeam> => {
   clearCjsCache(updateStatePath);
   clearCjsCache(pendingPath);
   clearCjsCache(logPath);
+  clearElectronUpdaterCache();
 
   const mod = cjsRequireAs<UpdaterModule>(sharedRequire(updaterWrapperPath));
-  const mainWindow = {
+  const mainWindow: MainWindowLike = {
     webContents: { send: vi.fn() },
     isDestroyed: () => false,
   };
@@ -330,13 +418,34 @@ const loadSeam = async (): Promise<LoadedSeam> => {
   });
   controller.setupAutoUpdater();
 
-  return { controller, resolveUpdatePublishUrl: mod.resolveUpdatePublishUrl, upstream, zipBytes, zipName, tempRoot, restore };
+  const seam: LoadedSeam = {
+    controller,
+    resolveUpdatePublishUrl: mod.resolveUpdatePublishUrl,
+    upstream,
+    mainWindow,
+    zipBytes,
+    zipName,
+    tempRoot,
+    restore,
+  };
+  loadedSeams.push(seam);
+  return seam;
 };
 
-/** 等待桥状态机落到目标状态（startDownload 是 update-available 处理器里的 floating promise）。 */
+/** 轮询等待异步事实成立（TCP 连接关闭在服务端是异步到达的）。 */
+const waitUntil = async (predicate: () => boolean, timeoutMs: number): Promise<boolean> => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return predicate();
+};
+
+/** 等待桥状态机落到目标状态（下载由显式 startDownload 驱动，桥内不再自动下载）。 */
 const waitForState = async (
   controller: UpdaterControllerLike,
-  target: 'downloaded',
+  target: AppUpdateState['status'],
   timeoutMs = 15_000,
 ): Promise<AppUpdateState> => {
   const deadline = Date.now() + timeoutMs;
@@ -373,6 +482,11 @@ describe('更新链 generic provider 接缝（真实桥 + 真实 electron-update
 
       const checkResult = await controller.checkForUpdates(false);
       expect(checkResult.status).toBe('success');
+      // 发现更新只停在 available：不自动下载。
+      expect(controller.buildUpdateStateSnapshot().status).toBe('available');
+
+      const downloadResult = await controller.startDownload();
+      expect(downloadResult.status).toBe('success');
 
       const state = await waitForState(controller, 'downloaded');
       // 状态经 AppUpdateStateSchema.parse（桥内真实执行）后断言。
@@ -398,11 +512,60 @@ describe('更新链 generic provider 接缝（真实桥 + 真实 electron-update
     },
   );
 
+  it.skipIf(process.platform !== 'darwin')(
+    '下载中取消接缝：真实 CancellationToken 使下载立即结束并回到 available（无 error、不写 pending）',
+    async () => {
+      loaded = await loadSeam({ slowZip: true });
+      const { controller, upstream, mainWindow, tempRoot } = loaded;
+
+      const checkResult = await controller.checkForUpdates(false);
+      expect(checkResult.status).toBe('success');
+      expect(controller.buildUpdateStateSnapshot().status).toBe('available');
+
+      const downloadPromise = controller.startDownload();
+      await waitForState(controller, 'downloading', 10_000);
+      // 给真实传输留出窗口：确保上游已经收到安装包请求并开始分块写。
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      // 上游确实在传输安装包（取消发生在传输途中，而不是请求发起前）。
+      expect(upstream.servedPaths.some((p) => p.endsWith(`/${loaded?.zipName ?? ''}`))).toBe(true);
+
+      const cancelResult = await controller.cancelDownload();
+      const downloadResult = await downloadPromise;
+
+      expect(cancelResult.status).toBe('success');
+      expect(cancelResult.state.status).toBe('available');
+      expect(downloadResult.status).toBe('skipped');
+      if (downloadResult.status === 'skipped') {
+        expect(downloadResult.reason).toBe('download-cancelled');
+      }
+
+      // 真中止：服务端必须观察到连接在完整写出前被关闭，而不是继续把字节传完。
+      const aborted: boolean = await waitUntil(() => upstream.downloadAborted, 5_000);
+      expect(aborted).toBe(true);
+
+      // 取消后不会「稍后完成」再翻回 downloaded：慢速上游此刻远未传完。
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(controller.buildUpdateStateSnapshot().status).toBe('available');
+
+      // 取消不算失败：不产生 error 事件，也不产生 downloaded 事件；不写 pending。
+      const sentEvents = mainWindow.webContents.send.mock.calls
+        .filter((call) => (call[0] as unknown) === 'app-update:event')
+        .map((call) => (call[1] as { type: string }).type);
+      expect(sentEvents).not.toContain('error');
+      expect(sentEvents).not.toContain('downloaded');
+      expect(fs.existsSync(path.join(tempRoot, 'userData', 'pending-update.json'))).toBe(false);
+    },
+    20_000,
+  );
+
   afterAll(async () => {
-    if (loaded) {
-      loaded.restore();
-      await loaded.upstream.close().catch(() => undefined);
-      fs.rmSync(loaded.tempRoot, { recursive: true, force: true });
+    // LIFO 恢复：每次 loadSeam 记录的原始 resourcesPath / HOME 是上一次装配的值。
+    for (const seam of [...loadedSeams].reverse()) {
+      seam.restore();
+      await seam.upstream.close().catch(() => undefined);
+      fs.rmSync(seam.tempRoot, { recursive: true, force: true });
     }
+    loadedSeams.length = 0;
+    loaded = null;
   });
 });

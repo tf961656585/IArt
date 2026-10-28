@@ -205,7 +205,8 @@ function getDefaultMediaAspectRatio(nodeType: GraphNodeType): number {
  * （asset chrome 为 {0,0}：媒体满幅面，wrapper = 卡片 border-box，见 chromeConstants.ts）。
  *
  * meta 来源：`MediaAsset.original.width/height`（经节点 data.assetId 直连）。
- * - mediaType 为 audio：非媒体表面（占位壳），回落 defaultSize。
+ * - mediaType 为 audio：卡片形态（播放钮 + 波形 + 时长），固定 248×64
+ *   （docs/editor/画布资产节点媒体播放-design.md §3.6）。
  * - asset / original 尺寸缺失：无法确定媒体比例，回落 defaultSize（defaultSize
  *   仅作为 meta 缺失时的兜底，媒体比例可得时永远以媒体比例为准）。
  *
@@ -220,6 +221,9 @@ function computeAssetNodeSize(params: {
   const fallback = defaultSize ?? { width: 240, height: 180 };
 
   const nodeData = node.data as { mediaType?: string; assetId?: string | null | undefined };
+  if (nodeData.mediaType === "audio") {
+    return { width: 248, height: 64 };
+  }
   if (nodeData.mediaType !== "image" && nodeData.mediaType !== "video") {
     return fallback;
   }

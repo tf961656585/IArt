@@ -11,7 +11,7 @@ import {
   type AppUpdateProgress,
   type AppUpdateState,
 } from "@iart/contracts";
-import { autoUpdater, type ProgressInfo, type UpdateInfo } from "electron-updater";
+import { autoUpdater, CancellationToken, type ProgressInfo, type UpdateInfo } from "electron-updater";
 import { nodeRequire, ROOT_DIR, toErrorMessage } from "../desktop-shell-utils.cjs";
 import { appendUpdaterLog, getUpdaterLogPath } from "./app-update-log.cjs";
 import { clearPendingUpdate, readPendingUpdate, writePendingUpdate } from "./app-update-pending.cjs";
@@ -39,6 +39,7 @@ export type UpdaterController = {
   scheduleStartupCheck: () => void;
   checkForUpdates: (manual: boolean | undefined) => Promise<AppUpdateCommandResult>;
   startDownload: () => Promise<AppUpdateCommandResult>;
+  cancelDownload: () => Promise<AppUpdateCommandResult>;
   installUpdate: () => AppUpdateCommandResult;
   buildUpdateStateSnapshot: () => AppUpdateState;
   getUpdaterLogInfo: () => Promise<object>;
@@ -49,6 +50,51 @@ export type UpdaterController = {
 
 const AUTO_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 const MANUAL_CHECK_INTERVAL_MS = 2 * 60 * 1000;
+
+// 最近一次「发现新版本」的完整快照：取消下载、检查失败保留可行动状态时据此重建 available。
+type AvailableSnapshot = {
+  latestVersion: string;
+  releaseDate: string | null;
+  notes: string | null;
+  files: AppUpdateFile[];
+  mandatory: boolean;
+  minimumVersion: string | null;
+};
+
+// 一次下载尝试的运行时事实：token 只在本次下载内有效；cancelRequested 是取消判据（不依赖异常类型）。
+type ActiveDownload = {
+  token: CancellationToken;
+  version: string;
+  cancelRequested: boolean;
+  settled: Promise<AppUpdateCommandResult>;
+};
+
+const isActionableState = (state: AppUpdateState | null): state is AppUpdateState =>
+  state !== null && (state.status === "available" || state.status === "downloaded");
+
+// electron-updater 的 ElectronHttpExecutor.download 把 onCancel 交给 doDownload 后并未使用
+// （builder-util-runtime 的 doDownload 从不调用 options.onCancel），所以 token.cancel() 只让
+// promise reject、不会停掉底层网络请求。这里包一层 createRequest 来登记在途请求，取消时显式 abort。
+type AbortableUpdateRequest = {
+  abort: () => void;
+  once: (event: string, listener: () => void) => unknown;
+};
+
+type UpdaterHttpExecutor = {
+  createRequest: (options: unknown, callback: (response: unknown) => void) => unknown;
+};
+
+const isAbortableUpdateRequest = (value: unknown): value is AbortableUpdateRequest => {
+  if (typeof value !== "object" || value === null) return false;
+  if (!("abort" in value) || !("once" in value)) return false;
+  return typeof value.abort === "function" && typeof value.once === "function";
+};
+
+const isUpdaterHttpExecutor = (value: unknown): value is UpdaterHttpExecutor => {
+  if (typeof value !== "object" || value === null) return false;
+  if (!("createRequest" in value)) return false;
+  return typeof value.createRequest === "function";
+};
 
 type PackageJsonFields = {
   build: { publish: unknown | undefined } | undefined;
@@ -162,12 +208,21 @@ export const createElectronUpdaterController = ({
   const store: UpdateStateStore = createUpdateStateStore();
   let latestVersion: string | null = null;
   let latestFiles: AppUpdateFile[] = [];
+  let availableSnapshot: AvailableSnapshot | null = null;
+  let activeDownload: ActiveDownload | null = null;
   let downloadedPath: string | null = null;
+  let downloadedVersion: string | null = null;
   let startupCheckScheduled = false;
   let initialized = false;
   let listenersAttached = false;
   let lastCheckAt = 0;
   let resolvedPublishUrl = "";
+  // 检查相位：用于区分「检查失败」与「下载失败」的 error 呈现，以及检查等待期 error 事件的抑制。
+  let checkInFlight = false;
+  let stateBeforeCheck: AppUpdateState | null = null;
+  // 在一次下载内创建、尚未关闭的网络请求；取消时逐个 abort 才是真中止。
+  const activeDownloadRequests = new Set<AbortableUpdateRequest>();
+  let requestAbortHookAttached = false;
 
   const sendToMain = (event: AppUpdateEvent["type"], state: AppUpdateState) => {
     const payload = AppUpdateEventSchema.parse({ type: event, state });
@@ -196,15 +251,17 @@ export const createElectronUpdaterController = ({
     return message;
   };
 
-  const shouldThrottle = (manual: boolean): boolean => {
-    if (lastCheckAt === 0) return false;
+  // 返回 null 表示未节流；返回数字表示距可再次检查的剩余毫秒（最小 0）。
+  const shouldThrottle = (manual: boolean): number | null => {
+    if (lastCheckAt === 0) return null;
     const interval = manual ? MANUAL_CHECK_INTERVAL_MS : AUTO_CHECK_INTERVAL_MS;
     const elapsed = Date.now() - lastCheckAt;
     if (elapsed < interval) {
-      appendUpdaterLog("debug", "update check throttled", { manual, elapsed, interval });
-      return true;
+      const retryAfterMs = Math.max(0, interval - elapsed);
+      appendUpdaterLog("debug", "update check throttled", { manual, elapsed, interval, retryAfterMs });
+      return retryAfterMs;
     }
-    return false;
+    return null;
   };
 
   const settlePendingIfInstalled = () => {
@@ -225,6 +282,8 @@ export const createElectronUpdaterController = ({
       return;
     }
     store.setState(downloadedState(pending.version, pending.downloadPath, []));
+    downloadedVersion = pending.version;
+    downloadedPath = pending.downloadPath;
     appendUpdaterLog("debug", "pending update restored", pending);
   };
 
@@ -252,28 +311,87 @@ export const createElectronUpdaterController = ({
       latestVersion = version;
       latestFiles = toAppUpdateFiles(info);
       lastCheckAt = Date.now();
-      setAndSend("available", availableState({
-        lastCheckedAt: Date.now(),
+      availableSnapshot = {
         latestVersion: version,
         releaseDate: normalizeReleaseDate(info.releaseDate),
         notes: normalizeReleaseNotes(info.releaseNotes),
         files: latestFiles,
         mandatory: false,
         minimumVersion: null,
+      };
+
+      // 检查会把状态推进到 checking，因此「当前是否 downloaded」取检查前的快照（或直接处于 downloaded 的场景）。
+      const downloadedStateBefore =
+        stateBeforeCheck !== null && stateBeforeCheck.status === "downloaded"
+          ? stateBeforeCheck
+          : store.state.status === "downloaded"
+            ? store.state
+            : null;
+      const downloadedFile = downloadedStateBefore?.downloadPath ?? downloadedPath;
+      const downloadedFileExists =
+        typeof downloadedFile === "string" && downloadedFile.length > 0 && fs.existsSync(downloadedFile);
+
+      if (downloadedStateBefore !== null && downloadedStateBefore.latestVersion === version && downloadedFileExists) {
+        // 同版本且安装包仍在：保持 downloaded，不重下、不回退到 available，只刷新 lastCheckedAt。
+        downloadedVersion = version;
+        downloadedPath = downloadedFile;
+        const files = downloadedStateBefore.files.length > 0 ? downloadedStateBefore.files : latestFiles;
+        setAndSend("downloaded", downloadedState(version, downloadedFile, files));
+        appendUpdaterLog("debug", "update-available matches downloaded version; keeping downloaded state", {
+          version,
+          downloadPath: downloadedFile,
+        });
+        return;
+      }
+
+      if (downloadedStateBefore !== null && downloadedStateBefore.latestVersion === version && !downloadedFileExists) {
+        appendUpdaterLog("debug", "downloaded update file missing; falling back to available", {
+          version,
+          downloadPath: downloadedFile ?? null,
+        });
+      }
+
+      // 不同（更高）版本或安装包缺失：清理旧 pending，避免重启后把旧安装包当作最新。
+      const pendingBefore = readPendingUpdate();
+      if (pendingBefore) {
+        clearPendingUpdate();
+        appendUpdaterLog("debug", "cleared stale pending update", {
+          pendingVersion: pendingBefore.version,
+          availableVersion: version,
+        });
+      }
+      downloadedVersion = null;
+      downloadedPath = null;
+
+      setAndSend("available", availableState({
+        lastCheckedAt: Date.now(),
+        latestVersion: version,
+        releaseDate: availableSnapshot.releaseDate,
+        notes: availableSnapshot.notes,
+        files: latestFiles,
+        mandatory: false,
+        minimumVersion: null,
       }));
       appendUpdaterLog("info", "update available", { version });
-      // autoDownload=false：由桥接显式触发下载，维持「检查到更新即后台下载」的产品语义。
-      void startDownload();
+      // 发现更新只停在 available；下载由 start-update-download 显式触发。
     });
 
     autoUpdater.on("update-not-available", (info: UpdateInfo) => {
       lastCheckAt = Date.now();
       latestVersion = null;
+      availableSnapshot = null;
       const version = typeof info.version === "string" && info.version ? info.version : null;
       setAndSend("not-available", notAvailableState(Date.now(), version));
     });
 
     autoUpdater.on("download-progress", (progress: ProgressInfo) => {
+      // 取消后可能仍有在途进度事件；没有活动下载时不得把状态拉回 downloading。
+      if (activeDownload === null) {
+        appendUpdaterLog("debug", "ignore download-progress without active download", {
+          status: store.state.status,
+        });
+        return;
+      }
       setAndSend("download-progress", downloadingState(currentDownloadVersion(), progressFromDownload(progress)));
     });
 
@@ -287,14 +405,73 @@ export const createElectronUpdaterController = ({
     });
 
     autoUpdater.on("error", (error: unknown) => {
+      // 检查相位且检查前已持有可行动更新时，error 事件可能先于 checkForUpdates 的 catch 到达；
+      // 此处只留痕，由 catch 恢复 available / downloaded，避免状态被 error 覆盖。
+      if (checkInFlight && isActionableState(stateBeforeCheck)) {
+        appendUpdaterLog("debug", "suppress updater error event during check with actionable update state", {
+          message: toErrorMessage(error),
+          status: stateBeforeCheck.status,
+        });
+        return;
+      }
       handleUpdateError(error, latestVersion);
     });
+  };
+
+  // 给 autoUpdater.httpExecutor.createRequest 包一层：登记每个在途请求，使其可被取消真正 abort。
+  // httpExecutor 不在 AppUpdater.d.ts 里（运行时存在），因此用单次结构化读取 + 类型守卫。
+  const attachRequestAbortHook = () => {
+    if (requestAbortHookAttached) return;
+    if (!("httpExecutor" in autoUpdater)) {
+      appendUpdaterLog("debug", "skip download abort hook because httpExecutor is unavailable", undefined);
+      return;
+    }
+    const executor: unknown = autoUpdater.httpExecutor;
+    if (!isUpdaterHttpExecutor(executor)) {
+      appendUpdaterLog("debug", "skip download abort hook because httpExecutor.createRequest is unavailable", undefined);
+      return;
+    }
+
+    const originalCreateRequest = executor.createRequest.bind(executor);
+    executor.createRequest = (options, callback) => {
+      const request = originalCreateRequest(options, callback);
+      if (isAbortableUpdateRequest(request)) {
+        activeDownloadRequests.add(request);
+        const forget = () => {
+          activeDownloadRequests.delete(request);
+        };
+        request.once("close", forget);
+        request.once("aborted", forget);
+      }
+      return request;
+    };
+    requestAbortHookAttached = true;
+    appendUpdaterLog("debug", "download abort hook attached to httpExecutor.createRequest", undefined);
+  };
+
+  // 取消时对全部在途请求调用 abort（依赖层面不会替我们做这件事）。
+  const abortActiveDownloadRequests = () => {
+    if (activeDownloadRequests.size === 0) {
+      appendUpdaterLog("debug", "no active update request to abort on cancel", undefined);
+      return;
+    }
+    const count = activeDownloadRequests.size;
+    for (const request of activeDownloadRequests) {
+      try {
+        request.abort();
+      } catch (error) {
+        appendUpdaterLog("debug", "abort active update request failed", { error: toErrorMessage(error) });
+      }
+    }
+    activeDownloadRequests.clear();
+    appendUpdaterLog("info", "aborted active update requests on cancel", { count });
   };
 
   const setupAutoUpdater = () => {
     initialized = true;
     resolvedPublishUrl = resolveUpdatePublishUrl();
     attachAutoUpdaterListeners();
+    attachRequestAbortHook();
 
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
@@ -347,10 +524,18 @@ export const createElectronUpdaterController = ({
       appendUpdaterLog("error", "skip update check because publish URL is unresolved", undefined);
       return command({ status: "skipped", reason: "publish-url-unresolved", state: store.state });
     }
-    if (shouldThrottle(manual)) {
-      return command({ status: "skipped", reason: "throttled", state: store.state });
+    const throttleRetryAfterMs = shouldThrottle(manual);
+    if (throttleRetryAfterMs !== null) {
+      return command({
+        status: "skipped",
+        reason: "throttled",
+        retryAfterMs: throttleRetryAfterMs,
+        state: store.state,
+      });
     }
 
+    stateBeforeCheck = store.state;
+    checkInFlight = true;
     try {
       setAndSend("checking", checkingState(Date.now()));
       appendUpdaterLog("info", "checkForUpdates invoked", {
@@ -364,32 +549,65 @@ export const createElectronUpdaterController = ({
     } catch (error) {
       // 节流按检查尝试计：失败同样占用窗口，避免连续失败期间无节流反复请求 feed
       lastCheckAt = Date.now();
-      const message = handleUpdateError(error, latestVersion);
-      return command({ status: "failed", error: { message }, state: store.state });
+      return recoverOrFailCheck(error);
+    } finally {
+      checkInFlight = false;
+      stateBeforeCheck = null;
     }
   };
 
-  const startDownload = async (): Promise<AppUpdateCommandResult> => {
-    if (store.state.status === "downloading") {
-      appendUpdaterLog("debug", "skip download because already downloading", undefined);
-      return command({ status: "skipped", reason: "already-downloading", state: store.state });
+  // 检查失败不覆盖已有可行动更新：available / downloaded 保留（含入口），其余落入 error（check-error）。
+  const recoverOrFailCheck = (error: unknown): AppUpdateCommandResult => {
+    const message = toErrorMessage(error);
+    const current = store.state;
+    const actionable =
+      current.status === "available" || current.status === "downloaded"
+        ? current
+        : isActionableState(stateBeforeCheck)
+          ? stateBeforeCheck
+          : null;
+    if (actionable !== null) {
+      const restored = setAndSend(
+        actionable.status === "available" ? "available" : "downloaded",
+        actionable,
+      );
+      appendUpdaterLog("info", "check failed but actionable update state preserved", {
+        message,
+        status: restored.status,
+        latestVersion: restored.status === "downloaded" || restored.status === "available" ? restored.latestVersion : null,
+      });
+      return command({ status: "failed", error: { message }, state: restored });
     }
-    if (store.state.status !== "available" && store.state.status !== "error") {
-      appendUpdaterLog("debug", "skip download because no available update", { status: store.state.status });
-      return command({ status: "skipped", reason: "no-update-available", state: store.state });
-    }
-    if (!initialized) {
-      appendUpdaterLog("debug", "skip download because updater is not initialized", undefined);
-      return command({ status: "skipped", reason: "not-initialized", state: store.state });
-    }
+    const handledMessage = handleUpdateError(error, latestVersion);
+    return command({ status: "failed", error: { message: handledMessage }, state: store.state });
+  };
 
-    const version = latestVersion || (store.state.status === "available" ? store.state.latestVersion : resolveCurrentAppVersion());
+  // 取消后的恢复点：不写 pending、不落 error、不算失败，回到可重新下载的 available。
+  const restoreAvailableAfterCancel = (version: string): AppUpdateCommandResult => {
+    const snapshot: AvailableSnapshot = availableSnapshot ?? {
+      latestVersion: version,
+      releaseDate: null,
+      notes: null,
+      files: latestFiles,
+      mandatory: false,
+      minimumVersion: null,
+    };
+    const restored = setAndSend("available", availableState({ lastCheckedAt: Date.now(), ...snapshot }));
+    appendUpdaterLog("info", "download cancelled; back to available", {
+      version,
+      latestVersion: snapshot.latestVersion,
+    });
+    return command({ status: "skipped", reason: "download-cancelled", state: restored });
+  };
+
+  const runDownload = async (active: ActiveDownload, files: AppUpdateFile[]): Promise<AppUpdateCommandResult> => {
+    const version = active.version;
+    setAndSend("download-progress", downloadingState(version, null));
+    appendUpdaterLog("info", "download started", { version });
 
     try {
-      setAndSend("download-progress", downloadingState(version, null));
-
       // downloadUpdate() 的返回值是已下载文件路径数组（electron-updater 6.x API 形状）。
-      const downloadedPaths = await autoUpdater.downloadUpdate();
+      const downloadedPaths = await autoUpdater.downloadUpdate(active.token);
       const installerPath = pickInstallerPath(downloadedPaths);
       if (!installerPath) {
         const message = "no suitable download file found for current platform";
@@ -398,14 +616,90 @@ export const createElectronUpdaterController = ({
       }
 
       downloadedPath = installerPath;
-      const next = setAndSend("downloaded", downloadedState(version, downloadedPath, latestFiles));
+      downloadedVersion = version;
+      const downloadedFiles = files.length > 0 ? files : latestFiles;
+      const next = setAndSend("downloaded", downloadedState(version, downloadedPath, downloadedFiles));
       writePendingUpdate({ version, downloadPath: downloadedPath, createdAt: Date.now() });
       appendUpdaterLog("info", "update downloaded", { version, downloadedPath });
       return command({ status: "success", state: next });
     } catch (error) {
+      // 取消判定以本地标志为准：CancellationError 的类型/名字不可靠，且用户取消是唯一取消来源。
+      if (active.cancelRequested) {
+        return restoreAvailableAfterCancel(version);
+      }
       const message = handleUpdateError(error, version);
       return command({ status: "failed", error: { message }, state: store.state });
     }
+  };
+
+  const startDownload = async (): Promise<AppUpdateCommandResult> => {
+    const state = store.state;
+    if (state.status === "downloading") {
+      appendUpdaterLog("debug", "skip download because already downloading", undefined);
+      return command({ status: "skipped", reason: "already-downloading", state });
+    }
+    if (state.status !== "available" && state.status !== "error") {
+      appendUpdaterLog("debug", "skip download because no available update", { status: state.status });
+      return command({ status: "skipped", reason: "no-update-available", state });
+    }
+    if (!initialized) {
+      appendUpdaterLog("debug", "skip download because updater is not initialized", undefined);
+      return command({ status: "skipped", reason: "not-initialized", state });
+    }
+
+    const version = latestVersion ?? state.latestVersion ?? resolveCurrentAppVersion();
+    const files = state.status === "available" ? state.files : latestFiles;
+
+    const token = new CancellationToken();
+    let resolveSettled: (result: AppUpdateCommandResult) => void = () => undefined;
+    const settled = new Promise<AppUpdateCommandResult>((resolve) => {
+      resolveSettled = resolve;
+    });
+    const active: ActiveDownload = { token, version, cancelRequested: false, settled };
+    activeDownload = active;
+
+    // runDownload 内部已收口全部失败分支；额外的 catch 只兜底意外抛出，保证 settled 一定 resolve。
+    const result = await runDownload(active, files).catch(
+      (error: unknown): AppUpdateCommandResult =>
+        command({ status: "failed", error: { message: toErrorMessage(error) }, state: store.state }),
+    );
+    resolveSettled(result);
+    if (activeDownload === active) activeDownload = null;
+    return result;
+  };
+
+  const cancelDownload = async (): Promise<AppUpdateCommandResult> => {
+    const active = activeDownload;
+    if (store.state.status !== "downloading" || active === null) {
+      appendUpdaterLog("debug", "skip cancel download because no active download", {
+        status: store.state.status,
+      });
+      return command({ status: "skipped", reason: "no-active-download", state: store.state });
+    }
+
+    active.cancelRequested = true;
+    appendUpdaterLog("info", "cancel download requested", { version: active.version });
+    active.token.cancel();
+    abortActiveDownloadRequests();
+    await active.settled;
+
+    const finalState = AppUpdateStateSchema.parse(store.state);
+    if (finalState.status === "downloaded") {
+      // 取消与下载完成竞争：以已落盘的安装包为准，不丢弃。
+      appendUpdaterLog("debug", "cancel download lost race to completed download", {
+        version: finalState.latestVersion,
+      });
+      return command({ status: "skipped", reason: "download-completed", state: finalState });
+    }
+    if (finalState.status === "available") {
+      return command({ status: "success", state: finalState });
+    }
+    // 取消请求在真实失败之后才生效：保留真实失败，不把它伪装成取消成功。
+    appendUpdaterLog("warn", "cancel download observed non-cancelled terminal state", {
+      status: finalState.status,
+    });
+    const message = finalState.status === "error" ? finalState.error.message : "download did not stop";
+    return command({ status: "failed", error: { message }, state: finalState });
   };
 
   const installUpdate = (): AppUpdateCommandResult => {
@@ -413,8 +707,11 @@ export const createElectronUpdaterController = ({
       appendUpdaterLog("debug", "skip install because update is not downloaded", { status: store.state.status });
       return command({ status: "skipped", reason: "not-downloaded", state: store.state });
     }
-    if (!downloadedPath && store.state.status === "downloaded") {
+    if (!downloadedPath) {
       downloadedPath = store.state.downloadPath;
+    }
+    if (!downloadedVersion) {
+      downloadedVersion = store.state.latestVersion;
     }
     if (!downloadedPath) {
       appendUpdaterLog("debug", "skip install because download path is missing", undefined);
@@ -459,8 +756,7 @@ export const createElectronUpdaterController = ({
   };
 
   const revealDownloadedUpdate = async (): Promise<AppUpdateCommandResult> => {
-    if (!downloadedPath && store.state.status === "downloaded") downloadedPath = store.state.downloadPath;
-    if (!downloadedPath) {
+    if (!downloadedPath && store.state.status === "downloaded") downloadedPath = store.state.downloadPath;    if (!downloadedPath) {
       appendUpdaterLog("debug", "skip reveal downloaded update because path is missing", undefined);
       return command({ status: "skipped", reason: "missing-download-path", state: store.state });
     }
@@ -510,6 +806,7 @@ export const createElectronUpdaterController = ({
     scheduleStartupCheck,
     checkForUpdates,
     startDownload,
+    cancelDownload,
     installUpdate,
     buildUpdateStateSnapshot: () => AppUpdateStateSchema.parse(store.state),
     getUpdaterLogInfo,

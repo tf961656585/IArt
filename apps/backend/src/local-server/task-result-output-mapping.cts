@@ -154,6 +154,21 @@ const buildDataUrl = (
   return `data:${mime};base64,${normalizedData}`;
 };
 
+/**
+ * 裸 base64 判定（配方 `inline_media + encoding: raw_base64`）。
+ *
+ * 只有出现在媒体 target 的字段路径下才会走到这里，因此按「严格 base64 字符集 + 最短长度
+ * + 4 的倍数」判定即可；过短或含非法字符的字符串仍按普通文本处理，避免把正文误当媒体。
+ */
+const MIN_RAW_BASE64_LENGTH = 64;
+const RAW_BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+
+const looksLikeRawBase64 = (value: string): boolean => {
+  const normalized = value.replace(/\s+/g, '');
+  if (normalized.length < MIN_RAW_BASE64_LENGTH || normalized.length % 4 !== 0) return false;
+  return RAW_BASE64_PATTERN.test(normalized);
+};
+
 const collectMarkdownImageUrls = (value: string, bucket: string[]) => {
   MARKDOWN_IMAGE_URL_REGEX.lastIndex = 0;
   for (const match of value.matchAll(MARKDOWN_IMAGE_URL_REGEX)) {
@@ -197,6 +212,18 @@ const collectMediaStrings = (
     if (mediaType === 'image') collectMarkdownImageUrls(trimmed, bucket);
     if (/^https?:\/\//i.test(trimmed) || /^data:[^;,]+;base64,/i.test(trimmed)) {
       bucket.push(trimmed);
+      return bucket;
+    }
+    // 配方 `inline_media + raw_base64`：字段值是裸 base64，按目标 mediaType 的默认 mime 补前缀。
+    if (looksLikeRawBase64(trimmed)) {
+      const dataUrl = buildDataUrl(trimmed, '', mediaType);
+      if (dataUrl) {
+        logDebug('[task-result-output-mapping] collectMediaStrings: raw base64 wrapped with media type default mime', {
+          mediaType,
+          length: trimmed.length,
+        });
+        bucket.push(dataUrl);
+      }
     }
     return bucket;
   }

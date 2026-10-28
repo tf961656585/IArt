@@ -1,4 +1,4 @@
-import type { CustomGenerationModel } from '@iart/contracts';
+import type { CustomGenerationModel, InterfaceRecipe } from '@iart/contracts';
 import type { ModelAssetLocalizationBundle } from '@iart/contracts/model-asset-contract';
 import * as loggingModule from './logging.cts';
 import { buildProjectionFromPackageSources } from './model-package-catalog.projection.cts';
@@ -8,6 +8,7 @@ import {
   buildFamilyTemplateSources,
   filterAcceptedMediaSlotsForFamily,
 } from './generation-family-templates.registry.cts';
+import { getInterfaceRecipe } from './provider-connection/interface-recipe-store.cts';
 import { listCustomGenerationModels } from './provider-connection/custom-generation-model-store.cts';
 
 /**
@@ -39,11 +40,46 @@ export type DeclaredGenerationProjectionDiagnostic = {
   model_id: string | undefined;
 };
 
+/**
+ * 解析记录引用的配方（设计 §7「引用校验」、§9 存量兼容）。
+ *
+ * 三条路径都不得阻断该记录的投影：
+ * - 没有引用 → 返回 null，使用族模板内置默认（存量记录零迁移）；
+ * - 配方不存在（被删除后仍被引用）→ 留痕并回落默认；
+ * - 配方族与记录族不一致（历史数据 / 手工改文件）→ 留痕并回落默认。
+ */
+const resolveReferencedRecipe = (declaration: CustomGenerationModel): InterfaceRecipe | null => {
+  const recipeId = declaration.recipe_id;
+  if (recipeId === undefined) return null;
+  const recipe = getInterfaceRecipe(recipeId);
+  if (recipe === null) {
+    loggingModule.logDebug(
+      '[generation-declaration-projection] referenced interface recipe not found, falling back to family default',
+      { modelId: declaration.model_id, recipeId },
+    );
+    return null;
+  }
+  if (recipe.family_adapter_id !== declaration.family_adapter_id) {
+    loggingModule.logDebug(
+      '[generation-declaration-projection] referenced interface recipe family mismatch, falling back to family default',
+      {
+        modelId: declaration.model_id,
+        recipeId,
+        recipeFamilyAdapterId: recipe.family_adapter_id,
+        familyAdapterId: declaration.family_adapter_id,
+      },
+    );
+    return null;
+  }
+  return recipe;
+};
+
 const buildDeclaredGenerationProjection = (
   declaration: CustomGenerationModel,
 ): DeclaredGenerationProjection | null => {
   // 族模板按 family_adapter_id 查注册表分发：未登记 = 非法/已删族；pending = 该族模板未就绪。
   // 两者都不合成投影，但留痕要能分清「记录非法」与「这一族还没做」，否则扩族期排查会误判。
+  const recipe = resolveReferencedRecipe(declaration);
   const built = buildFamilyTemplateSources(
     declaration.family_adapter_id,
     declaration.model_id,
@@ -56,6 +92,7 @@ const buildDeclaredGenerationProjection = (
         declaration.model_id,
       ),
       parameterOverrides: declaration.parameter_overrides,
+      recipe,
     },
   );
   if (built.kind === 'unknown') {
@@ -120,4 +157,10 @@ const listDeclaredGenerationProjections = (): DeclaredGenerationProjectionResult
   return { projections, localizationBundles, diagnostics };
 };
 
-export { buildDeclaredGenerationProjection, listDeclaredGenerationProjections };
+export {
+  buildDeclaredGenerationProjection,
+  listDeclaredGenerationProjections,
+  // 可执行判定与执行快照需要「记录引用的配方能否解析」这同一份口径（接口配方-design §8.4）：
+  // 用户自建格式缺配方即不可提交。导出共享实现，禁止两处各写一份。
+  resolveReferencedRecipe,
+};

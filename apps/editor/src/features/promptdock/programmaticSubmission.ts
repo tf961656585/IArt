@@ -172,6 +172,10 @@ const buildReferenceMediaInputs = (
       mime_type: typeof asset?.original?.mimeType === 'string' ? asset.original.mimeType : null,
       filename: null,
       ...(slot === undefined ? {} : { field_key: slot.fieldKey }),
+      // 资产身份与产品级用途随媒体条目下发：提交档案据此把「实际出网的文件」
+      // 对回具体资产与用途，不再靠内容指纹/字节数反推。
+      asset_id: ref.assetId,
+      ...(refSlotId === null ? {} : { slot_id: refSlotId }),
     });
   }
   return mediaInputs;
@@ -568,7 +572,40 @@ const mapPreflightIssueToCliError = (
         code: 'command_rejected',
         message: `用途「${issue.slot?.slotId ?? field}」不适用于这个模型。${describeCliSlotGuide(entry, issue)}`,
       };
+    case 'slot-capacity-exceeded': {
+      // 超量的可执行动作是「减少条目」，不是「指定用途」：两者不能共用同一句指引。
+      const label = slotLabelOf(entry, issue);
+      const capacity = issue.slot?.capacity;
+      const detail =
+        capacity === undefined
+          ? ''
+          : `该用途最多 ${capacity.maxFiles} 个，当前给了 ${capacity.count} 个。`;
+      return {
+        code: 'command_rejected',
+        message: `${detail}「${label}」超出模型允许的数量，请减少 --ref 中该用途的条目后重试。${describeCliSlotCandidates(entry, issue.slot?.mediaType ?? null)}`,
+      };
+    }
   }
+};
+
+/**
+ * 该模型在某媒体类型下真实可用的用途清单（CLI 文案用；没有可选用途时为空串）。
+ *
+ * 与「怎么改」的指引分开：不同问题的可执行动作不同（指定用途 / 减少条目），清单共用一份。
+ */
+const describeCliSlotCandidates = (
+  entry: PromptDockCatalogEntry | null,
+  mediaType: 'image' | 'video' | 'audio' | null,
+): string => {
+  const candidates =
+    entry === null || mediaType === null
+      ? []
+      : candidateSlots(entry, mediaType).map(
+          (slot) => `${slot.slotId}（${slot.label.length > 0 ? slot.label : slot.fieldKey}）`,
+        );
+  return candidates.length > 0
+    ? `该模型的${MEDIA_TYPE_CLI_LABEL[mediaType ?? 'image']}用途有：${candidates.join('、')}。`
+    : '';
 };
 
 /**
@@ -581,20 +618,8 @@ const mapPreflightIssueToCliError = (
 const describeCliSlotGuide = (
   entry: PromptDockCatalogEntry | null,
   issue: PromptDockPreflightIssue,
-): string => {
-  const mediaType = issue.slot?.mediaType ?? null;
-  const candidates =
-    entry === null || mediaType === null
-      ? []
-      : candidateSlots(entry, mediaType).map(
-          (slot) => `${slot.slotId}（${slot.label.length > 0 ? slot.label : slot.fieldKey}）`,
-        );
-  const guide =
-    candidates.length > 0
-      ? `该模型的${MEDIA_TYPE_CLI_LABEL[mediaType ?? 'image']}用途有：${candidates.join('、')}。`
-      : '';
-  return `${guide}请用 --ref <素材标识>:<用途> 指定用途后重试。`;
-};
+): string =>
+  `${describeCliSlotCandidates(entry, issue.slot?.mediaType ?? null)}请用 --ref <素材标识>:<用途> 指定用途后重试。`;
 
 /** 用途问题的素材位标签：优先目录标签，其次用途标识，最后回退字段键。 */
 const slotLabelOf = (

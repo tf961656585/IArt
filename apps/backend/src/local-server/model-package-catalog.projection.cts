@@ -426,9 +426,6 @@ export const buildProjectionFromPackageSources = ({
         normalizeParameterField(field, index),
       )
     : [];
-  if (normalizedFields.length === 0) {
-    throw new Error("runtime_model.parameter_schema_fields_missing");
-  }
   const requiredFieldsSource =
     parameterSchema.required_fields || parameterSchema.requiredFields;
   const requiredFields = Array.isArray(requiredFieldsSource)

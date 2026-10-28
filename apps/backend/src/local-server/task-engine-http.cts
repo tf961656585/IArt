@@ -8,10 +8,10 @@ import {
   type CredentialLease,
 } from "./provider-connection/credential-store.cts";
 
-import { getAdapter } from "./protocol-adapter/adapter-registry.cts";
+import { resolveSnapshotAuth } from "./provider-connection/snapshot-protocol.cts";
 import { getFetchDispatcher } from "./fetch-dispatcher.cts";
 import * as loggingModule from "./logging.cts";
-import { buildAdapterAuthHeader, type ExecutionSnapshot } from "@iart/contracts";
+import { buildAdapterAuthInjection, type AdapterAuthInjection, type ExecutionSnapshot } from "@iart/contracts";
 import {
   classifyNetworkError,
   ERROR_CODES,
@@ -31,7 +31,9 @@ import {
   buildRequestBody,
   flattenHeaders,
   projectTaskRequest,
+  readRequestBodyEncodingOptions,
 } from "./task-engine-request.cts";
+import { redactSecrets, setQueryParamValue } from "./request-wire-utils.cts";
 import {
   patchTaskRecord,
   projectPollingMetadataPatch,
@@ -102,6 +104,7 @@ const prepareModelInputForTask = async (record: unknown) => {
           message:
             normalizeString(errorValue.message) ||
             "Model input preparation failed",
+          stage: "submit",
         },
       } as PlainObject),
     };
@@ -126,6 +129,7 @@ const executeHttpTask = async (
       error: {
         code: ERROR_CODES.INVALID_TASK,
         message: "Missing task request",
+        stage: "submit",
       },
     } as PlainObject);
   }
@@ -166,7 +170,7 @@ const executeHttpTask = async (
       return await patchTaskRecord(record, {
         status: TASK_STATUS.FAILED,
         finishedAt: Date.now(),
-        error: { code: mappedCode, message: snapRes.message },
+        error: { code: mappedCode, message: snapRes.message, stage: "submit" },
         progress: { phase: null },
       } as PlainObject);
     }
@@ -179,7 +183,7 @@ const executeHttpTask = async (
       return await patchTaskRecord(record, {
         status: TASK_STATUS.FAILED,
         finishedAt: Date.now(),
-        error: { code: "credential_missing", message: "connection credential missing" },
+        error: { code: "credential_missing", message: "connection credential missing", stage: "submit" },
         progress: { phase: null },
       } as PlainObject);
     }
@@ -194,7 +198,7 @@ const executeHttpTask = async (
       return await patchTaskRecord(record, {
         status: TASK_STATUS.FAILED,
         finishedAt: Date.now(),
-        error: { code: "credential_missing", message: "failed to acquire credential lease" },
+        error: { code: "credential_missing", message: "failed to acquire credential lease", stage: "submit" },
         progress: { phase: null },
       } as PlainObject);
     }
@@ -202,12 +206,14 @@ const executeHttpTask = async (
     leaseValue = leaseRes.value;
     // 连接地址由快照固定，具体路径仍由模型能力包的正式任务计划决定。
     // remote_model_id 注入（spec 45 §5.2）：URL 模板 `{model}` 替换必须发生在 URL 解析前，
-    // 否则 new URL 会把 `{}` 转义成 %7B/%7D，破坏上游协议路径。
+    // 否则 new URL 会把 `{}` 转义成 %7B/%7D，破坏上游协议路径；查询参数形态的模型字段
+    // 也在这一步合并进地址。请求体注入推迟到输入准备之后（见下方），此处只解析地址。
     try {
       const injectedUrl = applyRemoteModelInjection({
         snapshot,
         url: requestUrlString,
         body: requestValue.body,
+        injectBody: false,
       }).url;
       const baseTrim = snapshot.base_url.replace(/\/+$/, "");
       const asAbsolute = /^https?:\/\//i.test(injectedUrl);
@@ -233,7 +239,7 @@ const executeHttpTask = async (
       return await patchTaskRecord(record, {
         status: TASK_STATUS.FAILED,
         finishedAt: Date.now(),
-        error: { code: ERROR_CODES.INVALID_URL, message: "Invalid task URL" },
+        error: { code: ERROR_CODES.INVALID_URL, message: "Invalid task URL", stage: "submit" },
       } as PlainObject);
     }
     if (!isAllowedTaskUrlForModel(finalTargetUrl, gateModelId)) {
@@ -250,6 +256,7 @@ const executeHttpTask = async (
         error: {
           code: ERROR_CODES.REMOTE_HOST_NOT_ALLOWED,
           message: "Remote host not allowed",
+          stage: "submit",
         },
       } as PlainObject);
     }
@@ -272,6 +279,7 @@ const executeHttpTask = async (
       error: {
         code: ERROR_CODES.TASK_EXECUTION_FAILED,
         message: `Input preparation failed: ${getErrorMessage(error)}`,
+        stage: "submit",
       },
     } as PlainObject);
   }
@@ -318,34 +326,51 @@ const executeHttpTask = async (
     } as PlainObject);
   }
   const nextRequest = toRecord(next.request);
+  const requestEncoding = readRequestBodyEncodingOptions(nextRequest);
   const headers = flattenHeaders(nextRequest.headers);
   // 鉴权注入：Provider 快照优先走租约明文（spec 03 §5.3）。
-  // 注入形态与位置完全由适配器声明（spec 03 §3.1），此处不得硬编码 Bearer 前缀或 header 名：
-  // OpenAI Images / 火山 Ark 用 Authorization: Bearer，Google 用 x-goog-api-key，同一段代码不得猜测。
-  const snapshotAuthAdapter = snapshot ? getAdapter(snapshot.adapter_id) : null;
+  // 注入形态与位置完全由快照冻结的协议声明（生成 = 接口格式、对话 = 适配器），此处不得硬编码
+  // Bearer 前缀或 header 名：OpenAI Images / 火山 Ark 用 Authorization: Bearer，Google 用
+  // x-goog-api-key，用户自建格式还可声明别的 scheme 或查询参数名，同一段代码不得猜测。
+  //
+  // 时机：所有任务记录 patch 已完成，凭证只存在于本次 fetch 的调用栈内。查询参数形态的凭证
+  // 在 fetch 前才拼进 URL，带凭证地址不写入任务记录 / 归档事件 / 日志。
+  const snapshotAuth = snapshot ? resolveSnapshotAuth(snapshot) : null;
+  let authInjection: AdapterAuthInjection | null = null;
   if (snapshot && leaseValue) {
-    if (!snapshotAuthAdapter) {
-      loggingModule.logDebug("[task-engine-http] snapshot adapter missing, skip auth injection", {
-        adapterId: snapshot.adapter_id,
+    if (!snapshotAuth) {
+      loggingModule.logDebug("[task-engine-http] snapshot protocol unresolved, skip auth injection", {
+        snapshotId: snapshot.snapshot_id,
         taskId: normalizeString(next.id),
       });
     } else {
-      const authHeader = buildAdapterAuthHeader(snapshotAuthAdapter.auth, leaseValue);
-      if (!headers.has(authHeader.name)) {
-        headers.set(authHeader.name, authHeader.value);
+      authInjection = buildAdapterAuthInjection(snapshotAuth, leaseValue);
+      if (authInjection.kind === "header" && !headers.has(authInjection.name)) {
+        headers.set(authInjection.name, authInjection.value);
       }
     }
   }
-  // remote_model_id 协议注入（spec 45 §5.2）：body 顶层 `model` 只按快照冻结的
-  // remote_model_id 注入，不读当前 active route、不回退能力包字面量。
-  const requestBody = snapshot
+  // remote_model_id 协议注入（spec 45 §5.2）：注入落点由格式实体的请求规则树裁定
+  // （请求体嵌套路径 / 查询参数 / 地址路径），不读当前 active route、不回退能力包字面量。
+  // 必须以最终地址为基再注入一次：上面的早期注入只用于解析 origin，回落路径
+  // （`snapshot.resolved_endpoint`）不含模型查询参数。注入发生在 buildRequestBody 之前，
+  // 表单正文尚未编码，模型字段改得动。
+  const injectedRequest = snapshot
     ? applyRemoteModelInjection({
         snapshot,
-        url: String(nextRequest.url ?? ""),
+        url: finalTargetUrl.toString(),
         body: nextRequest.body,
-      }).body
-    : nextRequest.body;
-  const body = buildRequestBody(requestBody, headers);
+      })
+    : { url: finalTargetUrl.toString(), body: nextRequest.body };
+  const requestBody = injectedRequest.body;
+  let fetchTargetUrl = new URL(injectedRequest.url);
+  if (authInjection?.kind === "query") {
+    // 查询参数鉴权：同名参数替换（不追加成两个）。
+    fetchTargetUrl = new URL(
+      setQueryParamValue(fetchTargetUrl.toString(), authInjection.name, authInjection.value),
+    );
+  }
+  const body = buildRequestBody(requestBody, headers, requestEncoding);
   // 响应体统一以 inline 方式累积到 inlineChunks，再交给 buildResponsePayload 解析。
   // 历史「大响应落盘到 resultFile」分支已移除（writeFd/resultPath/resultFile 全为死代码，
   // resultPath 恒为 null、writeFd 从未赋非 null 值，落盘函数 ensureResultFileOpen 恒返回 false）。
@@ -377,7 +402,7 @@ const executeHttpTask = async (
       dispatcher: getFetchDispatcher(),
     });
     requestStartedAt = Date.now();
-    const response = await fetch(finalTargetUrl.toString(), requestInit);
+    const response = await fetch(fetchTargetUrl.toString(), requestInit);
     downloadStartedAt = Date.now();
     const contentType = response.headers.get("content-type") || "";
     const contentLengthHeader = response.headers.get("content-length");
@@ -469,12 +494,14 @@ const executeHttpTask = async (
       // 非重试性错误落终态后释放租约（spec 03 §5.3：租约保留到任务终态）
       const willTerminal = true;
       if (willTerminal) releaseLeaseSafe();
+      // 失败阶段：HTTP/完整性错误发生在提交阶段；200 + 配方失败条件命中属于远端判定失败。
+      const failureStage = integrityError || !response.ok ? "submit" : "remote_failure";
       return await patchTaskRecord(next, {
         status: TASK_STATUS.FAILED,
         finishedAt: Date.now(),
         response: responsePayload,
         progress: { phase: null },
-        error: errorPayload,
+        error: { ...errorPayload, stage: failureStage },
       } as PlainObject);
     }
     const pollingSpec = buildPollingRequestFromPlan(next, responseBody);
@@ -565,6 +592,10 @@ const executeHttpTask = async (
       } as PlainObject);
     }
     const failurePhase = normalizeString(toRecord(next.progress).phase);
+    // 网络错误文本可能携带完整地址；查询参数鉴权的凭证就在地址里，落记录前先抹掉。
+    const redactedErrorMessage = redactSecrets(String(error), [
+      authInjection?.kind === "query" ? authInjection.value : null,
+    ]);
     const networkClass = classifyNetworkError(error, {
       phase: failurePhase,
       elapsedMs:
@@ -589,13 +620,15 @@ const executeHttpTask = async (
       error: networkClass
         ? {
             code: ERROR_CODES.TASK_EXECUTION_FAILED,
-            message: String(error),
+            message: redactedErrorMessage,
             userMessage: networkClass.userMessage,
             retryable: networkClass.retryable,
+            stage: "submit",
           }
         : {
             code: ERROR_CODES.TASK_EXECUTION_FAILED,
-            message: String(error),
+            message: redactedErrorMessage,
+            stage: "submit",
           },
     } as PlainObject);
   }

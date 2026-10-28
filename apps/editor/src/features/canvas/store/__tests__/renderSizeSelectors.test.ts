@@ -39,8 +39,6 @@ describe('render size selectors', () => {
           videoMeta: undefined,
           valueSource: undefined,
           mediaError: undefined,
-          derivedFromNodeId: undefined,
-          derivedOp: undefined,
           lastExecutionId: undefined,
           lastSourceNodeId: undefined,
           lastSourcePortId: undefined,

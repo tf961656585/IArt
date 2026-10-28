@@ -7,15 +7,16 @@ import {
   CustomGenerationModelUpdateBodySchema,
   GENERATION_FAMILY_ADAPTER_IDS,
   GENERATION_MEDIA_SLOT_IDS,
-  GenerationFamilyAdapterIdSchema,
   GenerationMediaSlotIdSchema,
+  InterfaceFormatIdSchema,
 } from '../src/custom-generation-model-contract';
 
 /**
  * 自建生成模型记录契约（spec 03 §6.1「Deployment 与自建模型记录」，2026-09-25 单记录形态）：
  * `.strict()` 边界拒绝未知字段；`model_id` 字符集与对话侧共用同一正则常量（本文件末条
- * 用两侧 schema 对同样本给出一致判定作守卫）；`family_adapter_id` 值域为生成族接口类型
- * 清单（顺序即界面下拉顺序）；`accepted_media_slots` 是受控素材位词表；
+ * 用两侧 schema 对同样本给出一致判定作守卫）；`family_adapter_id` 只约束 id 形状
+ * （2026-10-26 起运行时值域归接口格式实体注册表，`GENERATION_FAMILY_ADAPTER_IDS` 只是预设
+ * 清单快照）；`accepted_media_slots` 是受控素材位词表；
  * 接入归属（record_id / connection_id / remote_model_id）内嵌于记录。
  */
 
@@ -66,6 +67,34 @@ describe('CustomGenerationModelSchema', () => {
       official: [{ field_key: 'quality' }],
       custom: [{ label: '风格强度', wire_name: 'style_strength', value_type: 'number', required: false }],
     });
+  });
+
+  it('素材位张数覆盖只要求正整数，产品侧不设上限', () => {
+    // 上限属服务商接口事实：软件预先收紧会让「服务端支持 9 张而界面只让传 3 张」成为死路。
+    const parsed = CustomGenerationModelSchema.parse({
+      ...validModel,
+      parameter_overrides: {
+        official: [
+          { field_key: 'reference_images', wire_name: 'ref_images', media_max_files: 9 },
+          { field_key: 'first_frame_image', media_max_files: 64 },
+        ],
+        custom: [],
+      },
+    });
+    expect(parsed.parameter_overrides.official[0]).toEqual({
+      field_key: 'reference_images',
+      wire_name: 'ref_images',
+      media_max_files: 9,
+    });
+
+    for (const invalid of [0, -1, 1.5]) {
+      expect(() =>
+        CustomGenerationModelSchema.parse({
+          ...validModel,
+          parameter_overrides: { official: [{ field_key: 'image', media_max_files: invalid }], custom: [] },
+        }),
+      ).toThrow();
+    }
   });
 
   it('缺必填字段（model_id / record_id / connection_id / remote_model_id / family_adapter_id / created_at）拒绝', () => {
@@ -119,9 +148,10 @@ describe('CustomGenerationModelSchema', () => {
     expect(() => CustomGenerationModelSchema.parse({ ...validModel, model_id: '' })).toThrow();
   });
 
-  it('族归属值域：7 个生成族接口类型全部可被接受，清单外的 id 拒绝', () => {
+  it('族归属：预设快照恰为 8 条且全部可写入记录，id 形状非法者拒绝', () => {
     expect(GENERATION_FAMILY_ADAPTER_IDS).toEqual([
       'openai-image-v1',
+      'openai-video-v1',
       'gemini-image-interactions-v1',
       'seedance-2-0-v1',
       'veo-v1',
@@ -130,18 +160,23 @@ describe('CustomGenerationModelSchema', () => {
       'kling-omni-video-v1',
     ]);
     for (const familyAdapterId of GENERATION_FAMILY_ADAPTER_IDS) {
-      expect(GenerationFamilyAdapterIdSchema.safeParse(familyAdapterId).success).toBe(true);
+      expect(InterfaceFormatIdSchema.safeParse(familyAdapterId).success).toBe(true);
       expect(() =>
         CustomGenerationModelSchema.parse({ ...validModel, family_adapter_id: familyAdapterId }),
       ).not.toThrow();
     }
-    // 契约清单外的值（含已删除的旧 id kling-v1）拒绝
-    for (const unknownId of ['kling-v1', 'not-a-family', '']) {
-      expect(GenerationFamilyAdapterIdSchema.safeParse(unknownId).success).toBe(false);
+    // 形状非法（空串 / 前导符号 / 大写 / 空白 / 超长）一律拒绝——这是契约唯一的 family_adapter_id 约束。
+    for (const invalidId of ['', '-leading-dash', 'Has-Uppercase', 'has space', 'a'.repeat(97)]) {
+      expect(InterfaceFormatIdSchema.safeParse(invalidId).success).toBe(false);
       expect(() =>
-        CustomGenerationModelSchema.parse({ ...validModel, family_adapter_id: unknownId }),
+        CustomGenerationModelSchema.parse({ ...validModel, family_adapter_id: invalidId }),
       ).toThrow();
     }
+    // 「是否存在于实体注册表」不再是契约职责：形状合法的未知 id 在边界通过，由写入侧给可读拒绝。
+    expect(
+      CustomGenerationModelSchema.parse({ ...validModel, family_adapter_id: 'kling-v1' })
+        .family_adapter_id,
+    ).toBe('kling-v1');
   });
 
   it('素材位：词表 7 位全部可接受，词表外的取值拒绝；清单顺序原样保留', () => {

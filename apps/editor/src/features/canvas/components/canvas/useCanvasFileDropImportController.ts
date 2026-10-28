@@ -128,8 +128,6 @@ export const useCanvasFileDropImportController = (
                   assetId,
                   imageUrl: persistentUrl,
                   imageMeta: null,
-                  originalImageMeta: null,
-                  resizePercent: 100,
                   valueSource: 'upload',
                   lastExecutionId: undefined,
                   lastSourceNodeId: undefined,

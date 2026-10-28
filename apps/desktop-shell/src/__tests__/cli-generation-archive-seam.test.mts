@@ -84,10 +84,13 @@ const FULL_PROMPT = "黄昏的海岸线上，一艘白色帆船缓缓驶向落�
 
 const BATCH_ID = "batch-seam-1";
 const BATCH_LEGACY_ID = "batch-seam-legacy";
+/** 新快照：media_refs 自带资产身份/用途/字段绑定（2026-10-26 起的提交面形态）。 */
+const BATCH_BOUND_ID = "batch-seam-bound";
 const TASK_A = "task-seam-1";
 const TASK_B = "task-seam-2";
 const TASK_LEGACY = "task-seam-3";
 const TASK_NO_BATCH = "task-seam-4";
+const TASK_BOUND = "task-seam-5";
 /** 生成产物资产（task_outputs 关联到 TASK_A）。 */
 const OUT_ASSET_ID = "out-seam-asset-1";
 const OUT_FILE_KEY = "cafebeef02.png";
@@ -186,6 +189,15 @@ const seedRealRecords = (): void => {
         createdAt: 12,
         updatedAt: 22,
       },
+      {
+        taskId: TASK_BOUND,
+        status: "succeeded",
+        projectPath,
+        batchId: BATCH_BOUND_ID,
+        metadataJson: JSON.stringify({ batchId: BATCH_BOUND_ID, taskIndex: 0 }),
+        createdAt: 14,
+        updatedAt: 24,
+      },
       { taskId: TASK_NO_BATCH, status: "succeeded", projectPath, createdAt: 13, updatedAt: 23 },
     ],
     taskOutputs: [{ outputId: "out-seam-1", taskId: TASK_A, mediaType: "image", assetId: OUT_ASSET_ID, sortOrder: 0 }],
@@ -224,6 +236,34 @@ const seedRealRecords = (): void => {
         ),
         createdAt: 11,
         updatedAt: 21,
+      },
+      {
+        batchId: BATCH_BOUND_ID,
+        payloadJson: JSON.stringify(
+          makeBatchSnapshot({
+            batch_id: BATCH_BOUND_ID,
+            task_count: 1,
+            task_ids: [TASK_BOUND],
+            // 参数表单把媒体位默认值（空数组）写进快照；媒体真实内容走 media_refs。
+            params: { referenceImage: [], aspect_ratio: "16:9" },
+            media_refs: [
+              {
+                media_kind: "image",
+                source_kind: "attachment",
+                value: `local-media://spid_0123456789abcdef01234567/${REF_FILE_KEY}`,
+                mime_type: "image/png",
+                filename: null,
+                field_key: "referenceImage",
+                asset_id: REF_ASSET_ID,
+                slot_id: "reference_image",
+              },
+            ],
+            reference_asset_ids: [REF_ASSET_ID],
+          }),
+        ),
+        clientRequestId: "req-seam-bound",
+        createdAt: 12,
+        updatedAt: 22,
       },
     ],
   };
@@ -400,6 +440,27 @@ describe("生成档案读取接缝（真实存储 + 真实读取链 + 真实执�
         local_file_path: join(projectPath, "media", REF2_FILE_KEY),
       },
     ]);
+  });
+
+  it("新快照：media_refs 带资产身份与用途 → 引用带 slot_id/field_key，已绑定的参数键被剥离", async () => {
+    const result = await runCli(["batch", "get", BATCH_BOUND_ID, "--project", projectPath, "--json"]);
+    expect(result.exitCode).toBe(0);
+    const parsed = parseCliResponse(result);
+    if (!parsed.ok || parsed.command !== "batch.get") throw new Error("unexpected response");
+    const archive = CliGenerationArchiveSchema.parse(parsed.generation);
+    // 引用一次拿到资产 + 用途 + 字段绑定；reference_asset_ids 里的同一资产不重复追加。
+    expect(archive.references).toEqual([
+      {
+        asset_id: REF_ASSET_ID,
+        media_kind: "image",
+        file_key: REF_FILE_KEY,
+        local_file_path: join(projectPath, "media", REF_FILE_KEY),
+        slot_id: "reference_image",
+        field_key: "referenceImage",
+      },
+    ]);
+    // 媒体位默认值（[]）与实际绑定并存会形成「有图却是空数组」的假事实，投影层剥离。
+    expect(archive.params).toEqual({ aspect_ratio: "16:9" });
   });
 
   it("asset get：导入素材（无产出来源任务）不带 generation 字段", async () => {

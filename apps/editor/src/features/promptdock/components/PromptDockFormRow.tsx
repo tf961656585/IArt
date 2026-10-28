@@ -40,9 +40,10 @@ export function PromptDockFormRow() {
             onClick={() => setForm(item.value)}
             className={cn(
               'h-6 rounded-[7px] border px-2.5 text-[11px] font-medium leading-none transition-colors',
+              'focus-visible:outline-2 focus-visible:outline-(--ring) focus-visible:outline-offset-2',
               active
-                ? 'border-border bg-card text-foreground'
-                : 'border-transparent text-foreground/70 hover:text-foreground',
+                ? 'border-transparent bg-primary text-primary-foreground font-semibold hover:bg-primary'
+                : 'border-transparent text-foreground/70 hover:bg-foreground/5 hover:text-foreground',
             )}
           >
             {item.label}

@@ -2,6 +2,7 @@ import {
   DEFAULT_FAILURE_MESSAGE_PATHS,
   DEFAULT_FAILURE_STATUSES,
   DEFAULT_STATUS_PATHS,
+  getErrorMessage,
   isRecord,
   toRecord,
   type PlainObject,
@@ -11,6 +12,16 @@ import {
   normalizeStringArray,
 } from "./task-normalizer.cts";
 import { logDebug, logWarn } from "./logging.cts";
+import {
+  appendQueryEntries,
+  assertHeaderValueSafe,
+  normalizeFixedHeaders,
+  normalizeQueryEntries,
+  replaceJsonPlaceholders,
+  replaceTextPlaceholders,
+  replaceUrlTemplatePlaceholders,
+  type WireQueryEntry,
+} from "./request-wire-utils.cts";
 
 type ReadValueByPathOptions = {
   silent: boolean | undefined;
@@ -24,7 +35,8 @@ const DEFAULT_READ_VALUE_BY_PATH_OPTIONS: ReadValueByPathOptions = {
 
 type PollingRequestBuildReason =
   | "remote_request_id_missing"
-  | "url_template_missing";
+  | "url_template_missing"
+  | "invalid_polling_request";
 
 type PollingRequestBuildNotApplicable = {
   status: "not_applicable";
@@ -35,6 +47,8 @@ type PollingRequestBuildBlocked = {
   reason: PollingRequestBuildReason;
   submitResponseIdPath: string;
   polling: PlainObject;
+  /** 具体拒绝原因（仅 `invalid_polling_request` 携带，供失败详情报给用户排查）。 */
+  message?: string;
 };
 
 type PollingRequestBuildReady = {
@@ -44,8 +58,10 @@ type PollingRequestBuildReady = {
   request: {
     url: string;
     method: string;
-    headers: PlainObject;
+    headers: Record<string, string>;
     body: unknown;
+    /** 请求体形态：`form` 走 x-www-form-urlencoded，其余按 JSON。 */
+    payload_format: string;
   };
   polling: PlainObject;
 };
@@ -373,22 +389,72 @@ const buildPollingRequestFromPlan = (
   // 占位符覆盖两类上游查询形态：任务 ID 型（id/taskId/requestId）与
   // 长任务操作名型（operation_name，Google LRO：`/v1beta/{operation_name}`，
   // 取值即提交响应 `name`，形如 `models/x/operations/y`）。
-  const url = template.replace(
-    /\{(?:id|taskId|requestId|operation_name)\}/g,
-    remoteRequestId,
-  );
-  return {
-    status: "ready",
-    remoteRequestId,
-    submitResponseIdPath,
-    request: {
-      url,
-      method: normalizeString(pollingRequest.method) || "GET",
-      headers: isRecord(pollingRequest.headers) ? pollingRequest.headers : {} as PlainObject,
-      body: pollingRequest.body,
-    },
-    polling: pollingPolicy,
+  // 路径段保留 `/`（operation_name 的层级语义），查询串里的占位完整编码。
+  const placeholderValues: Record<string, string> = {
+    id: remoteRequestId,
+    taskId: remoteRequestId,
+    requestId: remoteRequestId,
+    operation_name: remoteRequestId,
   };
+  try {
+    const urlTemplate = replaceUrlTemplatePlaceholders(template, placeholderValues);
+    const queryEntries: WireQueryEntry[] = normalizeQueryEntries(
+      Reflect.get(pollingRequest, "query"),
+      "polling request",
+    ).map((entry) => ({
+      name: entry.name,
+      // 占位按原文替换；真正的百分号编码由 appendQueryEntries（URLSearchParams）统一完成。
+      // 先手工 encode 再交给 URLSearchParams 会把 `%` 二次编码成 `%25`。
+      value: replaceTextPlaceholders(entry.value, placeholderValues),
+    }));
+    const url = appendQueryEntries(urlTemplate, queryEntries);
+    const headers = normalizeFixedHeaders(Reflect.get(pollingRequest, "headers"), "polling request");
+    for (const [name, rawValue] of Object.entries(headers)) {
+      const replaced = replaceTextPlaceholders(rawValue, placeholderValues);
+      // 占位替换后再验证一次：替换值可能来自上游响应，不得在头值里带入换行。
+      assertHeaderValueSafe(name, replaced, "polling request");
+      headers[name] = replaced;
+    }
+    const contentType = normalizeString(Reflect.get(pollingRequest, "content_type"));
+    const method = normalizeString(Reflect.get(pollingRequest, "method")) || "GET";
+    const bodyFormat = normalizeString(Reflect.get(pollingRequest, "body_format")) === "form" ? "form" : "json";
+    let body: unknown = replaceJsonPlaceholders(Reflect.get(pollingRequest, "body"), placeholderValues);
+    if (method.toUpperCase() === "GET" && body !== undefined && body !== null) {
+      // 契约已在写入侧拒绝 GET + body；运行时防御：真发出去会让部分上游直接 400。
+      logDebug("[task-engine] polling GET request body dropped", { remoteRequestId });
+      body = undefined;
+    }
+    // Content-Type 只在确实有请求体时有意义（GET 无体时不发这个头）。
+    if (contentType && body !== undefined && body !== null) {
+      const hasContentType = Object.keys(headers).some((name) => name.toLowerCase() === "content-type");
+      if (!hasContentType) headers["content-type"] = contentType;
+    }
+    return {
+      status: "ready",
+      remoteRequestId,
+      submitResponseIdPath,
+      request: {
+        url,
+        method,
+        headers,
+        body,
+        payload_format: bodyFormat,
+      },
+      polling: pollingPolicy,
+    };
+  } catch (error) {
+    logDebug("[task-engine] polling request blocked: invalid request declaration", {
+      remoteRequestId,
+      error: getErrorMessage(error),
+    });
+    return {
+      status: "blocked",
+      reason: "invalid_polling_request",
+      submitResponseIdPath,
+      polling: pollingPolicy,
+      message: getErrorMessage(error),
+    };
+  }
 };
 
 export {

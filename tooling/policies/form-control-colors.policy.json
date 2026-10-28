@@ -1,0 +1,26 @@
+{
+  "zones": [
+    "apps/hub/src",
+    "apps/editor/src"
+  ],
+  "boundaryZones": [],
+  "fileExtensions": [
+    ".ts",
+    ".tsx"
+  ],
+  "ignorePaths": [
+    "node_modules/**",
+    "**/node_modules/**",
+    ".git/**",
+    ".publish/**",
+    "**/dist/**",
+    "**/dist-static/**",
+    "**/out/**",
+    "**/.next/**",
+    "**/build/**",
+    "**/coverage/**",
+    "**/__tests__/**",
+    "**/*.test.*"
+  ],
+  "exemptions": []
+}

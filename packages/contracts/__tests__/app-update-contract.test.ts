@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   AppUpdateCheckRequestSchema,
   AppUpdateCheckResponseSchema,
+  AppUpdateCommandResultSchema,
+  AppUpdateEventSchema,
   AppUpdateReleaseManifestSchema,
   AppUpdateStateSchema,
 } from '../src/app-update';
@@ -17,6 +19,16 @@ const releaseFile = {
   sha512: 'hash',
   size: 123,
   blockmapKey: 'versions/0.5.1/darwin-arm64/IARTStudio-0.5.1-mac-arm64.zip.blockmap',
+};
+
+const idleState = {
+  status: 'idle',
+  appVersion: '0.5.0',
+  channel: 'stable',
+  platform: 'darwin',
+  arch: 'arm64',
+  lastCheckedAt: null,
+  logPath: null,
 };
 
 describe('app update contract schemas', () => {
@@ -90,5 +102,114 @@ describe('app update contract schemas', () => {
         error: null,
       }).files.length,
     ).toBe(1);
+  });
+
+  it('parses skipped command results carrying retryAfterMs for throttled checks', () => {
+    const result = AppUpdateCommandResultSchema.parse({
+      status: 'skipped',
+      reason: 'throttled',
+      retryAfterMs: 42_000,
+      state: idleState,
+    });
+
+    expect(result.status).toBe('skipped');
+    if (result.status === 'skipped') {
+      expect(result.reason).toBe('throttled');
+      expect(result.retryAfterMs).toBe(42_000);
+    }
+  });
+
+  it('rejects retryAfterMs on skipped results with negative or non-integer values', () => {
+    expect(
+      AppUpdateCommandResultSchema.safeParse({
+        status: 'skipped',
+        reason: 'throttled',
+        retryAfterMs: -1,
+        state: idleState,
+      }).success,
+    ).toBe(false);
+
+    expect(
+      AppUpdateCommandResultSchema.safeParse({
+        status: 'skipped',
+        reason: 'throttled',
+        retryAfterMs: 1.5,
+        state: idleState,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects unknown keys on skipped command results (strict schema)', () => {
+    expect(
+      AppUpdateCommandResultSchema.safeParse({
+        status: 'skipped',
+        reason: 'throttled',
+        retryAfterMs: 1000,
+        retryAfterSeconds: 1,
+        state: idleState,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('keeps the update state discriminant set unchanged (no check-error / download-error enums)', () => {
+    const statuses = [
+      'idle',
+      'checking',
+      'not-available',
+      'available',
+      'downloading',
+      'downloaded',
+      'error',
+    ] as const;
+
+    for (const status of statuses) {
+      const base = {
+        appVersion: '0.5.0',
+        channel: 'stable',
+        platform: 'darwin',
+        arch: 'arm64',
+        lastCheckedAt: null,
+        logPath: '/tmp/updater.log',
+      } as const;
+      const candidate =
+        status === 'not-available'
+          ? { ...base, status, latestVersion: null }
+          : status === 'available'
+            ? {
+                ...base,
+                status,
+                latestVersion: '0.5.1',
+                releaseDate: null,
+                notes: null,
+                files: [],
+                mandatory: false,
+                minimumVersion: null,
+              }
+            : status === 'downloading'
+              ? { ...base, status, latestVersion: '0.5.1', progress: null }
+              : status === 'downloaded'
+                ? {
+                    ...base,
+                    status,
+                    latestVersion: '0.5.1',
+                    downloadPath: null,
+                    files: [],
+                    installActions: [],
+                  }
+                : status === 'error'
+                  ? { ...base, status, latestVersion: null, error: { message: 'boom' } }
+                  : { ...base, status };
+
+      expect(AppUpdateStateSchema.safeParse(candidate).success).toBe(true);
+      for (const rejected of ['check-error', 'download-error']) {
+        expect(AppUpdateStateSchema.safeParse({ ...candidate, status: rejected }).success).toBe(false);
+      }
+    }
+
+    const eventTypes = ['checking', 'available', 'not-available', 'download-progress', 'downloaded', 'error'] as const;
+    for (const type of eventTypes) {
+      expect(AppUpdateEventSchema.safeParse({ type, state: idleState }).success).toBe(true);
+    }
+    expect(AppUpdateEventSchema.safeParse({ type: 'cancel', state: idleState }).success).toBe(false);
   });
 });

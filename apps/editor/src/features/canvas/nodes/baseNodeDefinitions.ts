@@ -38,7 +38,6 @@ export const baseNodeDefinitions: NodeDefinition[] = [
       label: MATERIAL_NODE_TYPE_LABEL.imageInput,
       imageUrl: null,
       imageMeta: null,
-      outpaintModelId: "",
     },
     palette: { visible: false },
     deletable: true,

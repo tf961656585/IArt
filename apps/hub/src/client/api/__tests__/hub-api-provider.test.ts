@@ -233,7 +233,7 @@ describe('hub api provider 边界', () => {
     await expect(api.listThinkingTiers(undefined)).rejects.toThrow();
   });
 
-  it('自建对话模型：GET 列表、POST 添加（含接入归属与接口类型）、PUT 四字段整体替换、DELETE 删除并带写令牌', async () => {
+  it('自建对话模型：GET 列表、POST 添加（含接入归属与接口格式）、PUT 四字段整体替换、DELETE 删除并带写令牌', async () => {
     // 与新契约同形：记录即接入（record_id/connection_id/remote_model_id 内嵌，档位随记录走）；
     // 2026-09-26 起协议归属模型级，记录自带 protocol_adapter_id
     const model = {

@@ -148,8 +148,6 @@ const buildNode = (
     lastSourcePortId: undefined,
     valueSource: undefined,
     mediaError: undefined,
-    derivedFromNodeId: undefined,
-    derivedOp: undefined,
     taskInfo: {
       taskId: "task-ctx-1",
       remoteRequestId: undefined,
@@ -164,9 +162,6 @@ const buildNode = (
       batchId: undefined,
     } satisfies NodeTaskInfo,
     cachedContent: undefined,
-    originalImageMeta: undefined,
-    resizePercent: undefined,
-    outpaintModelId: undefined,
   } satisfies ImageInputNodeData,
   draggable: undefined,
   size: undefined,

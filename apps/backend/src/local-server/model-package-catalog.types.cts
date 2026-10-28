@@ -75,20 +75,38 @@ export interface CatalogApiDefaults {
  * 模型能力包可为任意字段键声明默认值，投影层透传不裁剪（`__prompt` 保留键除外）。
  */
 export type CatalogDefaultValues = Record<string, JsonValue | undefined>;
+/**
+ * 请求策略只承载「打到哪个地址、用什么方法」。
+ *
+ * 请求头 / 查询参数 / 请求体的实际取值为**单一规则树**（`runtime.payload_rules` 的
+ * `api.headers.*` / `api.query.*` / `body.*`），不在这里再维护一份规则数组：
+ * 历史 `header_rules` / `body_rules` / `query_rules` 从未被执行，已随 2026-10-27
+ * 请求落点批次删除（口径见 `docs/model-assets/21-模型资产规则DSL规范.md`）。
+ */
 export interface CatalogTaskRequestStrategy {
   request_stage: string;
   protocol: string;
   endpoint: string;
   method: string;
-  header_rules: JsonValue[];
-  body_rules: JsonValue[];
-  query_rules: JsonValue[];
 }
+
+/** 轮询请求的一条查询参数；值里的 `{id}` 等占位在派发时替换。 */
+export interface CatalogTaskPollingHttpQueryEntry {
+  name: string;
+  value: string;
+}
+
 export interface CatalogTaskPollingHttpRequest {
   url_template: string;
   method: string;
-  headers: JsonValue | undefined | undefined;
-  body: JsonValue | undefined | undefined;
+  /** 轮询请求头（固定值，可含任务标识占位）。 */
+  headers: Record<string, string>;
+  /** 轮询查询参数（固定值，可含任务标识占位）；路径静态查询串由运行时合并。 */
+  query: CatalogTaskPollingHttpQueryEntry[];
+  body: JsonValue | undefined;
+  /** POST 轮询的请求体形态；`form` 按表单编码发送。 */
+  body_format: 'json' | 'form';
+  content_type: string | null;
 }
 export interface CatalogTaskPollingPolicy {
   intervalMs: number;
@@ -111,6 +129,8 @@ export interface CatalogTaskResultRule {
   submit_accept_condition: CatalogTaskResultCondition | null | undefined | undefined;
   success_condition: CatalogTaskResultCondition | null | undefined | undefined;
   failure_condition: CatalogTaskResultCondition | null | undefined | undefined;
+  /** 失败判定命中时展示给用户的失败原因（接口配方声明，可选）。 */
+  failure_reason: string | undefined;
   error_mapping_rules: CatalogTaskOutputMappingRule[];
   note: string | undefined | undefined;
 }
@@ -139,12 +159,28 @@ export interface CatalogTaskResultAcquisitionStrategy {
   identity_source: string;
   identity_path: CatalogTaskResultIdentityPath | undefined | undefined;
   request_strategy: CatalogTaskRequestStrategy | null | undefined | undefined;
+  /** 最终结果形态：`binary`（字节流）或 `json`（结构化载荷）。 */
+  accept: string | undefined;
+  /** `accept = binary` 时的媒体类型（落盘扩展名与资产类型判定）。 */
+  media_type: string | undefined;
   success_condition: CatalogTaskResultCondition | null | undefined | undefined;
   failure_condition: CatalogTaskResultCondition | null | undefined | undefined;
+  /**
+   * 结果获取请求的固定请求头（从接口格式 `api.headers.*` 字面量规则派生，随策略冻结）。
+   * 鉴权头不在这里——它由 `requires_auth` + 执行快照协议在请求时注入。
+   */
+  request_headers: Record<string, string>;
+  /** 最终结果请求是否携带与提交同源的鉴权头（缺省 false）。 */
+  requires_auth: boolean;
   note: string | undefined | undefined;
 }
 export interface CatalogTaskResultOutputMapping {
   response_mode: string;
+  /**
+   * 产物地址是否需要与提交同源的鉴权头（缺省 false）。
+   * 下载链路据此注入适配器声明的鉴权形态；为真但取不到凭证时必须收口失败。
+   */
+  requires_auth: boolean;
   download_required_condition: CatalogTaskResultCondition | null | undefined | undefined;
   output_mapping_rules: CatalogTaskOutputMappingRule[];
   note: string | undefined | undefined;
@@ -268,6 +304,10 @@ export interface CatalogRuntimeMeta {
    * 用于单节点承载多种远端接口语义的场景（如文生图 JSON + 图生图 multipart 合并节点）。
    */
   payload_format_rule: ModelAssetNodeProjectionRuntimeValueRule | undefined | undefined;
+  /** `payload_format = 'form'` 时的嵌套字段编码形态（`dotted` / `bracket`）。 */
+  form_field_style: string | undefined | undefined;
+  /** `payload_format = 'form'` 时的数组编码形态（`repeat` / `bracket` / `index`）。 */
+  form_array_style: string | undefined | undefined;
   url_input_upload_mode: string | undefined | undefined; url_input_upload_target_type: string | undefined | undefined;
   api_defaults: CatalogApiDefaults | undefined | undefined;
   payload_rules: RuntimeValueRuleMap | undefined | undefined;

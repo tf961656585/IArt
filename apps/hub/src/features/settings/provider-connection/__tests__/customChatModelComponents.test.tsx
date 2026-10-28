@@ -16,16 +16,16 @@ import type { CustomChatModel } from '@iart/contracts';
  *
  * 保护的口径：添加与修改走同一套能力字段（默认值来自共享常量，校验文案来自契约范围）；
  * 最大输出 token 留空即「不声明」，提交成 null 而不是某个我们挑的默认数字；
- * 添加时接口类型必选（2026-09-26 起协议归属模型级，记录自带 protocol_adapter_id；
- * 2026-09-29 起连接级预选摘除，空态起步、不落任何默认值），修改态接口类型随记录不可改；
+ * 添加时接口格式必选（2026-09-26 起协议归属模型级，记录自带 protocol_adapter_id；
+ * 2026-09-29 起连接级预选摘除，空态起步、不落任何默认值），修改态接口格式随记录不可改；
  * 删除模型只在「改模型配置」时出现、且交回调用方（组件不自行删除）；
  * 思考档位只在有连接上下文的入口出现，「添加档位」按下的档位会被勾上，
  * 自定义档位能就地删出池子（内置常用档没有这个入口）。
  */
 
-/** 打开「接口类型」下拉并选中一个选项（jsdom 无 PointerEvent：键盘开下拉，click 选中）。 */
+/** 打开「接口格式」下拉并选中一个选项（jsdom 无 PointerEvent：键盘开下拉，click 选中）。 */
 const chooseAdapter = (): void => {
-  fireEvent.keyDown(screen.getByLabelText('接口类型'), { key: 'Enter' });
+  fireEvent.keyDown(screen.getByLabelText('接口格式'), { key: 'Enter' });
   fireEvent.click(screen.getByRole('option', { name: 'OpenAI Chat Completions' }));
 };
 
@@ -74,7 +74,7 @@ describe('CustomModelDialog（添加）', () => {
     });
   });
 
-  it('接口类型空态起步、必选：不落任何默认值，选了才能提交', () => {
+  it('接口格式空态起步、必选：不落任何默认值，选了才能提交', () => {
     const onSubmit = vi.fn(async () => true);
     render(
       <CustomModelDialog
@@ -85,7 +85,7 @@ describe('CustomModelDialog（添加）', () => {
     );
 
     // 空态起步：不预选第一个对话接口，占位明示必选
-    expect(screen.getByLabelText('接口类型')).toHaveTextContent('请选择接口类型');
+    expect(screen.getByLabelText('接口格式')).toHaveTextContent('请选择接口格式');
     fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'my-llm' } });
     expect(screen.getByRole('button', { name: '添加' })).toBeDisabled();
     expect(onSubmit).not.toHaveBeenCalled();
@@ -415,18 +415,18 @@ describe('CustomModelDialog（思考档位）', () => {
     expect(onAddCustom).not.toHaveBeenCalled();
   });
 
-  it('接口类型表达不了自定义档位时：自定义档位加不上、说明原因，且不给添加入口', () => {
-    // 可表达性按记录自带的接口类型判定（协议归属模型级），不按连接的默认接口类型
+  it('接口格式表达不了自定义档位时：自定义档位加不上、说明原因，且不给添加入口', () => {
+    // 可表达性按记录自带的接口格式判定（协议归属模型级），不按连接的默认接口格式
     const anthropicModel: CustomChatModel = { ...existingModel, protocol_adapter_id: 'anthropic-messages-v1' };
     renderEdit(thinkingContext(), vi.fn(async () => true), anthropicModel);
 
     expect(screen.getByRole('button', { name: '启用档位「ultra」' })).toBeDisabled();
-    expect(screen.getByText('当前接口类型不支持自定义档位。')).toBeInTheDocument();
+    expect(screen.getByText('当前接口格式不支持自定义档位。')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '添加档位' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '启用档位「low」' })).toBeEnabled();
   });
 
-  it('接口类型还没选时：自定义档位先说明要先选接口类型，不给添加入口', () => {
+  it('接口格式还没选时：自定义档位先说明要先选接口格式，不给添加入口', () => {
     render(
       <CustomModelDialog
         mode={{ kind: 'create', providerName: '我的网关' }}
@@ -436,7 +436,7 @@ describe('CustomModelDialog（思考档位）', () => {
       />,
     );
 
-    expect(screen.getByText('先选好接口类型，再看能不能加自定义档位。')).toBeInTheDocument();
+    expect(screen.getByText('先选好接口格式，再看能不能加自定义档位。')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '添加档位' })).not.toBeInTheDocument();
   });
 

@@ -161,6 +161,8 @@ export const AppUpdateCommandResultSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('skipped'),
     reason: z.string(),
+    /** 仅 throttled 有值：距可再次检查的剩余毫秒，供设置页就地提示，不覆盖状态行。 */
+    retryAfterMs: z.number().int().nonnegative().optional(),
     state: AppUpdateStateSchema,
   }).strict(),
   z.object({

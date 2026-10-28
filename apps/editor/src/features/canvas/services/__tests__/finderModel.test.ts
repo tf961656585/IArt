@@ -102,13 +102,8 @@ const makeImageInputNode = (id: string): GraphNode =>
     lastSourcePortId: undefined,
     valueSource: 'upload',
     mediaError: undefined,
-    derivedFromNodeId: undefined,
-    derivedOp: undefined,
     taskInfo: undefined,
     cachedContent: undefined,
-    originalImageMeta: null,
-    resizePercent: undefined,
-    outpaintModelId: undefined,
   });
 
 const makeSession = (overrides: Partial<AgentSessionRecord> = {}): AgentSessionRecord => ({

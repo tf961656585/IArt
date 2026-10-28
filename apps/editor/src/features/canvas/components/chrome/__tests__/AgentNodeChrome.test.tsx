@@ -90,7 +90,7 @@ vi.mock('@/features/promptdock/promptDockStore', () => ({
     selector(mocks.promptDock.state),
 }));
 // 资产工具执行器与 Agent 工具栏无关，仅为隔离 useChromePlacement 所在模块的传递依赖。
-vi.mock('../assetToolExecutors', () => ({
+vi.mock('../mediaToolExecutors', () => ({
   runDirectTransform: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@/client/config/runtimeModelSelection', () => ({

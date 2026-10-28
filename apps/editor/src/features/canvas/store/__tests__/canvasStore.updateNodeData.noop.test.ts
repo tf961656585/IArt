@@ -170,13 +170,8 @@ describe("canvasStore.updateNodeData - no-op 检测（数组/对象）", () => {
           lastSourcePortId: undefined,
           valueSource: undefined,
           mediaError: undefined,
-          derivedFromNodeId: undefined,
-          derivedOp: undefined,
           taskInfo,
           cachedContent: undefined,
-          originalImageMeta: undefined,
-          resizePercent: undefined,
-          outpaintModelId: undefined,
         },
       }),
     ];

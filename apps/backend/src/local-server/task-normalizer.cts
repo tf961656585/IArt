@@ -23,6 +23,10 @@ type RawTaskRequest = {
   method: unknown | undefined;
   headers: unknown | undefined;
   body: unknown | undefined;
+  /** 请求体形态（json / multipart / form / text）与表单编码形态，发送期消费。 */
+  payload_format: unknown | undefined;
+  form_field_style: unknown | undefined;
+  form_array_style: unknown | undefined;
 };
 
 type RawTaskPolling = {
@@ -138,7 +142,19 @@ const normalizeTaskRequest = (value: unknown) => {
         : 'GET';
   const headers = normalizeTaskHeaders(rawRequest.headers);
   const body = rawRequest.body;
-  return { url: normalizedUrl, method, headers, body };
+  // 未声明的形态一律留空（历史记录没有这三个键，发送期按 JSON 处理）。
+  const payloadFormat = normalizeString(rawRequest.payload_format) || undefined;
+  const formFieldStyle = normalizeString(rawRequest.form_field_style) || undefined;
+  const formArrayStyle = normalizeString(rawRequest.form_array_style) || undefined;
+  return {
+    url: normalizedUrl,
+    method,
+    headers,
+    body,
+    payload_format: payloadFormat,
+    form_field_style: formFieldStyle,
+    form_array_style: formArrayStyle,
+  };
 };
 
 const normalizeTaskPolling = (value: unknown) => {

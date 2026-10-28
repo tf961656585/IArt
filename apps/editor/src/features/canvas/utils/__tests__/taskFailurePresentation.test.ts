@@ -174,3 +174,56 @@ describe('resolveTaskFailurePresentation', () => {
     expect(presentation?.summary).toBe('Your request was rejected by the safety system...');
   });
 });
+
+describe('failure stage summary', () => {
+  const presentationFor = (
+    stage: NonNullable<NonNullable<NodeTaskInfo['failure']>['stage']>,
+    message: string,
+    extra: { userMessage?: string; details?: unknown } = {},
+  ) =>
+    resolveTaskFailurePresentation({
+      taskInfo: createFailedTaskInfo({
+        failure: {
+          code: 'task_execution_failed',
+          message,
+          stage,
+          ...(extra.userMessage !== undefined ? { userMessage: extra.userMessage } : {}),
+          ...(extra.details !== undefined ? { details: extra.details } : {}),
+        },
+      }),
+      backendMessage: undefined,
+      fallback: '这次生成失败了。',
+    });
+
+  it('result_mapping 用用户可读摘要替代内部映射措辞', () => {
+    expect(presentationFor('result_mapping', '结果输出映射未命中正式输出')?.summary).toBe(
+      '服务返回了结果，但没能识别出可用的内容。',
+    );
+  });
+
+  it('polling_timeout / polling_request 用阶段摘要', () => {
+    expect(presentationFor('polling_timeout', '任务轮询失败（超过最大尝试次数）')?.summary).toBe(
+      '等待结果超时，服务一直没有返回完成状态。',
+    );
+    expect(presentationFor('polling_request', 'Polling request failed (HTTP 0)')?.summary).toBe(
+      '查询结果时没能连上服务。',
+    );
+  });
+
+  it('userMessage 优先于阶段兜底（服务商已有可读原因）', () => {
+    expect(
+      presentationFor('result_mapping', '结果输出映射未命中正式输出', {
+        userMessage: '服务商返回了结果，但没有可用的视频。',
+      })?.summary,
+    ).toBe('服务商返回了结果，但没有可用的视频。');
+  });
+
+  it.each([
+    ['submit', '提交失败。'],
+    ['remote_failure', '服务商判定这次生成失败。'],
+    ['download', '结果下载失败。'],
+    ['unknown', '这次生成失败了。'],
+  ] as const)('%s 使用固定兜底摘要', (stage, expected) => {
+    expect(presentationFor(stage, 'internal raw message')?.summary).toBe(expected);
+  });
+});

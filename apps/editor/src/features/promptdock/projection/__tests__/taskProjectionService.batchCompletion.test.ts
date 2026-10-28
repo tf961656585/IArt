@@ -1,3 +1,4 @@
+// @spec: FTB-014
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type {
@@ -15,7 +16,8 @@ import {
   applyTaskStateChanged,
   createTaskProjectionsForAcceptance,
 } from '@/features/promptdock/projection/taskProjectionService';
-import { createNodeGraph } from '@/features/canvas/types/nodeGraph';
+import { DEFAULT_SNAP_GRID, createNodeGraph } from '@/features/canvas/types/nodeGraph';
+import { alignToGrid } from '@/features/canvas/layout/layoutPrimitives';
 import type { AssetNodeData, GraphNode, TaskNodeData } from '@/features/canvas/types/node';
 import { createTestNodeGraphParams } from '@/features/canvas/components/__tests__/fixtures/canvasTestBuilders';
 import { ASSET_NODE_DEFAULT_SIZE } from '@/features/canvas/nodes/asset/assetNodeFactory';
@@ -28,7 +30,7 @@ import { TASK_BATCH_GAP_X } from '@/features/canvas/utils/taskNodePlacement';
  * - 自由桶只重排该批已成功产物节点；失败任务节点不进入自由桶；同容器桶按容器内整理排布容器全部显式成员（含失败任务节点）；整批无成功产物不重排；
  * - 自由桶：按 task_index 升序网格（每行 3）整块重排，重排后整块包围盒左上角与重排前一致，
  *   整块经防重叠搜索落位；
- * - 同容器桶：产物归属同一容器时按容器内整理语义排布，成员身份保持、容器锚点保持；
+ * - 同容器桶：产物归属同一容器时按容器内整理语义排布，成员身份保持、块锚点按 AL-GC-006 吸附到最近网格点；
  * - 单条原子历史记录入撤销栈。
  */
 
@@ -260,7 +262,7 @@ describe('批次收口整块重排', () => {
     expect(findAssetNode('asset-2').position).toEqual({ x: 1500, y: 800 });
   });
 
-  it('同容器桶按容器内整理语义排布：成员身份保持、容器锚点保持', async () => {
+  it('同容器桶按容器内整理语义排布：成员身份保持、块锚点吸附网格', async () => {
     acceptBatch(2);
     const t1 = findTaskNode('task_1');
     const t2 = findTaskNode('task_2');
@@ -281,13 +283,14 @@ describe('批次收口整块重排', () => {
     expect(a2.groupId).toBe(groupId);
     expect(getGroupMembers(requireGraph(), groupId)).toHaveLength(2);
 
-    // 容器内整理语义：成员被排布为相邻网格（不再保持散布），锚点（成员包围盒左上角）保持
+    // 容器内整理语义：成员被排布为相邻网格（不再保持散布），锚点（成员包围盒左上角）
+    // 按 AL-GC-006 只吸附一次到最近网格点（默认画板网格 15px，100 → 105），块内相对位置不变。
     expect(Math.abs(a2.position.x - a1.position.x)).toBeLessThan(800);
     expect(Math.abs(a2.position.y - a1.position.y)).toBeLessThan(60);
     const minX = Math.min(a1.position.x, a2.position.x);
     const minY = Math.min(a1.position.y, a2.position.y);
-    expect(minX).toBe(100);
-    expect(minY).toBe(100);
+    expect(minX).toBe(alignToGrid(100, DEFAULT_SNAP_GRID[0]));
+    expect(minY).toBe(alignToGrid(100, DEFAULT_SNAP_GRID[1]));
     // 产物两两不重叠
     expect(
       rectsIntersect(
@@ -330,5 +333,75 @@ describe('批次收口整块重排', () => {
 
     expect(findTaskNode('task_1')?.position).toEqual({ x: 100, y: 100 });
     expect(findTaskNode('task_2')?.position).toEqual({ x: 1500, y: 800 });
+  });
+
+  it('未收口批次：失败任务复活撤销终态记账，再次终态时只收口一次', async () => {
+    acceptBatch(3);
+    const t1 = findTaskNode('task_1');
+    const t2 = findTaskNode('task_2');
+    const t3 = findTaskNode('task_3');
+    if (!t1 || !t2 || !t3) throw new Error('受理未创建任务节点');
+    useCanvasStore.getState().updateNodePosition(t1.id, { x: 100, y: 100 });
+    useCanvasStore.getState().updateNodePosition(t2.id, { x: 1500, y: 800 });
+    useCanvasStore.getState().updateNodePosition(t3.id, { x: 2600, y: 1500 });
+
+    // task_1 先失败并被记账，但批次未收口。
+    drive({ taskId: 'task_1', status: 'failed', assetIds: [] });
+    // 重新查询结果：failed → polling 撤销 task_1 的终态记账。
+    drive({ taskId: 'task_1', status: 'polling', assetIds: [] });
+    expect(findTaskNode('task_1')?.data.status).toBe('polling');
+
+    // 其余两个任务成功：若复活没有撤销记账，此刻（failed+2 succeeded）就会误触发收口；
+    // 撤销后只记 2/3，三个产物都停在各自的 morph 原位，不重排。
+    drive({ taskId: 'task_2', status: 'succeeded', assetIds: ['asset-2'] });
+    drive({ taskId: 'task_3', status: 'succeeded', assetIds: ['asset-3'] });
+    await flushAsyncFinalize();
+    expect(findAssetNode('asset-2').position).toEqual({ x: 1500, y: 800 });
+    expect(findAssetNode('asset-3').position).toEqual({ x: 2600, y: 1500 });
+
+    // 复活任务最终成功 → 3/3 终态，收口恰好一次。
+    const historyBeforeFinalize = useCanvasStore.getState().history.length;
+    drive({ taskId: 'task_1', status: 'succeeded', assetIds: ['asset-1'] });
+    await flushAsyncFinalize();
+
+    // 历史增量 = 1（task_1 成功 morph 的替换继任）+ 1（收口整块重排的单条原子历史）。
+    expect(useCanvasStore.getState().history.length).toBe(historyBeforeFinalize + 2);
+    const a1 = findAssetNode('asset-1');
+    const a2 = findAssetNode('asset-2');
+    expect(a1.position).toEqual({ x: 100, y: 100 });
+    expect(a2.position.x).toBeGreaterThanOrEqual(
+      a1.position.x + ASSET_NODE_DEFAULT_SIZE.width + TASK_BATCH_GAP_X,
+    );
+    expect(a2.position.y).toBe(a1.position.y);
+
+    // 重复终态通知不再二次收口。
+    drive({ taskId: 'task_1', status: 'succeeded', assetIds: ['asset-1'] });
+    await flushAsyncFinalize();
+    expect(useCanvasStore.getState().history.length).toBe(historyBeforeFinalize + 2);
+  });
+
+  it('已收口批次：失败任务复活不撤销收口，成功 morph 后不再次重排', async () => {
+    acceptBatch(2);
+    const t1 = findTaskNode('task_1');
+    const t2 = findTaskNode('task_2');
+    if (!t1 || !t2) throw new Error('受理未创建任务节点');
+    useCanvasStore.getState().updateNodePosition(t1.id, { x: 100, y: 100 });
+    useCanvasStore.getState().updateNodePosition(t2.id, { x: 1500, y: 800 });
+
+    drive({ taskId: 'task_1', status: 'succeeded', assetIds: ['asset-1'] });
+    // task_2 失败 → 全批终态 → 收口（一次）。
+    drive({ taskId: 'task_2', status: 'failed', assetIds: [] });
+    await flushAsyncFinalize();
+    const a1AfterFinalize = findAssetNode('asset-1').position;
+    const task2Position = findTaskNode('task_2')?.position;
+
+    // 已收口批次上的复活：不撤销收口、不重排。
+    drive({ taskId: 'task_2', status: 'polling', assetIds: [] });
+    drive({ taskId: 'task_2', status: 'succeeded', assetIds: ['asset-2'] });
+    await flushAsyncFinalize();
+
+    expect(findAssetNode('asset-1').position).toEqual(a1AfterFinalize);
+    // 复活成功的产物在原任务节点位置原位 morph，不参与第二次整批重排。
+    expect(findAssetNode('asset-2').position).toEqual(task2Position);
   });
 });

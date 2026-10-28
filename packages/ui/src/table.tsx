@@ -3,6 +3,7 @@
 import * as React from "react"
 
 import { cn } from "./lib/utils"
+import { SELECTION_SOFT_ROW_CLASSES } from "./selection"
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
@@ -57,7 +58,7 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
     <tr
       data-slot="table-row"
       className={cn(
-        "hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors",
+        `hover:bg-foreground/5 border-b transition-colors ${SELECTION_SOFT_ROW_CLASSES}`,
         className
       )}
       {...props}
