@@ -344,7 +344,7 @@ describe("computeLayoutModel", () => {
       expect(size.width / size.height).toBeCloseTo(3972 / 6356, 2);
     });
 
-    it("asset 节点 mediaType=audio：非媒体表面，回落 defaultSize", () => {
+    it("asset 节点 mediaType=audio：音频卡片形态固定 248×64", () => {
       const assets: ProjectMediaAssets = {
         a1: makeAsset("a1", "http://x/a.mp3", 100, 100, "audio"),
       };
@@ -352,7 +352,9 @@ describe("computeLayoutModel", () => {
         makeGraphNode("n1", "asset", { mediaType: "audio", assetId: "a1" }),
       ];
       const output = computeLayoutModel(buildInput(makeNodeGraph(nodes), assets));
-      expect(output.byNodeId["n1"]).toEqual({ width: 240, height: 180 });
+      // 音频不按媒体比例铺面，而是卡片形态（播放钮 + 波形 + 时长），见
+      // docs/editor/画布资产节点媒体播放-design.md §3.6；defaultSize 只兜底 meta 缺失。
+      expect(output.byNodeId["n1"]).toEqual({ width: 248, height: 64 });
     });
 
     it("asset 节点 assetId 缺失 / asset 不存在 / original 尺寸缺失：回落 defaultSize", () => {

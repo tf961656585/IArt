@@ -372,8 +372,9 @@ const installSucceedingUpstreamStub = (params: {
  * - task:state-changed / task:state-snapshot / media-assets:changed 是 backend→Main 的
  *   单向通知，捕获进数组供本测试消费（生产里由 desktop-shell 转发到 Editor，属 IPC 传输层，
  *   是本接缝允许挡住的最外层）。
- * - 其余消息原样转发给原始 process.send——vitest forks pool 的 worker 用它与 tinypool
- *   父进程通信，吞掉会破坏测试运行器本身。
+ * - 只把测试运行器自己的协议消息（tinypool 的 `__tinypool_worker_message__`）原样转发给
+ *   原始 process.send——vitest forks pool 的 worker 用它回报测试结果，吞掉会破坏测试运行器本身；
+ *   backend 自己的进程间消息（启动回执、其余单向通知）一律在本层截获，绝不转发（见下方实现注释）。
  */
 const BACKEND_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   'task:state-changed',
@@ -387,12 +388,30 @@ const installNotificationCapture = (): NotificationCapture => {
   const originalSend = process.send;
   const notifications: unknown[] = [];
   process.send = (message: unknown, ...args: unknown[]): boolean => {
-    if (message !== null && typeof message === 'object') {
-      const type: unknown = (message as { type?: unknown }).type;
-      if (typeof type === 'string' && BACKEND_NOTIFICATION_TYPES.has(type)) {
-        notifications.push(message);
-        return true;
+    // 只把测试运行器自己的协议消息交还传输层（tinypool 用它回报测试结果，消息带
+    // `__tinypool_worker_message__` 标记）；其余都是 backend 的进程间消息（如启动期的
+    // `{ type: 'listening' }`、单向通知），一律在本层截获。
+    // 反例（2026-11-07 实测）：把未知消息原样转发会让 vitest 父进程按 tinypool 的二进制
+    // 协议反序列化一个普通对象，直接 `ERR_INVALID_ARG_TYPE` 崩溃、整份测试套件无法运行。
+    const isRunnerMessage =
+      message !== null &&
+      typeof message === 'object' &&
+      (message as { __tinypool_worker_message__?: unknown }).__tinypool_worker_message__ === true;
+    if (!isRunnerMessage) {
+      if (message !== null && typeof message === 'object') {
+        const type: unknown = (message as { type?: unknown }).type;
+        if (typeof type === 'string' && BACKEND_NOTIFICATION_TYPES.has(type)) {
+          notifications.push(message);
+          return true;
+        }
       }
+      console.debug('[agent-product-membership-seam] 截获非测试运行器的进程间消息', {
+        type:
+          message !== null && typeof message === 'object'
+            ? ((message as { type?: unknown }).type ?? null)
+            : typeof message,
+      });
+      return true;
     }
     if (originalSend !== undefined && originalSend !== null) {
       return Reflect.apply(originalSend, process, [message, ...args]) as boolean;

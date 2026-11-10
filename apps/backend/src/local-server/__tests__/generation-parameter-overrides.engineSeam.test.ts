@@ -348,7 +348,7 @@ void test('接缝：覆盖声明经族模板合成进目录，别名/禁用/枚�
   const fieldKeys = entry.parameter_schema.fields.map((field) => field.fieldKey);
   assert.deepEqual(
     fieldKeys,
-    ['size', 'quality', 'format', 'my_watermark'],
+    ['size', 'quality', 'format', 'background', 'output_compression', 'complexity', 'frame_count', 'frame_duration_ms', 'input_fidelity', 'my_watermark'],
     'disabled moderation must disappear and the custom field must be appended last',
   );
   const quality = entry.parameter_schema.fields.find((field) => field.fieldKey === 'quality');
@@ -438,7 +438,7 @@ void test('接缝：PUT 修改覆盖后目录与请求体随之更新（S6 编�
   const fieldKeys = after.parameter_schema.fields.map((field) => field.fieldKey);
   assert.deepEqual(
     fieldKeys,
-    ['size', 'quality', 'format', 'moderation'],
+    ['size', 'quality', 'format', 'background', 'output_compression', 'complexity', 'frame_count', 'frame_duration_ms', 'input_fidelity', 'moderation'],
     'V2 overrides must restore moderation, drop the custom field and keep the aliased size',
   );
   const payloadRules = await getProjectedPayloadRules(baseUrl, DECLARED_MODEL_ID);

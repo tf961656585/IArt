@@ -1,3 +1,5 @@
+// 默认关闭取值与草稿合成（口径见 docs/model-assets/17 的取值默认关闭段）
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
@@ -513,4 +515,83 @@ void test('draft schema: 表单文件素材位要求 multipart 提交体', () =>
     ],
   };
   assert.equal(CustomInterfaceFormatDraftSchema.safeParse(body).success, false);
+});
+
+void test('draft synthesis: 取值的默认关闭声明随草稿进实体（spec 48 已不再承载产物形态）', () => {
+  const body: JsonRecord = {
+    ...MINIMAL_DRAFT_BODY,
+    parameters: [
+      {
+        binding: { location: 'body', path: 'format' },
+        label: '图片格式',
+        type: 'enum',
+        default_value: 'png',
+        enum_values: ['png', 'gif', 'svg'],
+        enum_value_meta: [
+          { value: 'gif', opt_in: true },
+          { value: 'svg', opt_in: true },
+        ],
+      },
+    ],
+  };
+  const format = buildInterfaceFormatFromDraft(parseDraft(body), { format_id: 'if_forms_1', order: 100 });
+  const fields = readObject(format.parameters.schema, 'schema')['fields'];
+  assert.ok(Array.isArray(fields));
+  const field = readObject(fields[0], 'format 字段');
+  const options = field['enum_options'];
+  assert.ok(Array.isArray(options));
+  assert.deepEqual(
+    options.map((option) => {
+      const record = readObject(option, 'option');
+      return { value: record['value'], optIn: record['opt_in'] };
+    }),
+    [
+      { value: 'png', optIn: undefined },
+      { value: 'gif', optIn: true },
+      { value: 'svg', optIn: true },
+    ],
+  );
+  // 产物形态已退场：草稿与实体都不再写出任何形态字段。
+  assert.equal('default_output_form' in JSON.parse(JSON.stringify(format)), false);
+});
+
+void test('draft schema: 默认关闭声明必须对应到可选值且只用于选项类型', () => {
+  const baseParam = {
+    binding: { location: 'body', path: 'format' },
+    label: '图片格式',
+    type: 'enum',
+    enum_values: ['png', 'gif'],
+  };
+  const withMeta = (meta: JsonRecord[]) => ({
+    ...MINIMAL_DRAFT_BODY,
+    parameters: [{ ...baseParam, enum_value_meta: meta }],
+  });
+  // 引用不存在的取值：拒绝。
+  assert.equal(
+    CustomInterfaceFormatDraftSchema.safeParse(withMeta([{ value: 'webp', opt_in: true }])).success,
+    false,
+  );
+  // 同一取值声明两次：拒绝。
+  assert.equal(
+    CustomInterfaceFormatDraftSchema.safeParse(withMeta([
+      { value: 'png', opt_in: true },
+      { value: 'png', opt_in: false },
+    ])).success,
+    false,
+  );
+  // 非选项类型带默认关闭声明：拒绝。
+  assert.equal(
+    CustomInterfaceFormatDraftSchema.safeParse({
+      ...MINIMAL_DRAFT_BODY,
+      parameters: [
+        {
+          binding: { location: 'body', path: 'size' },
+          label: '尺寸',
+          type: 'string',
+          enum_value_meta: [{ value: '1024', opt_in: true }],
+        },
+      ],
+    }).success,
+    false,
+  );
 });

@@ -353,6 +353,11 @@ function OfficialParameterRow({
   const enabled = override?.enabled !== false;
   const selectLike = field.enum_options.length > 0;
   const currentOptions = override?.enum_options ?? field.enum_options;
+  // 接口格式声明为默认关闭（opt_in）的取值：不在初始可选值里，但提供一键加入的入口，
+  // 避免「用户知道服务商支持、界面上却无路可走」（spec 48 §4.5）。
+  const optInValues = (field.opt_in_enum_options ?? []).filter(
+    (value) => !currentOptions.some((option) => sameValue(option, value)),
+  );
   const effectiveDefault = override?.default_value ?? field.default_value;
   const defaultInOptions =
     effectiveDefault !== null &&
@@ -445,6 +450,22 @@ function OfficialParameterRow({
                   />
                 </div>
               </div>
+              {optInValues.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-1.5 text-2xs text-muted-foreground">
+                  <span>格式还支持（默认关闭）：</span>
+                  {optInValues.map((value) => (
+                    <Button
+                      key={valueKey(value)}
+                      type="button"
+                      size="2xs"
+                      variant="ghost"
+                      onClick={() => setEnumOptions([...currentOptions, value])}
+                    >
+                      添加 {String(value)}
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
               <div className="flex items-center gap-2">
                 <MiniLabel text="默认值" />
                 <Select

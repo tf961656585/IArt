@@ -23,8 +23,13 @@
 //   node tooling/scripts/release-promote.mjs v0.6.3 --verify-only  # 只验证，不改 release 状态、不落 tag
 //
 // 失败语义：任一步失败立即非零退出；tag 已存在且指向不同提交、package.json version 与 tag
-// 不一致均拒绝执行（不覆盖已有 tag）；发布后状态断言（仍为草稿 / 带预发布标记 / releases/latest
-// 未指向本 tag）与 feed 探测逐项给出 ✓/✗ 并附下一步动作提示，任一 ✗ 即非零退出。
+// 不一致、草稿正文仍是构建占位均拒绝执行（不覆盖已有 tag、不把内部流程话术发上网）；发布后
+// 状态断言（仍为草稿 / 带预发布标记 / releases/latest 未指向本 tag）与 feed 探测逐项给出
+// ✓/✗ 并附下一步动作提示，任一 ✗ 即非零退出。
+//
+// 发布说明：草稿正文由 workflow 从仓库 `release-notes/<tag>.md` 生成（面向公开用户）。
+// 文件缺失时 workflow 写入带本文件 DRAFT_NOTES_PLACEHOLDER_MARKER 的占位正文，转正前
+// assertReleaseNotesReady 命中该标记即拒绝——要求先补发布说明（或直接在 GitHub 页面改正文）。
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -38,6 +43,10 @@ const REPO_ROOT = resolve(__dirname, '..', '..');
 
 // 三平台 feed 文件：win 消费 latest.yml，mac 消费 latest-mac.yml，linux 为 latest-linux.yml
 const FEED_FILES = ['latest.yml', 'latest-mac.yml', 'latest-linux.yml'];
+
+// 草稿占位正文的标记（与 .github/workflows/release.yml 的 --notes 占位同源）。
+// 两处必须同时改；tooling 侧有测试读 workflow 源码比对，漂移会让静默漏拦变成红灯。
+export const DRAFT_NOTES_PLACEHOLDER_MARKER = 'Draft by CI';
 
 const fail = (msg) => {
   console.error(`✗ [release-promote] ${msg}`);
@@ -126,6 +135,30 @@ export function assertReleasePublished(view, tag) {
       `release ${tag} 被标记为预发布（prerelease=true）：GitHub 的 releases/latest 不服务预发布，` +
         '客户端更新 feed 与稳定下载直链会持续 404。修复：release 页面取消「预发布」勾选，' +
         `或运行 gh release edit ${tag} --prerelease=false --latest`,
+    );
+  }
+}
+
+/**
+ * 发布说明就绪断言：转正前的草稿正文必须是面向用户的内容。
+ *
+ * 空正文与构建占位（workflow 在缺 release-notes/<tag>.md 时写入，含
+ * DRAFT_NOTES_PLACEHOLDER_MARKER）都拒绝转正：GitHub 的 release 页是公开用户的第一触点，
+ * 「Draft by CI; promote manually」这类内部流程话术不得随转正原样发布（2026-11-06 检查发现）。
+ * 修复路径两条：补 release-notes/<tag>.md 后重跑 workflow，或在 release 页面直接改正文。
+ */
+export function assertReleaseNotesReady(body, marker = DRAFT_NOTES_PLACEHOLDER_MARKER) {
+  const text = typeof body === 'string' ? body.trim() : '';
+  if (text === '') {
+    throw new Error(
+      'release 正文为空：公开 release 页需要面向用户的更新说明。' +
+        '补 release-notes/<tag>.md 后重跑构建，或在 release 页面直接填写正文',
+    );
+  }
+  if (text.includes(marker)) {
+    throw new Error(
+      `release 正文仍是构建占位（含「${marker}」）：转正会把这句内部流程话术发到公开页面。` +
+        '先补 release-notes/<tag>.md（或直接改 release 正文）再转正',
     );
   }
 }
@@ -256,12 +289,16 @@ const main = async () => {
   console.log(`[2/3] 检查 release ${tag}`);
   let view;
   try {
-    view = JSON.parse(ghOut(['release', 'view', tag, '--json', 'isDraft,name,targetCommitish']));
+    view = JSON.parse(ghOut(['release', 'view', tag, '--json', 'isDraft,name,targetCommitish,body']));
   } catch (err) {
     fail(`release ${tag} 不存在或不可访问：${err instanceof Error ? err.message : String(err)}`);
   }
   console.log(`  ✓ ${view.name}${view.isDraft ? '（draft）' : '（已正式）'}`);
   if (view.isDraft && !verifyOnly) {
+    console.log('  - 转正前校验：草稿正文必须是面向用户的更新说明（不得是构建占位）');
+    assertReleaseNotesReady(view.body);
+    console.log('    ✓ 发布说明已就绪');
+
     console.log('  - 转正前校验：根 package.json version（在制版本）必须等于 tag');
     const packageVersion = readPackageVersion();
     assertPromotable(tag, packageVersion);
@@ -321,6 +358,8 @@ if (isDirectExecution()) {
 
 export const __test_only__ = {
   parseFeedVersion,
+  assertReleaseNotesReady,
+  DRAFT_NOTES_PLACEHOLDER_MARKER,
   readFeedBaseUrl,
   normalizeVersion,
   FEED_FILES,

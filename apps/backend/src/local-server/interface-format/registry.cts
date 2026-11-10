@@ -259,6 +259,8 @@ export const buildFormatParameterDescriptor = (
     format,
     modelId: DESCRIPTOR_BASELINE_MODEL_ID,
     acceptedMediaSlots: [],
+    // 描述符需要看到 opt_in 取值：它们不进 enum_options，但要作为「显式启用」入口下发。
+    keepOptInValues: true,
   });
   // 全部素材位同时接受的形态：一个素材位都没有的格式退化为基线本身。
   const allSlotsSources =
@@ -268,6 +270,7 @@ export const buildFormatParameterDescriptor = (
           format,
           modelId: DESCRIPTOR_BASELINE_MODEL_ID,
           acceptedMediaSlots: format.media.supports,
+          keepOptInValues: true,
         });
   const extraPayloadRuleSets: JsonObject[] = [];
   const allSlotsRuntime = allSlotsSources.runtimeModel.runtime;

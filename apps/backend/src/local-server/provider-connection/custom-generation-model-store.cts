@@ -584,6 +584,8 @@ const addCustomGenerationModel = (input: {
   family_adapter_id: CustomGenerationModel['family_adapter_id'];
   /** 省略即「不接受任何素材」（与契约 schema 缺省同口径）。 */
   accepted_media_slots?: GenerationMediaSlotId[];
+  /** 能力标签（spec 48）：省略即标注为空。 */
+  capability_labels?: string[];
   /** 省略即空覆盖（与契约 schema 缺省同口径）；携带时随记录整体落库。 */
   parameter_overrides?: ParameterOverrides;
   /** 省略即使用该族内置默认判定（配方引用，设计 §4）。 */
@@ -649,6 +651,7 @@ const addCustomGenerationModel = (input: {
     remote_model_id: remoteModelId,
     family_adapter_id: input.family_adapter_id,
     accepted_media_slots: input.accepted_media_slots ?? [],
+    capability_labels: dedupeCapabilityLabels(input.capability_labels ?? []),
     ...(input.parameter_overrides === undefined
       ? {}
       : { parameter_overrides: input.parameter_overrides }),
@@ -666,6 +669,23 @@ const addCustomGenerationModel = (input: {
   const file = getFile();
   commitFile({ ...file, models: [...file.models, parsed.data] });
   return { ok: true, model: parsed.data };
+};
+
+/**
+ * 能力标签去重（spec 48 §5）：按完全相同去重、保留首次出现的顺序。
+ *
+ * 不做大小写归一、不做同义合并——标签是用户写给人的说明，软件不解释其含义。
+ * 超长与超数量由契约 schema 在写入侧拒绝（不静默截断），这里只处理重复。
+ */
+const dedupeCapabilityLabels = (labels: readonly string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const label of labels) {
+    if (seen.has(label)) continue;
+    seen.add(label);
+    result.push(label);
+  }
+  return result;
 };
 
 /**
@@ -693,6 +713,8 @@ const updateCustomGenerationModel = (
   modelId: string,
   input: {
     accepted_media_slots: GenerationMediaSlotId[];
+    /** 缺省 = 保持现有标签不变；出现（含空数组）= 整体替换。 */
+    capability_labels?: string[];
     /** 缺省 = 保持现有覆盖不变；出现 = 整体替换。 */
     parameter_overrides?: ParameterOverrides;
     /**
@@ -747,6 +769,9 @@ const updateCustomGenerationModel = (
   const candidate = {
     ...existing,
     accepted_media_slots: input.accepted_media_slots,
+    ...(input.capability_labels === undefined
+      ? {}
+      : { capability_labels: dedupeCapabilityLabels(input.capability_labels) }),
     ...(input.parameter_overrides === undefined
       ? {}
       : { parameter_overrides: input.parameter_overrides }),

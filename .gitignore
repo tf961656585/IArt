@@ -32,6 +32,10 @@ coverage-*/
 .wrangler/
 updater.log
 
+# e2e 冒烟残留：预飞冒烟的桌面主进程日志落在仓库根（app.getPath("logs") 在冒烟进程里解析到 cwd）
+# 公开快照侧由 publish-opensource.mjs 的排除表另行处理（两处各管一条链路，勿只改一处）
+/main.log
+
 .tmp/
 
 # 本机 AI 协作会话目录（仅 plans 曾被使用；目录级忽略防未来 settings 等混入）

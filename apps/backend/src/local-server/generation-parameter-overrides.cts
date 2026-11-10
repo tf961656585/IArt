@@ -803,6 +803,8 @@ export const applyParameterOverrides = (
     const record = survivingFields.get(entry.field_key);
     if (record === undefined) continue; // 已禁用字段：第①步已处理
     if (entry.enum_options !== undefined && isRecordComponent(record, 'select')) {
+      // 覆盖只启停/收窄取值，不改写取值语义：按覆盖给出的取值顺序重建枚举，每条只写
+      // `value`——取值上的产物形态已随 48 号 2.0.0 退场，覆盖不再需要推形态。
       record.enum_options = entry.enum_options.map((value): JsonObject => ({ value }));
     }
     if (isRecordComponent(record, 'imagesize')) {

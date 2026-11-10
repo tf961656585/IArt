@@ -531,7 +531,7 @@ const renderHumanSuccess = (response: CliCommandSuccessResponse): string => {
     case "task.wait":
       return `任务 ${response.task_result.task.taskId}：${response.task_result.task.status}，产物 ${response.task_result.assets.length} 个${readTaskFailureReason(response.task_result.task)}${renderTaskCanvasIdentitySuffix(response.task_result)}${renderGenerationWarningsSuffix(response.task_result.warnings)}`;
     case "batch.get":
-      return `生成档案（批次 ${response.generation.batch_id}）：模型 ${response.generation.model_id}，参考 ${response.generation.references.length} 个，任务 ${response.generation.task_ids.length} 个；提示词全文与完整内容用 --json 查看`;
+      return `生成档案（批次 ${response.generation.batch_id}）：模型 ${response.generation.model_id}，提示词 ${response.generation.intents.length} 条，任务 ${response.generation.task_ids.length} 个；提示词全文与完整内容用 --json 查看`;
     case "app.status": {
       const lines = response.opened_projects.map((project) => {
         const focusMark = project.focused ? "，持有焦点" : "";

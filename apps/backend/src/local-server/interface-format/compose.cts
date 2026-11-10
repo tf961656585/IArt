@@ -10,6 +10,7 @@ import {
   type GenerationFamilyTemplateSources,
 } from '../generation-family-templates.cts';
 import { applyParameterOverrides, EMPTY_PARAMETER_OVERRIDES } from '../generation-parameter-overrides.cts';
+import { applyOptInEnumDefaults } from '../generation-parameter-opt-in.cts';
 import { applyRecipeToSources } from '../interface-recipe-apply.cts';
 import * as loggingModule from '../logging.cts';
 import { requireObjectRecord } from '../model-package-catalog.shared.cts';
@@ -58,6 +59,12 @@ export type ComposeInterfaceFormatSourcesInput = {
   acceptedMediaSlots: readonly GenerationMediaSlotId[];
   parameterOverrides?: ParameterOverrides;
   recipe?: InterfaceRecipe | null;
+  /**
+   * 保留 `opt_in` 取值（默认 false：目录/执行面隐藏默认关闭的取值）。
+   * 仅供参数描述符读取：描述符要把它们放进 `opt_in_enum_options`，给编辑器一个显式启用入口；
+   * 不是提交面开关，调用方不要用它绕过默认关闭。
+   */
+  keepOptInValues?: boolean;
 };
 
 const isPlainJsonObject = (value: unknown): value is Record<string, InterfaceFormatJsonValue> =>
@@ -539,13 +546,19 @@ export const composeInterfaceFormatSources = (
   };
 
   // 合成顺序固定：格式基础模板 → 素材位片段/变体（上）→ 记录参数覆盖 → 接口配方。
-  const withOverrides = applyParameterOverrides(
-    composedSources,
-    input.parameterOverrides ?? EMPTY_PARAMETER_OVERRIDES,
-  );
+  const parameterOverrides = input.parameterOverrides ?? EMPTY_PARAMETER_OVERRIDES;
+  const withOverrides = applyParameterOverrides(composedSources, parameterOverrides);
+  // 默认关闭的取值（opt_in）在“记录没显式启用”时从合成结果里移除：目录、创作面、CLI、
+  // 执行表单与描述符同源，不能各留一处；显式启用后形态声明仍由 applyParameterOverrides 保留。
+  const withOptInDefaults =
+    input.keepOptInValues === true
+      ? withOverrides
+      : applyOptInEnumDefaults(withOverrides, parameterOverrides);
   const recipe = input.recipe;
   const composed =
-    recipe === undefined || recipe === null ? withOverrides : applyRecipeToSources(withOverrides, recipe);
+    recipe === undefined || recipe === null
+      ? withOptInDefaults
+      : applyRecipeToSources(withOptInDefaults, recipe);
 
   assertNoPlaceholderResidue(composed);
   assertNoMacroResidue(composed);

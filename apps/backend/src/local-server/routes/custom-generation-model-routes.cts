@@ -87,6 +87,9 @@ const describeBodyError = (issues: readonly { path: readonly PropertyKey[] }[]):
   if (field === 'recipe_id') {
     return '接口配方的标识格式不对，请重新选择一份配方';
   }
+  if (field === 'capability_labels') {
+    return '能力标签最多 10 条、每条 1–12 个字，且不能为空或换行';
+  }
   return '模型 ID 只能用字母、数字、.、_、-，且以字母或数字开头';
 };
 
@@ -286,6 +289,9 @@ const createCustomGenerationModelRoutes = (): RouteDefinition[] => [
         ...(parsed.data.accepted_media_slots === undefined
           ? {}
           : { accepted_media_slots: parsed.data.accepted_media_slots }),
+        ...(parsed.data.capability_labels === undefined
+          ? {}
+          : { capability_labels: parsed.data.capability_labels }),
         ...(parsed.data.parameter_overrides === undefined
           ? {}
           : { parameter_overrides: parsed.data.parameter_overrides }),
@@ -401,6 +407,9 @@ const createCustomGenerationModelRoutes = (): RouteDefinition[] => [
         }
         const updated = updateCustomGenerationModel(modelId, {
           accepted_media_slots: parsed.data.accepted_media_slots,
+          ...(parsed.data.capability_labels === undefined
+            ? {}
+            : { capability_labels: parsed.data.capability_labels }),
           ...(parsed.data.parameter_overrides === undefined
             ? {}
             : { parameter_overrides: parsed.data.parameter_overrides }),

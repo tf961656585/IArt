@@ -292,7 +292,7 @@ void test('接缝：自建生成模型经族模板进入可执行目录并走通
   const fieldKeys = entry.parameter_schema.fields.map((field) => field.fieldKey);
   assert.deepEqual(
     fieldKeys.filter((key) => key !== 'image'),
-    ['size', 'quality', 'format', 'moderation'],
+    ['size', 'quality', 'format', 'background', 'output_compression', 'complexity', 'frame_count', 'frame_duration_ms', 'input_fidelity', 'moderation'],
     'parameter form comes from the family template',
   );
   assert.ok(

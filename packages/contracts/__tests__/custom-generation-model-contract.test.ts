@@ -34,6 +34,8 @@ describe('CustomGenerationModelSchema', () => {
   it('合法记录 parse 通过，accepted_media_slots 可省略（缺省空清单），parameter_overrides 缺省空覆盖', () => {
     expect(CustomGenerationModelSchema.parse(validModel)).toEqual({
       ...validModel,
+      // 能力标签缺省物化为空数组（= 未标注），spec 48 §5。
+      capability_labels: [],
       parameter_overrides: { official: [], custom: [] },
     });
 
@@ -50,6 +52,7 @@ describe('CustomGenerationModelSchema', () => {
     expect(CustomGenerationModelSchema.parse(withoutReference)).toEqual({
       ...withoutReference,
       accepted_media_slots: [],
+      capability_labels: [],
       parameter_overrides: { official: [], custom: [] },
     });
   });

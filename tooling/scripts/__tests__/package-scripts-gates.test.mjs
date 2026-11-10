@@ -70,7 +70,7 @@ test('类型与边界门禁链路保持唯一顺序', () => {
 
   assert.equal(
     scripts['check:types-and-boundaries'],
-    'pnpm build:typecheck-deps && pnpm typecheck:workspaces && pnpm lint && pnpm guard:stable-business-types && pnpm guard:canvas-selection-ownership && pnpm guard:dialog-sizing && pnpm guard:media-fit-contain && pnpm guard:elevation-z && pnpm guard:escape-stack && pnpm guard:css-undefined-vars && pnpm guard:css-size-tokens && pnpm guard:button-standard && pnpm guard:form-control-colors && pnpm guard:spec-test-linkage',
+    'pnpm build:typecheck-deps && pnpm typecheck:workspaces && pnpm lint && pnpm guard:stable-business-types && pnpm guard:canvas-selection-ownership && pnpm guard:dialog-sizing && pnpm guard:media-fit-contain && pnpm guard:elevation-z && pnpm guard:escape-stack && pnpm guard:css-undefined-vars && pnpm guard:css-size-tokens && pnpm guard:button-standard && pnpm guard:form-control-colors && pnpm guard:spec-test-linkage && pnpm guard:editor-remote-model-static-truth',
   );
 
   assertCommandsInOrder(scripts['check:types-and-boundaries'], [
@@ -88,6 +88,7 @@ test('类型与边界门禁链路保持唯一顺序', () => {
     'pnpm guard:button-standard',
     'pnpm guard:form-control-colors',
     'pnpm guard:spec-test-linkage',
+    'pnpm guard:editor-remote-model-static-truth',
   ]);
 });
 
@@ -97,6 +98,17 @@ test('关键入口不重复内联静态硬门禁子步骤', () => {
   assert.equal(scripts['desktop:dev:latest'], 'pnpm desktop:dev');
   assert.doesNotMatch(scripts.build, /typecheck:workspaces|pnpm lint|guard:stable-business-types|guard:canvas-selection-ownership|guard:dialog-sizing|guard:media-fit-contain|guard:elevation-z|guard:escape-stack|guard:css-undefined-vars|guard:css-size-tokens|guard:button-standard|guard:form-control-colors|guard:spec-test-linkage|diagnose:gates|diagnose:preflight/);
   assert.doesNotMatch(scripts['desktop:dev:latest'], /typecheck:workspaces|pnpm lint|guard:stable-business-types|guard:canvas-selection-ownership|guard:dialog-sizing|guard:media-fit-contain|guard:elevation-z|guard:escape-stack|guard:css-undefined-vars|guard:css-size-tokens|guard:button-standard|guard:form-control-colors|guard:spec-test-linkage|diagnose:gates|diagnose:preflight/);
+
+  // 日常快速档只是静态硬门禁的前两步 + 桌面构建：不得内联 lint、专项守卫或 smoke，
+  // 否则会造出第二套与 check:types-and-boundaries 等价的链（spec 总原则）。
+  assert.equal(
+    scripts['check:fast'],
+    'pnpm build:typecheck-deps && pnpm typecheck:workspaces && pnpm build:desktop-runtime',
+  );
+  assert.doesNotMatch(scripts['check:fast'], /pnpm lint|guard:|verify:desktop-smoke|test:scripts/);
+
+  // 交付检查只做组合：自身不含任何静态链、守卫或测试命令，避免重复执行。
+  assert.equal(scripts['check:delivery'], 'pnpm test:backend && pnpm test');
 });
 
 test('预飞硬门禁入口覆盖运行构建发布风险', () => {
@@ -106,6 +118,11 @@ test('预飞硬门禁入口覆盖运行构建发布风险', () => {
     'pnpm guard:no-internal-timeout',
     'pnpm guard:ipc-contract-parse',
     'pnpm guard:contract-ownership',
+    'pnpm guard:media-input-source-kind-coverage',
+    'pnpm guard:no-media-input-downgrade',
+    'pnpm guard:model-input-modalities',
+    'pnpm guard:no-structural-fields-in-normalized-arguments',
+    'pnpm guard:nested-formdata-body-handled',
     'pnpm guard:no-runtime-json-leak',
     'pnpm guard:no-json-clone',
     'pnpm guard:local-media-url-resolution',
@@ -139,19 +156,27 @@ test('预飞硬门禁入口覆盖运行构建发布风险', () => {
   assert.equal(scripts['guard:button-standard'], 'node ./tooling/scripts/guard-button-standard.mjs');
   assert.equal(scripts['guard:form-control-colors'], 'node ./tooling/scripts/guard-form-control-colors.mjs');
   assert.equal(scripts['guard:spec-test-linkage'], 'node ./tooling/scripts/guard-spec-test-linkage.mjs');
+  assert.equal(scripts['guard:editor-remote-model-static-truth'], 'node ./tooling/scripts/guard-editor-remote-model-static-truth.mjs');
   assert.equal(scripts['ensure:desktop-deps'], 'node ./tooling/dev/ensure-desktop-deps.mjs');
 });
 
-test('默认 dev build pack dist 显式依赖预飞硬门禁', () => {
+test('默认 dev build pack dist 显式依赖对应硬门禁', () => {
   assert.equal(scripts.build, 'pnpm check:preflight');
-  assert.match(scripts['desktop:dev'], /^pnpm check:preflight && pnpm desktop:run-built$/);
+  // 日常开发入口走快速档（类型 + 桌面构建），交付前自检入口走预飞。
+  assert.equal(scripts['desktop:dev'], 'pnpm check:fast && pnpm desktop:run-built');
+  assert.equal(scripts['desktop:dev:full'], 'pnpm check:preflight && pnpm desktop:run-built');
   assert.equal(scripts['desktop:dev:latest'], 'pnpm desktop:dev');
   assert.equal(scripts['desktop:run-built'], 'pnpm ensure:desktop-deps && electron ./apps/desktop-shell/dist/main.cjs');
-  assert.equal(scripts['desktop:dev:fast'], 'pnpm build:desktop-runtime && pnpm desktop:run-built');
+  // 原 dev:fast 已并入 dev，不得保留为第二条快速通道。
+  assert.equal(scripts['desktop:dev:fast'], undefined);
 
+  // linux 入口进本组：同样必须先过预检。它不进下一组的「electron-builder 后验 packaged
+  // native runtime」——该校验按 darwin/win32 包布局与 sharp-darwin 平台包硬编码，Linux 包
+  // 会因找不到这些布局而误判。
   for (const name of [
     'desktop:pack',
     'desktop:dist:win:x64',
+    'desktop:dist:linux:x64',
     'desktop:dist:mac',
     'desktop:dist:mac:zip',
     'desktop:dist:mac:arm64',
@@ -244,7 +269,7 @@ test('诊断入口不替代硬门禁主链', () => {
   assert.equal(scripts['diagnose:gates'], 'node ./tooling/scripts/diagnose-gates.mjs');
   assert.equal(
     scripts['check:types-and-boundaries'],
-    'pnpm build:typecheck-deps && pnpm typecheck:workspaces && pnpm lint && pnpm guard:stable-business-types && pnpm guard:canvas-selection-ownership && pnpm guard:dialog-sizing && pnpm guard:media-fit-contain && pnpm guard:elevation-z && pnpm guard:escape-stack && pnpm guard:css-undefined-vars && pnpm guard:css-size-tokens && pnpm guard:button-standard && pnpm guard:form-control-colors && pnpm guard:spec-test-linkage',
+    'pnpm build:typecheck-deps && pnpm typecheck:workspaces && pnpm lint && pnpm guard:stable-business-types && pnpm guard:canvas-selection-ownership && pnpm guard:dialog-sizing && pnpm guard:media-fit-contain && pnpm guard:elevation-z && pnpm guard:escape-stack && pnpm guard:css-undefined-vars && pnpm guard:css-size-tokens && pnpm guard:button-standard && pnpm guard:form-control-colors && pnpm guard:spec-test-linkage && pnpm guard:editor-remote-model-static-truth',
   );
   assert.doesNotMatch(scripts.build, /diagnose:gates/);
   assert.doesNotMatch(scripts['desktop:dev:latest'], /diagnose:gates/);
@@ -284,6 +309,7 @@ test('诊断入口失败后继续运行后续门禁并最终失败', () => {
     'guard:button-standard',
     'guard:form-control-colors',
     'guard:spec-test-linkage',
+    'guard:editor-remote-model-static-truth',
   ]);
   assert.match(result.stdout, /未运行项：无/);
 });
@@ -309,6 +335,11 @@ test('预飞诊断入口失败后继续运行后续门禁并最终失败', () =>
     'guard:no-internal-timeout',
     'guard:ipc-contract-parse',
     'guard:contract-ownership',
+    'guard:media-input-source-kind-coverage',
+    'guard:no-media-input-downgrade',
+    'guard:model-input-modalities',
+    'guard:no-structural-fields-in-normalized-arguments',
+    'guard:nested-formdata-body-handled',
     'guard:no-runtime-json-leak',
     'guard:no-json-clone',
     'guard:local-media-url-resolution',
@@ -321,6 +352,17 @@ test('预飞诊断入口失败后继续运行后续门禁并最终失败', () =>
   assert.match(result.stdout, /首个失败项：guard:no-internal-timeout/);
   assert.match(result.stdout, /未运行项：无/);
   assert.match(result.stdout, /可单独复现：pnpm guard:no-internal-timeout/);
+});
+
+test('诊断入口清单与硬门禁主链同源（顺序与项目一致）', () => {
+  const stepsOf = (script) => script.split(' && ').map((step) => step.replace(/^pnpm /, '').trim());
+  const namesIn = (filePath) =>
+    Array.from(fs.readFileSync(filePath, 'utf8').matchAll(/\n {4}name: '([^']+)'/g), (match) => match[1]);
+
+  // 诊断入口的步骤表是手写清单，最容易与主链漂移（2026-11-07 实测：预飞诊断少了 5 条守卫，
+  // 用它排障会得到假全绿）。这里把它钉成「与主链逐项同序」。
+  assert.deepEqual(namesIn(diagnoseGatesPath), stepsOf(scripts['check:types-and-boundaries']));
+  assert.deepEqual(namesIn(diagnosePreflightPath), stepsOf(scripts['check:preflight']));
 });
 
 test('lint 保持零 warning 容忍', () => {

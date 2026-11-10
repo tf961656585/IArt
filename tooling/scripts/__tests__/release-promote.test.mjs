@@ -4,7 +4,17 @@
 // 纪律：本文件不得钉死根 package.json 的实际版本值（测试一律用夹具假值）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { __test_only__ } from '../release-promote.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, '..', '..', '..');
+const releaseWorkflowSource = fs.readFileSync(
+  path.join(repoRoot, '.github', 'workflows', 'release.yml'),
+  'utf8',
+);
 
 const {
   parseFeedVersion,
@@ -17,6 +27,8 @@ const {
   assertLatestRelease,
   findExactTagRef,
   resolveTagAction,
+  assertReleaseNotesReady,
+  DRAFT_NOTES_PLACEHOLDER_MARKER,
 } = __test_only__;
 
 test('parseFeedVersion 解析 electron-builder latest.yml 形状', () => {
@@ -151,4 +163,35 @@ test('resolveTagAction：tag 指向不同提交时拒绝覆盖', () => {
 test('resolveTagAction：草稿缺 targetCommitish 时拒绝落 tag', () => {
   assert.throws(() => resolveTagAction(null, ''), /targetCommitish/);
   assert.throws(() => resolveTagAction('aaa', undefined), /targetCommitish/);
+});
+
+test('assertReleaseNotesReady：面向用户的正文放行', () => {
+  assert.doesNotThrow(() => assertReleaseNotesReady('## 本次更新\n- 失败任务说得清原因'));
+});
+
+test('assertReleaseNotesReady：空正文 / 非字符串一律拒绝', () => {
+  for (const body of ['', '   \n\t ', null, undefined, 123, {}]) {
+    assert.throws(() => assertReleaseNotesReady(body), /正文为空/, `应拒绝：${String(body)}`);
+  }
+});
+
+test('assertReleaseNotesReady：构建占位正文（含标记）拒绝转正', () => {
+  const placeholder = `Desktop release v9.9.9. ${DRAFT_NOTES_PLACEHOLDER_MARKER}; promote manually.`;
+  assert.throws(() => assertReleaseNotesReady(placeholder), /构建占位/);
+  // 真说明里夹带标记也拒绝：标记是「没写说明」的判据，不能靠后续补字绕过
+  assert.throws(() => assertReleaseNotesReady(`## 更新\n${DRAFT_NOTES_PLACEHOLDER_MARKER}`), /构建占位/);
+});
+
+test('workflow 与转正脚本的占位标记同源（漂移会让拦截静默失效）', () => {
+  // --notes 占位写的是这份正文；脚本按标记识别它。两处文本必须都含同一标记。
+  assert.equal(
+    releaseWorkflowSource.includes(DRAFT_NOTES_PLACEHOLDER_MARKER),
+    true,
+    'release.yml 的占位正文缺少转正脚本识别的标记',
+  );
+  assert.equal(
+    releaseWorkflowSource.includes('release-notes/'),
+    true,
+    'release.yml 未接入 release-notes/<tag>.md 正文来源',
+  );
 });

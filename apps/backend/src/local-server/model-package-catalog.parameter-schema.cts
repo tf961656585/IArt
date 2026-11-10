@@ -366,7 +366,8 @@ export const normalizeParameterField = (
           if (!Object.prototype.hasOwnProperty.call(item, "value")) return null;
           if (!isJsonValue(item.value)) return null;
           const label = normalizeString(item.label);
-          return label ? ({ value: item.value, label } as CatalogEnumOption) : ({ value: item.value } as CatalogEnumOption);
+          const option: CatalogEnumOption = { value: item.value, label: label || undefined };
+          return option;
         })
         .filter(notNullish)
     : undefined;
@@ -460,3 +461,4 @@ export const validatePortFieldKeyConsistency = ({
     );
   }
 };
+

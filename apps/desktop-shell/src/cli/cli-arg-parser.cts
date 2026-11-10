@@ -635,10 +635,13 @@ const parseCliArgsInner = (argv: readonly string[]): CliArgParseResult => {
       const arg = argRaw === undefined ? undefined : argRaw.flatMap((item) => parseKvList(item));
       const clientRequestId = scalarValues.get("client_request_id");
       const group = scalarValues.get("group");
+      // `--prompt` 可重复（spec 45 §5.1）：一个值传字符串（与引入意图结构前同形），
+      // 多个值传数组；每个提示词形成一个意图，同批共享模型/参数/引用/出生组。
+      const prompts = requireRawStringList("prompt", "--prompt");
       draft = {
         command: "generate",
         project: requireScalar("project", "--project"),
-        prompt: requireScalar("prompt", "--prompt"),
+        prompt: prompts.length === 1 ? (prompts[0] ?? "") : prompts,
         model: requireScalar("model", "--model"),
         ...(count !== undefined ? { count } : {}),
         ...(ref !== undefined ? { ref } : {}),

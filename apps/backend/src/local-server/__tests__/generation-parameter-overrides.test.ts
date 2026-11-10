@@ -163,6 +163,28 @@ void test('S3 枚举替换：选项替换、默认值随行；替换后旧默认
   );
 });
 
+void test('S3b 记录覆盖重建枚举：保留同值条目、新增值只写 value，不再推产物形态', () => {
+  const overrides = overridesOf({
+    official: [
+      { field_key: 'format', enum_options: ['png', 'jpeg', 'webp', 'gif', 'avif', 'ultra'] },
+    ],
+    custom: [],
+  });
+  assert.deepEqual(violationsOf(T2I_SOURCES, overrides), []);
+  const output = applyParameterOverrides(T2I_SOURCES, overrides);
+  const field = fieldRecordOf(output, 'format');
+  const options = Array.isArray(field.enum_options) ? field.enum_options : [];
+  assert.deepEqual(
+    options.map((option) => (isObjectRecord(option) ? option.value : null)),
+    ['png', 'jpeg', 'webp', 'gif', 'avif', 'ultra'],
+  );
+  // 产物形态已随 48 号 2.0.0 退场：覆盖既不复制、也不补写任何形态键。
+  assert.equal(
+    options.some((option) => isObjectRecord(option) && option.output_form !== undefined),
+    false,
+  );
+});
+
 void test('S4 档位收窄：sizeLevels/aspectPresets 子集生效；非法键与非画幅字段被拒', () => {
   const overrides = overridesOf({
     official: [{ field_key: 'size', resolution_preset_keys: ['1k', '2k'], aspect_preset_keys: ['1:1'] }],
@@ -361,6 +383,12 @@ void test('S7 非法覆盖拦截：保留键、格式、未知字段、重复、
         { field_key: 'size', enabled: false },
         { field_key: 'quality', enabled: false },
         { field_key: 'format', enabled: false },
+        { field_key: 'background', enabled: false },
+        { field_key: 'output_compression', enabled: false },
+        { field_key: 'complexity', enabled: false },
+        { field_key: 'frame_count', enabled: false },
+        { field_key: 'frame_duration_ms', enabled: false },
+        { field_key: 'input_fidelity', enabled: false },
         { field_key: 'moderation', enabled: false },
       ],
       custom: [],
@@ -425,7 +453,7 @@ void test('族模板参数描述：字段、wire 名、预设与保留键（GET 
   const descriptor = result.descriptor;
   assert.deepEqual(
     descriptor.official_fields.map((field) => field.field_key),
-    ['image', 'size', 'quality', 'format', 'moderation'],
+    ['image', 'size', 'quality', 'format', 'background', 'output_compression', 'complexity', 'frame_count', 'frame_duration_ms', 'input_fidelity', 'moderation'],
     '素材位行排在官方参数区最前；其余官方参数顺序不变',
   );
   const mediaField = descriptor.official_fields.find((field) => field.field_key === 'image');
@@ -447,6 +475,7 @@ void test('族模板参数描述：字段、wire 名、预设与保留键（GET 
   const format = descriptor.official_fields.find((field) => field.field_key === 'format');
   assert.ok(format);
   assert.equal(format.wire_name, 'output_format', 'wire name comes from payload_rules body.<键> target');
+  // gif 在预设里是 opt_in（默认关闭，spec 48 §4.5）：初始可选值不含它，记录显式加入才启用。
   assert.deepEqual(format.enum_options, ['png', 'jpeg', 'webp']);
   assert.equal(format.label, '图片格式');
 
@@ -517,6 +546,12 @@ void test('校验错误文案用户可读：无内部术语上屏、用中文显
         { field_key: 'size', enabled: false },
         { field_key: 'quality', enabled: false },
         { field_key: 'format', enabled: false },
+        { field_key: 'background', enabled: false },
+        { field_key: 'output_compression', enabled: false },
+        { field_key: 'complexity', enabled: false },
+        { field_key: 'frame_count', enabled: false },
+        { field_key: 'frame_duration_ms', enabled: false },
+        { field_key: 'input_fidelity', enabled: false },
         { field_key: 'moderation', enabled: false },
       ],
       custom: [],

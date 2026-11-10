@@ -1,9 +1,12 @@
 import * as crypto from 'node:crypto';
 import {
   BatchIntentSnapshotSchema,
+  MAX_BATCH_TASK_COUNT,
   type PromptDockBatchSubmitRequest,
   type BatchIntentSnapshot,
 } from '@iart/contracts';
+import type { TaskSubmitMediaInput } from '@iart/contracts/task-submit-media-input';
+import type { MentionMapEntry } from '@iart/contracts/task-submit-request';
 import {
   assembleGenerationTaskRequest,
 } from '../request-assembler.cts';
@@ -43,6 +46,51 @@ const getAssembledExecutionPlan = (assembled: unknown): AssembledExecutionPlan |
   return executionPlan as AssembledExecutionPlan;
 };
 
+/**
+ * 受理入口的意图归一（spec 45 §5.1）。
+ *
+ * 新客户端提交 `intents` 列表；旧客户端仍按顶层单意图字段提交，归一成「一个意图」。
+ * 受理之后整条链只认意图列表，不再出现第二条读法。
+ */
+/** 意图参数空间：直接取提交契约的字段类型，不在这里复制一份裸 Record。 */
+type SubmitIntentArguments = NonNullable<PromptDockBatchSubmitRequest['arguments']>;
+
+interface ResolvedSubmitIntent {
+  prompt: string;
+  arguments: SubmitIntentArguments;
+  media_inputs?: TaskSubmitMediaInput[];
+  reference_asset_ids?: string[];
+  task_count: number;
+  mention_map?: Record<string, MentionMapEntry>;
+}
+
+const resolveSubmitIntents = (body: PromptDockBatchSubmitRequest): ResolvedSubmitIntent[] => {
+  if (body.intents !== undefined && body.intents.length > 0) {
+    return body.intents.map((intent) => ({
+      prompt: intent.prompt,
+      arguments: intent.arguments,
+      ...(intent.media_inputs === undefined ? {} : { media_inputs: intent.media_inputs }),
+      ...(intent.reference_asset_ids === undefined
+        ? {}
+        : { reference_asset_ids: intent.reference_asset_ids }),
+      task_count: intent.task_count,
+      ...(intent.mention_map === undefined ? {} : { mention_map: intent.mention_map }),
+    }));
+  }
+  return [
+    {
+      prompt: body.prompt ?? '',
+      arguments: body.arguments ?? {},
+      ...(body.media_inputs === undefined ? {} : { media_inputs: body.media_inputs }),
+      ...(body.reference_asset_ids === undefined
+        ? {}
+        : { reference_asset_ids: body.reference_asset_ids }),
+      task_count: body.task_count ?? 1,
+      ...(body.mention_map === undefined ? {} : { mention_map: body.mention_map }),
+    },
+  ];
+};
+
 type AcceptResult =
   | { ok: true; batchId: string; intentSnapshot: BatchIntentSnapshot; tasks: Array<{ taskId: string; taskIndex: number; record: unknown }> }
   | { ok: false; code: string; message: string };
@@ -66,22 +114,33 @@ const acceptGenerationBatch = async (params: {
 }): Promise<AcceptResult> => {
   const { body, baseDir } = params;
   const batchId = generateBatchId();
-  const taskCount = body.task_count;
+  // 受理入口的意图归一（spec 45 §5.1）：旧客户端仍按顶层单意图字段提交，新客户端提交
+  // intents 列表；两条路径在受理处收敛成同一份「按序意图」，后续不再分支。
+  const intents = resolveSubmitIntents(body);
+  const taskCount = intents.reduce((sum, intent) => sum + intent.task_count, 0);
+  if (taskCount > MAX_BATCH_TASK_COUNT) {
+    return {
+      ok: false,
+      code: 'task_count_exceeded',
+      message: `一个批次最多 ${MAX_BATCH_TASK_COUNT} 个任务，当前各意图合计 ${taskCount} 个`,
+    };
+  }
   const taskIds = Array.from({ length: taskCount }, () => generateTaskId());
 
   const created_at = new Date().toISOString();
-  const mediaRefs = body.media_inputs ?? [];
-  const referenceAssetIds = body.reference_asset_ids ?? [];
   const intentCandidate = {
     batch_id: batchId,
     model_id: body.model_id,
     model_version: body.model_version,
-    prompt: body.prompt,
-    params: body.arguments,
-    media_refs: mediaRefs.length > 0 ? mediaRefs : undefined,
-    // 参考区资产溯源 id（复用回填参考区用；空数组不入快照，与 media_refs 同口径）。
-    reference_asset_ids: referenceAssetIds.length > 0 ? referenceAssetIds : undefined,
-    task_count: taskCount,
+    intents: intents.map((intent) => ({
+      prompt: intent.prompt,
+      params: intent.arguments,
+      media_refs: (intent.media_inputs ?? []).length > 0 ? intent.media_inputs : undefined,
+      // 参考区资产溯源 id（复用回填参考区用；空数组不入快照，与 media_refs 同口径）。
+      reference_asset_ids:
+        (intent.reference_asset_ids ?? []).length > 0 ? intent.reference_asset_ids : undefined,
+      task_count: intent.task_count,
+    })),
     task_ids: taskIds,
     created_at,
   };
@@ -91,23 +150,33 @@ const acceptGenerationBatch = async (params: {
   }
   const intentSnapshot: BatchIntentSnapshot = intentParsed.data;
 
-  // 同一 intent 组装一次；N 个任务共享同份 payload（固定任务数，成员不可补位）。
-  let executionPlan: AssembledExecutionPlan | null = null;
+  // 每个意图组装一次；同一意图内的任务共享同份 payload（固定任务数，成员不可补位）。
+  const executionPlans: AssembledExecutionPlan[] = [];
   try {
-    // reference_asset_ids 是提交面的资产溯源引用；payload 媒体内容只经 media_inputs
-    // （attachment）物化。input_assets 是字段映射槽（mergeFieldMaps 只收 plain object），
-    // 不接收字符串数组——不把 reference_asset_ids 误传进去。
-    const assembled = await assembleGenerationTaskRequest(
-      {
-        model_id: body.model_id,
-        prompt: body.prompt,
-        arguments: body.arguments,
-        media_inputs: body.media_inputs,
-        mention_map: body.mention_map,
-      },
-      { projectPath: body.project_path, baseDir } satisfies AssemblerContext,
-    );
-    executionPlan = getAssembledExecutionPlan(assembled);
+    for (const intent of intents) {
+      // reference_asset_ids 是提交面的资产溯源引用；payload 媒体内容只经 media_inputs
+      // （attachment）物化。input_assets 是字段映射槽（mergeFieldMaps 只收 plain object），
+      // 不接收字符串数组——不把 reference_asset_ids 误传进去。
+      const assembled = await assembleGenerationTaskRequest(
+        {
+          model_id: body.model_id,
+          prompt: intent.prompt,
+          arguments: intent.arguments,
+          media_inputs: intent.media_inputs,
+          mention_map: intent.mention_map,
+        },
+        { projectPath: body.project_path, baseDir } satisfies AssemblerContext,
+      );
+      const plan = getAssembledExecutionPlan(assembled);
+      if (!plan) {
+        return {
+          ok: false,
+          code: 'assembly_failed',
+          message: `第 ${executionPlans.length + 1} 个意图没有产出执行计划`,
+        };
+      }
+      executionPlans.push(plan);
+    }
   } catch (error) {
     return {
       ok: false,
@@ -115,12 +184,16 @@ const acceptGenerationBatch = async (params: {
       message: error instanceof Error ? error.message : String(error),
     };
   }
-  if (!executionPlan) {
-    return { ok: false, code: 'assembly_failed', message: 'assembleGenerationTaskRequest returned no execution plan' };
-  }
 
   const tasks: Array<{ taskId: string; taskIndex: number; record: unknown }> = [];
-  for (let index = 0; index < taskIds.length; index += 1) {
+  let taskCursor = 0;
+  for (let intentIndex = 0; intentIndex < intents.length; intentIndex += 1) {
+  const intent = intents[intentIndex];
+  const executionPlan = executionPlans[intentIndex];
+  if (intent === undefined || executionPlan === undefined) continue;
+  for (let slot = 0; slot < intent.task_count; slot += 1) {
+    const index = taskCursor;
+    taskCursor += 1;
     const taskId = taskIds[index];
     if (!taskId) continue;
     // normalizeFormalTaskExecutionPlan 依赖 metadata 里的 model_id / modelId 与 taskExecutionPlan；
@@ -142,6 +215,7 @@ const acceptGenerationBatch = async (params: {
         // 按白名单归一化，未登记的键会被静默丢弃（写了也读不到），且每任务一份副本会随
         // 任务数放大存储与通知体积。
         taskIndex: index,
+        intentIndex,
         projectPath: body.project_path,
         nodeGraphId: null,
         sourceNodeId: null,
@@ -166,6 +240,7 @@ const acceptGenerationBatch = async (params: {
       return { ok: false, code: 'task_record_build_failed', message: `failed to build task record for ${taskId}` };
     }
     tasks.push({ taskId, taskIndex: index, record });
+  }
   }
 
   return {

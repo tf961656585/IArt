@@ -7,6 +7,7 @@ import {
   releaseLease,
   type CredentialLease,
 } from "./provider-connection/credential-store.cts";
+import { buildCredentialTaskFailure } from "./credential-failure.cts";
 
 import { resolveSnapshotAuth } from "./provider-connection/snapshot-protocol.cts";
 import { getFetchDispatcher } from "./fetch-dispatcher.cts";
@@ -170,7 +171,10 @@ const executeHttpTask = async (
       return await patchTaskRecord(record, {
         status: TASK_STATUS.FAILED,
         finishedAt: Date.now(),
-        error: { code: mappedCode, message: snapRes.message, stage: "submit" },
+        error: mappedCode === "credential_missing"
+          // 快照构建阶段判定凭证缺失：连接没有可绑定凭证，按 absent 给用户人话指引。
+          ? buildCredentialTaskFailure("absent", "submit")
+          : { code: mappedCode, message: snapRes.message, stage: "submit" },
         progress: { phase: null },
       } as PlainObject);
     }
@@ -183,7 +187,7 @@ const executeHttpTask = async (
       return await patchTaskRecord(record, {
         status: TASK_STATUS.FAILED,
         finishedAt: Date.now(),
-        error: { code: "credential_missing", message: "connection credential missing", stage: "submit" },
+        error: buildCredentialTaskFailure("absent", "submit"),
         progress: { phase: null },
       } as PlainObject);
     }
@@ -193,12 +197,16 @@ const executeHttpTask = async (
       credentialVersion: typeof credVer === "number" ? credVer : 0,
       connectionRevision: typeof connRev === "number" ? connRev : 0,
     });
-    if (!leaseRes) {
-      loggingModule.logDebug("[task-engine-http] acquireLease failed", { credentialRef: credRef, connectionId: connId });
+    if (!leaseRes.ok) {
+      loggingModule.logWarn("[task-engine-http] credential lease unavailable", {
+        credentialRef: credRef,
+        connectionId: connId,
+        reason: leaseRes.reason,
+      });
       return await patchTaskRecord(record, {
         status: TASK_STATUS.FAILED,
         finishedAt: Date.now(),
-        error: { code: "credential_missing", message: "failed to acquire credential lease", stage: "submit" },
+        error: buildCredentialTaskFailure(leaseRes.reason, "submit"),
         progress: { phase: null },
       } as PlainObject);
     }

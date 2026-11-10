@@ -1,9 +1,9 @@
-import type {
-  FamilyTemplateOfficialField,
-  FamilyTemplateParameterDescriptor,
-  GenerationMediaSlotId,
-  InterfaceRecipe,
-  ParameterOverrides,
+import {
+  type FamilyTemplateOfficialField,
+  type FamilyTemplateParameterDescriptor,
+  type GenerationMediaSlotId,
+  type InterfaceRecipe,
+  type ParameterOverrides,
 } from '@iart/contracts';
 import type { LocaleResources } from './model-package-catalog.localization.cts';
 import { isObjectRecord } from './model-package-catalog.shared.cts';
@@ -167,10 +167,17 @@ export const buildFamilyTemplateParameterDescriptorFromSources = ({
     const wireLocation: FamilyTemplateOfficialField['wire_location'] = wireFact?.wire_location ?? 'body';
     const defaultValue = isScalarParameterValue(rawField.default_value) ? rawField.default_value : null;
     const enumOptions: FamilyTemplateParameterDescriptor['official_fields'][number]['enum_options'] = [];
+    const optInEnumOptions: NonNullable<FamilyTemplateOfficialField['opt_in_enum_options']> = [];
     if (Array.isArray(rawField.enum_options)) {
       for (const option of rawField.enum_options) {
         if (!isObjectRecord(option)) continue;
-        if (isScalarParameterValue(option.value)) enumOptions.push(option.value);
+        if (!isScalarParameterValue(option.value)) continue;
+        // 默认关闭的取值（opt_in）：不进入初始可选值，单独下发供编辑器做「显式启用」入口。
+        if (option.opt_in === true) {
+          optInEnumOptions.push(option.value);
+          continue;
+        }
+        enumOptions.push(option.value);
       }
     }
     const labelPrefix = labelKey.endsWith('.label') ? labelKey.slice(0, -'.label'.length) : labelKey;
@@ -208,6 +215,7 @@ export const buildFamilyTemplateParameterDescriptorFromSources = ({
       required: rawField.required === true,
       default_value: defaultValue,
       enum_options: enumOptions,
+      ...(optInEnumOptions.length > 0 ? { opt_in_enum_options: optInEnumOptions } : {}),
       resolution_presets: resolutionPresets,
       aspect_presets: aspectPresets,
     });

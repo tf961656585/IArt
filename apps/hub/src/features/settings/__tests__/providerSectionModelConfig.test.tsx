@@ -84,6 +84,7 @@ const generationRecord: CustomGenerationModel = {
   remote_model_id: 'gpt-image-2',
   family_adapter_id: 'openai-image-v1',
   accepted_media_slots: [],
+  capability_labels: [],
   parameter_overrides: { official: [], custom: [] },
   created_at: '2026-09-17T00:00:00.000Z',
 };
@@ -212,6 +213,7 @@ const stubFetch = (
             remote_model_id: body.remote_model_id ?? body.model_id ?? generationRecord.model_id,
             family_adapter_id: body.family_adapter_id ?? 'openai-image-v1',
             accepted_media_slots: Array.isArray(body.accepted_media_slots) ? body.accepted_media_slots : [],
+            capability_labels: [],
             parameter_overrides: { official: [], custom: [] },
             created_at: '2026-09-25T00:00:00.000Z',
           },

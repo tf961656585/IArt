@@ -3,17 +3,17 @@
   "model_id_seed": "interface-format-golden-model",
   "formats": {
     "openai-image-v1": {
-      "descriptor_sha256": "07435837f5cbd5f9d70a8cf5f05711ad350d4d9f847f00d64acbf366bce52071",
+      "descriptor_sha256": "1a0f95771463728b3365abc1c6d2315ab2f5fdf746258525037810213d056840",
       "subsets": [
         {
           "slots": [],
-          "sources_sha256": "6b68bceee33c502fd147e0a5cbc553c6f97eca7caaf7aad6e513f9bb40559838"
+          "sources_sha256": "bed14ad12267437ad808e2ca2c0473ef5e416ba006fbf1224cc13957143be752"
         },
         {
           "slots": [
             "reference_image"
           ],
-          "sources_sha256": "0d8a154f2efb91343ab478998451558c7fd6efaa547c3a70b35fa45a3888f3aa"
+          "sources_sha256": "2bb61e8d1fbf0fb001f5cd6f11f165398a2ec485238aa91113b184af3ce364ee"
         }
       ]
     },

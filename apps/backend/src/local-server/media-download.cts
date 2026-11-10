@@ -5,6 +5,7 @@ import * as stream from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 import { resolveLocalMediaUrl } from './project-media-scope.cts';
+import { sniffMediaFormatOfFile } from './media-sniff.cts';
 
 import {
   getEffectiveMaxMediaSize,
@@ -420,7 +421,12 @@ async function downloadRemoteMediaToFiles(url: unknown, options: DownloadOptions
     }
 
     const digest = hash.digest('hex');
-    const filename = `${digest}${ext}`;
+    // 扩展名与 mime 以字节为准（spec 48 §5.5 / OF-05）：上游声明的 Content-Type 可能
+    // 与内容不符（实测 GIF 内容被声明成 image/png）；认不出时才回落声明值与 URL 后缀。
+    const sniffed = sniffMediaFormatOfFile(tmpPath);
+    const finalExt = sniffed?.extension ?? ext;
+    const finalMimeType = sniffed?.mimeType ?? (contentType || 'application/octet-stream');
+    const filename = `${digest}${finalExt}`;
     const targetPath = path.join(mediaDir, filename);
     if (fs.existsSync(targetPath)) {
       try {
@@ -436,7 +442,7 @@ async function downloadRemoteMediaToFiles(url: unknown, options: DownloadOptions
       url: (options.projectRef ? resolveLocalMediaUrl(options.projectRef, filename) : null) ?? `/files/${encodeURIComponent(filename)}`,
       fileKey: filename,
       sizeBytes,
-      mimeType: contentType || 'application/octet-stream',
+      mimeType: finalMimeType,
       mediaType,
     };
     return result;

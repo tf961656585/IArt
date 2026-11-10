@@ -3,17 +3,21 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { NodeProps } from '@xyflow/react';
 import { useCanvasStore } from '../../store/canvasStore';
+import { useExecutionStore } from '../../store/executionStore';
 import { useNodeFromStore } from '../../hooks/useNodeFromStore';
-import type { GraphNode, TaskNodeData } from '../../types/node';
+import type { GraphNode, NodeTaskInfo, TaskNodeData } from '../../types/node';
 import { reuseTaskToDraft } from '@/features/promptdock/assetReuse';
+import { focusHubModelProviders } from '@/features/promptdock/hubFocus';
 import { cancelTask, requeryTask } from '@/client/api/promptDockApi';
 import { Button } from '@/components/ui/button';
 import { resolveTaskFailurePresentation } from '../../utils/taskFailurePresentation';
 import {
+  isCredentialMissingFailure,
   resolveRequeryRejectionMessage,
   resolveTaskFailureActions,
 } from '../../utils/taskFailureActions';
 import { getTaskStatusOverlayText } from '../../utils/taskStatusMeta';
+import { TaskStatusDialog } from './shared/TaskStatusDialog';
 
 /**
  * 任务节点渲染组件（孵化胚胎态，docs/editor/visual-design.md §5.4 / §6）。
@@ -21,11 +25,16 @@ import { getTaskStatusOverlayText } from '../../utils/taskStatusMeta';
  * 任务节点 = 资产节点的胚胎态：媒体表面（彩色运行底）+ 孵化 overlay。
  * 状态全部以 overlay 承载：左上状态白 pill 徽章组（状态 pill + 任务身份徽章）、
  * 居中状态胶囊（进行态）、取消圆钮（运行态常驻）、进度 hairline（仅 generating）、
- * 失败 overlay（原因 + 详情折叠 + 按失败阶段分流的动作）。
+ * 失败 overlay（两行摘要 + 「详情」入口 + 按失败阶段分流的动作）。
+ *
+ * 失败卡的信息分层：卡片里只放摘要（两行钳制 + 末尾渐隐），完整摘要、错误码、
+ * 服务返回内容与原始报错统一由「错误详情」弹窗承载——240×160 的卡片放不下长文案，
+ * 内联折叠又会让用户在一个更小的框里读更长的文本（docs/editor/失败任务重新查询-design.md §6）。
  *
  * 失败态的动作口径见 docs/editor/失败任务重新查询-design.md：
  * - 查询类失败：主「重新查询结果」+ 次「重新生成」+ 危险「删除任务」；
  * - 提交类 / 无阶段 / 不可重查失败：主「重试」+ 危险「删除任务」；
+ * - 密钥缺失失败（`credential_missing`）额外追加次级「去填写密钥」→ Hub 服务商设置；
  * - 重新查询受理后保持失败卡 + 禁用动作，等后端状态通知把节点切到等待态。
  *
  * 深色 = 近黑孵化暗室；浅色 = 去罩描边（令牌分叉，样式承载在 globals.css）。
@@ -104,7 +113,14 @@ export const TaskNode = memo(function TaskNode({ id, selected }: NodeProps) {
 
   const [requeryPending, setRequeryPending] = useState(false);
   const [requeryError, setRequeryError] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const requeryErrorRef = useRef<HTMLParagraphElement | null>(null);
+  const detailsEntryRef = useRef<HTMLButtonElement | null>(null);
+
+  // 服务商返回原文（执行域诊断）——节点内联详情曾把它丢掉，只剩结构化的 rawDetailText。
+  const backendMessageText = useExecutionStore(
+    (state) => state.getNodeDiagnosticInfo(id, undefined)?.backendMessage,
+  );
 
   // 状态离开 failed（受理后进入 polling，或成功 morph）即清理重新查询的本地待处理态；
   // 再次失败时由最新阶段重新计算按钮，不沿用上一次请求的 pending/错误。
@@ -112,6 +128,7 @@ export const TaskNode = memo(function TaskNode({ id, selected }: NodeProps) {
     if (typed.status !== 'failed') {
       setRequeryPending(false);
       setRequeryError(null);
+      setDetailsOpen(false);
     }
   }, [typed.status]);
 
@@ -125,6 +142,7 @@ export const TaskNode = memo(function TaskNode({ id, selected }: NodeProps) {
     remoteRequestId: typed.remoteRequestId ?? null,
   });
   const isQueryFailure = failureActions.primary === 'requery';
+  const showCredentialFix = isCredentialMissingFailure(typed.failure);
   const taskIndexLabel = typed.taskIndex + 1;
   const taskIdentity = `任务 #${taskIndexLabel} · ${typed.modelId || typed.label}`;
   const failureSummaryId = `task-failure-summary-${id}`;
@@ -158,7 +176,7 @@ export const TaskNode = memo(function TaskNode({ id, selected }: NodeProps) {
   const handleRegenerate = () => {
     if (requeryPending) return;
     setRequeryError(null);
-    reuseTaskToDraft({ batchId: typed.batchId, modelId: typed.modelId });
+    reuseTaskToDraft({ batchId: typed.batchId, modelId: typed.modelId, taskId: typed.taskId });
   };
 
   const handleDelete = () => {
@@ -167,27 +185,53 @@ export const TaskNode = memo(function TaskNode({ id, selected }: NodeProps) {
     removeNode(id, { deleteGroupMembers: false });
   };
 
+  // 节点任务信息投影：失败摘要与「错误详情」弹窗共用同一份，避免两处各拼一次形状。
+  const taskInfo = useMemo<NodeTaskInfo>(
+    () => ({
+      taskId: typed.taskId,
+      remoteRequestId: typed.remoteRequestId ?? undefined,
+      taskIndex: typed.taskIndex,
+      modelId: typed.modelId,
+      status: typed.status,
+      progress: typed.progressPhase === null ? null : { phase: typed.progressPhase },
+      createdAt: typed.createdAt,
+      updatedAt: typed.updatedAt,
+      error: typed.errorMessage ?? undefined,
+      failure: typed.failure,
+      batchId: typed.batchId,
+    }),
+    [typed],
+  );
+
   const failurePresentation = useMemo(
     () =>
       resolveTaskFailurePresentation({
-        taskInfo: {
-          taskId: typed.taskId,
-          remoteRequestId: typed.remoteRequestId ?? undefined,
-          taskIndex: typed.taskIndex,
-          modelId: typed.modelId,
-          status: typed.status,
-          progress: typed.progressPhase === null ? null : { phase: typed.progressPhase },
-          createdAt: typed.createdAt,
-          updatedAt: typed.updatedAt,
-          error: typed.errorMessage ?? undefined,
-          failure: typed.failure,
-          batchId: typed.batchId,
-        },
-        backendMessage: null,
+        taskInfo,
+        backendMessage: backendMessageText ?? null,
         fallback: '这次生成失败了。',
       }),
-    [typed],
+    [taskInfo, backendMessageText],
   );
+
+  const handleCopyTaskId = () => {
+    const taskId = typed.taskId;
+    if (!taskId) return;
+    const clipboard = navigator.clipboard;
+    if (!clipboard || typeof clipboard.writeText !== 'function') {
+      console.debug('[TaskNode] 跳过复制任务编号：clipboard API 不可用');
+      return;
+    }
+    void clipboard.writeText(taskId).catch(() => {
+      console.debug('[TaskNode] 复制任务编号失败');
+    });
+  };
+
+  // 弹窗关闭后焦点回到入口：鼠标点按钮打开时浮层自己也能还原，但键盘打开与画布缩放
+  // 场景下不保证，显式接管一次。
+  const handleCloseAutoFocus = (event: Event) => {
+    event.preventDefault();
+    detailsEntryRef.current?.focus();
+  };
 
   const overlayStatusText = getTaskStatusOverlayText(typed.status, typed.progressPhase);
   // 终态（failed/succeeded/cancelled）无 overlayText，回落中文状态文案（徽章 pill 展示）。
@@ -286,16 +330,9 @@ export const TaskNode = memo(function TaskNode({ id, selected }: NodeProps) {
                   {requeryError}
                 </p>
               ) : null}
-              <p className="sum" id={failureSummaryId}>
+              <p className="sum sum-clamp-2" id={failureSummaryId}>
                 {failurePresentation?.summary ?? typed.errorMessage ?? '这次生成失败了。'}
               </p>
-              {failurePresentation &&
-              (failurePresentation.backendMessage || failurePresentation.rawDetailText) ? (
-                <details className="failure-details">
-                  <summary>详情</summary>
-                  <pre>{failurePresentation.backendMessage ?? failurePresentation.rawDetailText}</pre>
-                </details>
-              ) : null}
             </div>
             <div className="failure-acts">
               <div className="acts acts-primary">
@@ -330,6 +367,36 @@ export const TaskNode = memo(function TaskNode({ id, selected }: NodeProps) {
                     重新生成
                   </Button>
                 ) : null}
+                {/* 密钥缺失失败：跨窗口修复出口（跳 Hub「设置 → 服务商与模型」）。
+                    次级动作，排在既有动作之后，不改变主/次/危险的顺序与权重。 */}
+                {showCredentialFix ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="2xs"
+                    className="nodrag task-failure-action task-failure-secondary"
+                    onClick={focusHubModelProviders}
+                  >
+                    去填写密钥
+                  </Button>
+                ) : null}
+                {/* 阅读出口：卡片只放两行摘要，全文与排障信息进弹窗。
+                    常显——短摘要失败同样需要错误码、批次编号与服务返回原文。
+                    文案收成「详情」是宽度预算的结果：查询类失败那一行还有
+                    「重新查询结果 + 重新生成」，四个字的入口会把删除任务挤到第二行。 */}
+                <button
+                  ref={detailsEntryRef}
+                  type="button"
+                  className="nodrag task-failure-detail"
+                  aria-haspopup="dialog"
+                  aria-label={`查看任务 #${taskIndexLabel} 的详情`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setDetailsOpen(true);
+                  }}
+                >
+                  详情
+                </button>
               </div>
               <div className="acts acts-danger">
                 <Button
@@ -351,6 +418,20 @@ export const TaskNode = memo(function TaskNode({ id, selected }: NodeProps) {
               </span>
             ) : null}
           </div>
+        ) : null}
+
+        {/* 错误详情弹窗：卡片只放两行摘要，完整摘要 / 错误码 / 服务返回原文在这里读。 */}
+        {typed.status === 'failed' ? (
+          <TaskStatusDialog
+            open={detailsOpen}
+            onOpenChange={setDetailsOpen}
+            onCloseAutoFocus={handleCloseAutoFocus}
+            title={`任务 #${taskIndexLabel} · ${typed.modelId || typed.label}`}
+            taskInfo={taskInfo}
+            backendMessage={backendMessageText ?? null}
+            batchId={typed.batchId || undefined}
+            onCopyTaskId={handleCopyTaskId}
+          />
         ) : null}
 
         {/* 取消 note：命令已受理、投影待移除的短暂窗口（视觉重量低于失败） */}

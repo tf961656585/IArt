@@ -66,13 +66,36 @@ const globToRegExp = (pattern) => {
 
 const readJson = (filePath) => JSON.parse(fs.readFileSync(filePath, 'utf8'));
 
+// 开放 Record 的豁免只来自「文件路径 + 精确类型名」的显式登记（2026-11-07 拍板：
+// 命名通配豁免退役——类型叫 *Result/*Params 就能放行，等于改个名即可绕过规则）。
+const compileOpenRecordRegistry = (entries) => {
+  const registry = new Map();
+  for (const entry of entries ?? []) {
+    const relPath = toPosix(entry?.path ?? '');
+    const types = entry?.types ?? [];
+    const reason = String(entry?.reason ?? '').trim();
+    if (!relPath) throw new Error('registeredOpenRecords 登记缺少 path');
+    if (!Array.isArray(types) || types.length === 0) throw new Error(`registeredOpenRecords 缺少 types：${relPath}`);
+    if (!reason) throw new Error(`registeredOpenRecords 缺少 reason：${relPath}`);
+    for (const type of types) {
+      if (typeof type !== 'string' || type.includes('*')) {
+        throw new Error(`命名通配豁免已退役：「${relPath}」的登记项 ${type} 必须写精确类型名`);
+      }
+      const bucket = registry.get(relPath) ?? new Set();
+      if (bucket.has(type)) throw new Error(`registeredOpenRecords 重复登记：${relPath} ${type}`);
+      bucket.add(type);
+      registry.set(relPath, bucket);
+    }
+  }
+  return registry;
+};
+
 const compilePolicy = (policy) => ({
   stableZones: (policy.stableZones ?? []).map((item) => toPosix(item).replace(/\/$/, '')),
   boundaryZones: (policy.boundaryZones ?? []).map(globToRegExp),
   ignorePaths: (policy.ignorePaths ?? []).map(globToRegExp),
-  openMapNames: policy.openMapNames ?? [],
+  registeredOpenRecords: compileOpenRecordRegistry(policy.registeredOpenRecords),
   allowedFixedFieldObjects: policy.allowedFixedFieldObjects ?? [],
-  allowedRecordAliases: new Set(policy.allowedRecordAliases ?? []),
   fileExtensions: new Set(policy.fileExtensions ?? ['.ts', '.tsx', '.cts', '.mts']),
 });
 
@@ -82,8 +105,6 @@ const matchesNamePattern = (name, pattern) => {
   const regex = new RegExp(`^${pattern.split('*').map(escapeRegExp).join('.*')}$`);
   return regex.test(name);
 };
-
-const matchesAnyNamePattern = (name, patterns) => patterns.some((pattern) => matchesNamePattern(name, pattern));
 
 const matchesObjectPattern = (text, pattern) => {
   if (pattern.startsWith('*.')) return text.endsWith(pattern.slice(1));
@@ -203,11 +224,13 @@ const isStringLiteralElementAccess = (node) =>
   ts.isStringLiteralLike(node.argumentExpression) &&
   /^[A-Za-z_][A-Za-z0-9_]*$/.test(node.argumentExpression.text);
 
-const shouldAllowRecord = (node, policy) => {
+const shouldAllowRecord = (node, policy, relPath) => {
   const declarationName = getDeclarationName(node);
   if (!declarationName) return false;
+  // 转换助手（is/to/read/parse/normalize + ...Record|Object）返回开放形状是函数职责，
+  // 不是类型命名豁免；类型侧只认登记表。
   if (/^(is|as|to|read|parse|normalize)[A-Z].*(Record|Object)$/.test(declarationName)) return true;
-  return policy.allowedRecordAliases.has(declarationName) || matchesAnyNamePattern(declarationName, policy.openMapNames);
+  return policy.registeredOpenRecords.get(relPath)?.has(declarationName) ?? false;
 };
 
 const shouldAllowFixedFieldAccess = (node, sourceFile, policy) => {
@@ -221,7 +244,7 @@ const scanFile = ({ absPath, relPath }, policy) => {
   const issues = [];
 
   const visit = (node) => {
-    if (isRecordStringUnknown(node) && !shouldAllowRecord(node, policy)) {
+    if (isRecordStringUnknown(node) && !shouldAllowRecord(node, policy, relPath)) {
       issues.push(
         createIssue(
           sourceFile,
@@ -229,12 +252,12 @@ const scanFile = ({ absPath, relPath }, policy) => {
           node,
           'stable/no-naked-record-string-unknown',
           '稳定业务区禁止裸 Record<string, unknown>。',
-          '为内部结构声明固定字段类型；若它确实是开放结构，用 Raw/External/Dynamic/*Map 等命名表达边界。',
+          '为内部结构声明固定字段类型；确需开放形状时，在 tooling/policies/stable-business-types.policy.json 的 registeredOpenRecords 按「文件 + 精确类型名 + 理由」登记。',
         ),
       );
     }
 
-    if (isStringUnknownIndexSignature(node) && !shouldAllowRecord(node, policy)) {
+    if (isStringUnknownIndexSignature(node) && !shouldAllowRecord(node, policy, relPath)) {
       issues.push(
         createIssue(
           sourceFile,
@@ -242,7 +265,7 @@ const scanFile = ({ absPath, relPath }, policy) => {
           node,
           'stable/no-string-unknown-index-signature',
           '稳定业务区禁止裸 string -> unknown 索引签名。',
-          '改为固定字段类型；若 key 天然开放，用明确的 *Map/*ById/Raw* 类型承载。',
+          '改为固定字段类型；key 天然开放时同样走 registeredOpenRecords 登记（禁止按命名通配放行）。',
         ),
       );
     }

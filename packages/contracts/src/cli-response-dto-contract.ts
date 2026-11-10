@@ -122,12 +122,29 @@ export type CliGenerateTaskIdentity = z.infer<typeof CliGenerateTaskIdentitySche
  * 标志。新受理 `replayed: false`；同 request_id 命中已受理批次时 `replayed: true` 且任务
  * 身份来自既有批次（未重新受理）。未携带幂等键的提交两者都缺省。
  */
+/**
+ * 单个意图的受理结果（spec 45 §5.1 / CLI spec §5.4 多意图提交）：该意图的任务数与它名下的
+ * 任务标识。任务按意图顺序连续分配，两字段合起来即可把批次任务拆回各个意图。
+ */
+export const CliGenerateIntentAcceptanceSchema = z
+  .object({
+    task_count: z.number().int().min(1),
+    task_ids: z.array(z.string().min(1)).min(1),
+  })
+  .strict();
+export type CliGenerateIntentAcceptance = z.infer<typeof CliGenerateIntentAcceptanceSchema>;
+
 export const CliGenerateAcceptanceSchema = z
   .object({
     /** 批次标识。 */
     batch_id: z.string().min(1),
     /** 受理的任务身份（CLI-046 扩展 PromptDockBatchTaskAcceptance：附画布投影身份）。 */
     tasks: z.array(CliGenerateTaskIdentitySchema).min(1),
+    /**
+     * 按序意图受理结果：每个意图的任务数与任务标识。
+     * 可选是因为旧版应用（尚未支持多意图）不回传该字段；新版本恒给出。
+     */
+    intents: z.array(CliGenerateIntentAcceptanceSchema).min(1).optional(),
     /** 幂等键回显：仅提交携带了 `--request-id`（或 CLI 自动生成）时输出。 */
     client_request_id: z.string().min(1).optional(),
     /** 幂等重放标志：true = 命中既有批次，任务身份为既有受理结果（未重复创建）。 */

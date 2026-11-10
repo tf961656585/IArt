@@ -51,8 +51,14 @@ export type CliGenerateRef = z.infer<typeof CliGenerateRefSchema>;
  */
 export const CliGenerateParamsSchema = z
   .object({
-    /** `--prompt` / `--model` 必填（spec §5.4）。 */
-    prompt: z.string(),
+    /**
+     * `--prompt` / `--model` 必填（spec §5.4）。
+     *
+     * 2026-11-06 起 `--prompt` 可重复（spec 45 §5.1 / CLI spec §5.4）：每个提示词形成一个意图，
+     * 一次提交形成多意图批次；同批意图共享模型/参数/引用/出生组，只有提示词不同。
+     * 单值时等价于引入意图结构前的单意图批次。
+     */
+    prompt: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
     model: z.string().min(1),
     /** `--count` 正整数可选：固定任务数。 */
     count: z.number().int().min(1).optional(),

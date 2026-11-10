@@ -352,6 +352,8 @@ const proxyOutcomeToResult = (
       return okResult(command, {
         batch_id: response.batch_id,
         tasks: response.tasks,
+        // 多意图受理回执（spec 45 §5.1 / CLI spec §5.4）：每个意图的任务数与任务标识。
+        ...(response.intents !== undefined ? { intents: response.intents } : {}),
         ...(response.client_request_id !== undefined ? { client_request_id: response.client_request_id } : {}),
         ...(response.replayed !== undefined ? { replayed: response.replayed } : {}),
         task_results: [],

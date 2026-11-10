@@ -27,6 +27,7 @@ import {
   buildInterfaceFormatDraft,
   conditionValues,
   type EditorState,
+  type EnumValueMetaRow,
   type ParamRow,
   type PromptLocation,
 } from './interfaceFormatDraft';
@@ -115,6 +116,14 @@ const parameterTypeOf = (field: FamilyTemplateOfficialField): ParamRow['type'] =
   return 'string';
 };
 
+/**
+ * 详情里的「默认关闭」声明 → 编辑器声明行。
+ *
+ * 只回填 `opt_in_enum_options`：缺项即「不默认关闭」——编辑器不回填、保存时也不写。
+ */
+const buildEnumMeta = (field: FamilyTemplateOfficialField): EnumValueMetaRow[] =>
+  (field.opt_in_enum_options ?? []).map((option) => ({ value: String(option), optIn: true }));
+
 const buildInitialState = (initial: EditorInitial | undefined): EditorState => {
   if (initial === undefined) {
     return {
@@ -170,8 +179,7 @@ const buildInitialState = (initial: EditorInitial | undefined): EditorState => {
     result !== undefined && result.kind !== 'needs_fetch' ? result : null;
   const afterResult = result !== undefined && result.kind === 'needs_fetch' ? result.after ?? null : null;
   const officialFields = detail.parameter_descriptor?.official_fields ?? [];
-  const asyncConfig = transport?.async ?? null;
-  const successWhen = recipe?.success_when;
+  const asyncConfig = transport?.async ?? null;  const successWhen = recipe?.success_when;
   const failureWhen = recipe?.failure_when;
   const statusFromRecipe =
     successWhen !== undefined && (successWhen.op === 'in' || successWhen.op === 'eq')
@@ -222,7 +230,10 @@ const buildInitialState = (initial: EditorInitial | undefined): EditorState => {
         type: parameterTypeOf(field),
         required: field.required,
         defaultValue: field.default_value === null ? '' : String(field.default_value),
-        enumValues: field.enum_options.map((value) => String(value)),
+        // 默认关闭的取值（spec 48 §4.5）也是这个参数合法的可选值：进列表 + 声明行标默认关闭，
+        // 保存时按 `opt_in` 原样写回。漏掉它们会让「复制预设后编辑保存」直接丢值。
+        enumValues: [...field.enum_options, ...(field.opt_in_enum_options ?? [])].map((value) => String(value)),
+        enumMeta: buildEnumMeta(field),
         defaultNote: '',
         locationNote: '',
       })),

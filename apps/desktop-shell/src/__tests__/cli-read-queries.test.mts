@@ -1,3 +1,4 @@
+// @spec: CLI-015, OF-17
 // @vitest-environment node
 // @spec: CLI-014, CLI-015
 //
@@ -105,6 +106,26 @@ describe("cli-command-executors 只读查询（假 forwarder + 假存储）", ()
       },
     });
   };
+
+  it("model.list：能力标签随目录条目透出（OF-17）", async () => {
+    forwardResultOverride = {
+      ok: true,
+      payload: {
+        models: [
+          {
+            ...modelEntry,
+            capability_labels: ["静态图", "动图"],
+          },
+        ],
+      },
+    };
+    const registry = buildRegistry();
+    const result = await runExecutor(registry, "model.list", { command: "model.list" });
+    const parsed = parseResponse(result);
+    if (!parsed.ok || parsed.command !== "model.list") throw new Error("unexpected");
+    // 标签原样到 agent 手上：不翻译、不排序；省略字段会被读成「这个模型什么都产不出」。
+    expect(parsed.models[0]?.capability_labels).toEqual(["静态图", "动图"]);
+  });
 
   it("model.list：转发可执行模型目录并按契约投影条目", async () => {
     forwardResultOverride = { ok: true, payload: { models: [modelEntry] } };

@@ -129,11 +129,14 @@ const buildRegistryEntry = (format: InterfaceFormat): GenerationFamilyTemplateEn
     requiredMediaSlots: format.media.required,
     mediaSlotFieldKeys: buildMediaSlotFieldKeys(format),
     // 基础模板 = 格式基础 sources（**不应用**记录覆盖与配方）；覆盖与配方由合成入口统一应用。
+    // keepOptInValues：保存期覆盖校验的基线必须看得见 opt_in 取值，否则「把默认关闭的取值
+    // 加入可选值」会被判成非法枚举；投影/执行仍走 composeFormatSources（默认裁剪）。
     buildBaseSources: (modelId, options) =>
       composeInterfaceFormatSources({
         format,
         modelId,
         acceptedMediaSlots: options.acceptedMediaSlots,
+        keepOptInValues: true,
       }),
   };
 };

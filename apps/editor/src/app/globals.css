@@ -626,16 +626,26 @@ a:not([data-slot="button"]):not([data-slot="button"] *):hover { color: var(--col
 .failure-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
 .failure-acts { flex: none; }
 .task-failure .sum { margin: 0; word-break: break-word; line-height: 1.4; }
-.task-failure details { margin-top: 0; }
-.task-failure summary {
-  position: absolute; top: 8px; right: 10px; margin: 0;
-  cursor: pointer; font-size: 10px; color: rgba(255,255,255,.8); user-select: none;
+/* 摘要固定两行 + 末尾渐隐：240×160 的卡片只容得下两行，长文案的其余部分由
+   「错误详情」弹窗承载（docs/editor/失败任务重新查询-design.md §6）。
+   渐隐用 mask 而不是复制一层文字——文字层只有一份，读屏与断言都只看到一条摘要。 */
+.task-failure .sum-clamp-2 {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, currentColor 58%, transparent 96%);
+  mask-image: linear-gradient(to bottom, currentColor 58%, transparent 96%);
 }
-.task-failure pre {
-  margin: 4px 0 0; font-size: 10px; color: rgba(255,255,255,.9);
-  white-space: pre-wrap; word-break: break-word;
-  max-height: 48px; overflow-y: auto;
+/* 阅读出口：右对齐在主动作行末，26px 高（≥24px 命中区），视觉上是文本链接不是按钮 */
+.task-failure .task-failure-detail {
+  margin-left: auto; height: 26px; padding: 0 2px;
+  display: inline-flex; align-items: center; gap: 2px;
+  border: 0; background: transparent; border-radius: var(--radius-sm);
+  color: rgba(255,255,255,.8);
+  font-size: 10.5px; font-weight: 500; line-height: 1; white-space: nowrap;
+  cursor: pointer;
 }
+.task-failure .task-failure-detail:hover { color: var(--scrim-text); text-decoration: underline; text-underline-offset: 2px; }
+.task-failure .task-failure-detail:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .task-failure .acts { display: flex; gap: 6px; }
 .task-failure .acts-primary { margin-top: 6px; flex-wrap: wrap; }
 .task-failure .acts-danger {
@@ -727,8 +737,8 @@ a:not([data-slot="button"]):not([data-slot="button"] *):hover { color: var(--col
   border: 1px solid var(--border); box-shadow: var(--shadow-md);
 }
 [data-theme='light'] .task-failure .sum { color: var(--st-failed-text); }
-[data-theme='light'] .task-failure summary,
-[data-theme='light'] .task-failure pre { color: var(--muted-foreground); }
+[data-theme='light'] .task-failure .task-failure-detail { color: var(--muted-foreground); }
+[data-theme='light'] .task-failure .task-failure-detail:hover { color: var(--foreground); }
 [data-theme='light'] .failure-id { color: var(--muted-foreground); }
 [data-theme='light'] .task-failure .acts-danger { border-top-color: var(--border); }
 [data-theme='light'] .task-failure .task-failure-secondary {

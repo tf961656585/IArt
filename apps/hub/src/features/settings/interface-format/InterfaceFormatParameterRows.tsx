@@ -1,11 +1,12 @@
 import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch } from '@iart/ui';
 import { FormField } from '../../../components/FormField';
 import { InterfaceFormatDraftRow } from './InterfaceFormatDraftRow';
+import { InterfaceFormatEnumValueMetaRows } from './InterfaceFormatEnumValueMetaRows';
 import { IssueSlot, issueAria } from './InterfaceFormatIssueUi';
 import { ParameterDefaultValueField } from './ParameterDefaultValueField';
 import { coerceDefaultForType } from './parameterDefaults';
 import { OptionListEditor } from '../components/ParameterValueControls';
-import type { ParamRow, WireLocation } from './interfaceFormatDraft';
+import { pruneEnumMeta, type ParamRow, type WireLocation } from './interfaceFormatDraft';
 
 /**
  * 接口格式的「参数表」编辑块（从编辑器拆出，控制在单文件行数上限内）。
@@ -218,6 +219,8 @@ export function InterfaceFormatParameterRows({
                     replaceRow(index, {
                       ...row,
                       enumValues: nextValues,
+                      // 删掉的取值不留默认关闭声明：残留声明会在同名值被重新添加时悄悄复活。
+                      enumMeta: pruneEnumMeta(row.enumMeta, nextValues),
                       defaultValue: keepDefault ? row.defaultValue : '',
                       defaultNote: keepDefault ? '' : '默认值已不在可选值里，已清空',
                     });
@@ -230,6 +233,12 @@ export function InterfaceFormatParameterRows({
                   describedBy={enumAria['aria-describedby']}
                 />
                 <IssueSlot fieldId={enumValuesId} errors={errors} showErrors={showErrors} />
+                <InterfaceFormatEnumValueMetaRows
+                  rowIndex={index}
+                  values={row.enumValues}
+                  meta={row.enumMeta}
+                  onChange={(rows) => replaceRow(index, { ...row, enumMeta: rows })}
+                />
               </FormField>
             ) : null}
           </InterfaceFormatDraftRow>
@@ -247,6 +256,7 @@ export function InterfaceFormatParameterRows({
           required: false,
           defaultValue: '',
           enumValues: [],
+          enumMeta: [],
           defaultNote: '',
           locationNote: '',
         }])}

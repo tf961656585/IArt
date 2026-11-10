@@ -114,7 +114,7 @@ export const applyModelDefaultsToPayload = (
   if (input !== undefined) filtered.input = input as string;
   if (prompt !== undefined) filtered.prompt = prompt as string;
   if (meta !== undefined) filtered.meta = meta as SchemaGenerationMeta;
-  if (body !== undefined) filtered.body = body as Record<string, unknown> | FormData;
+  if (body !== undefined) filtered.body = body as UnknownRecord | FormData;
   return filtered;
 };
 

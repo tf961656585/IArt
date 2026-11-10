@@ -4,13 +4,19 @@
 # 不订阅 tag push：转正（release-promote）会落版本 tag，若 tag 触发构建，Actions 会再次
 # 构建并把新资产覆盖到已冻结的正式发布上；正式与否只由人工转正动作决定，tag 不是构建触发器。
 #
-# 一稿的生命周期由 prepare-release（单写者清场）与 verify-draft-assets（完整性门）夹住：
+# 一稿的生命周期由 gate（发布前门禁）、prepare-release（单写者清场）与
+# verify-draft-assets（完整性门）夹住：
+# - gate 在一切写操作之前跑静态硬门禁与后端测试；不过即整条流程失败，不建草稿
+#   （2026-11-07 拍板：发布流水线必须有门禁，不再只靠人记得）。
 # - prepare-release 在三个构建 job 之前只跑一次：草稿不存在则以 --target $GITHUB_SHA 创建；
 #   已存在则把 target 更新为本次 GITHUB_SHA（草稿记录的来源提交=最新一稿）并清空其全部旧资产
 #   （同号覆盖只留最新一稿，防新旧构建混挂）；目标 release 已转正式则直接失败（同号正式冻结）。
 # - 三平台三 job 并行：mac（同一 job 内分两次 electron-builder 构建 arm64+x64，保证
 #   latest-mac.yml 同时含双架构条目）、win（x64）、linux（x64，AppImage）。所有构建 --publish never。
 # - 每个 job 上传前确认目标 release 仍是草稿，不是草稿即终止（绝不上传，防覆盖正式资产）。
+# - 草稿正文（面向公开用户的更新说明）来自仓库 `release-notes/<tag>.md`；文件缺失时退回占位，
+#   占位带 "Draft by CI" 标记，`release-promote` 转正前检测到该标记即拒绝——内部流程话术
+#   不得原样出现在公开 release 页。
 # - verify-draft-assets 在三个构建 job 全部完成后校验草稿资产齐全（双架构 dmg、win exe、
 #   linux AppImage、三份 feed，且 latest-mac.yml 含 arm64+x64 双条目），不齐即失败——
 #   部分平台失败的构建不得作为测试稿交付。
@@ -30,10 +36,39 @@ permissions:
   contents: write
 
 jobs:
+  # 发布前门禁（2026-11-07 拍板）：静态硬门禁 + 后端测试。
+  # 跑在 prepare-release 之前——门禁不过就不建草稿，避免留下一个永远不能转正的半成品稿。
+  # 覆盖边界：公开快照不含 docs/，测试↔spec 关联检查会显式打印「不适用」，不得当成通过；
+  # 前端全量 vitest 未接入（收尾崩溃未定位，接入会让发布链出现随机红灯）。
+  gate:
+    name: Gate (static + backend tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Static hard gate
+        run: pnpm check:types-and-boundaries
+
+      - name: Backend tests
+        run: pnpm test:backend
+
   # 代际清场：单写者，只跑一次，三个构建 job 的 needs 前置。
   # 草稿不存在 → 创建（--target 记录来源提交）；已存在 → 更新 target + 清空全部旧资产。
   prepare-release:
     name: Prepare draft release (single writer)
+    needs: gate
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -55,6 +90,15 @@ jobs:
             echo "package.json version 非法，无法派生草稿 tag：$TAG" >&2
             exit 1
           fi
+          # 草稿正文面向公开用户，来源是仓库里的 release-notes/<tag>.md（随快照公开）。
+          # 文件缺失时退回占位正文；占位带 "Draft by CI" 标记，release-promote 转正前会
+          # 检测该标记并拒绝转正——内部流程话术不得原样出现在公开 release 页。
+          NOTES_FILE="release-notes/${TAG}.md"
+          if [[ -f "$NOTES_FILE" ]]; then
+            echo "✓ 使用发布说明：${NOTES_FILE}"
+          else
+            echo "⚠ 未找到 ${NOTES_FILE}，草稿正文用占位（该稿不能转正）"
+          fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             IS_DRAFT=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
             if [[ "$IS_DRAFT" != "true" ]]; then
@@ -62,6 +106,10 @@ jobs:
               exit 1
             fi
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
+            # 重发新稿时正文跟随仓库更新说明；文件不存在则保留既有正文，不清空。
+            if [[ -f "$NOTES_FILE" ]]; then
+              gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$NOTES_FILE"
+            fi
             ASSETS=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
             if [[ -n "$ASSETS" ]]; then
               while IFS= read -r name; do
@@ -71,9 +119,14 @@ jobs:
             fi
             echo "✓ 复用草稿 ${TAG}：target → ${GITHUB_SHA}，旧资产已清空"
           else
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
-              --title "IARTStudio $TAG" \
-              --notes "Desktop release $TAG. Draft by CI; promote manually."
+            if [[ -f "$NOTES_FILE" ]]; then
+              gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+                --title "IARTStudio $TAG" --notes-file "$NOTES_FILE"
+            else
+              gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+                --title "IARTStudio $TAG" \
+                --notes "Desktop release $TAG. Draft by CI; promote manually."
+            fi
             echo "✓ 已创建草稿 ${TAG}（target ${GITHUB_SHA}）"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"

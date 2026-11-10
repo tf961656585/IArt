@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // verify-hub-title-band.mjs — Hub 顶栏带几何纪律核验（spec docs/hub/window-chrome.md §6.3/§13）。
 //
-// 前置：dev 正在运行且 CDP 9222 可达（desktop:dev:fast / desktop:dev:debug）。核验对象是
+// 前置：dev 正在运行且 CDP 9222 可达（desktop:dev / desktop:dev:debug）。核验对象是
 // 运行中的 Hub 窗口，属运行时验收入口（gates.md「运行时验收入口」），不是静态硬门禁。
 //
 // 对侧栏全部 7 个 tab 逐一校验四条几何纪律：

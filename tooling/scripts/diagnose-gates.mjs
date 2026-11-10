@@ -79,6 +79,11 @@ const gates = [
     command: ['pnpm', 'guard:spec-test-linkage'],
     cascade: '测试↔spec 关联守卫失败说明 @spec 标注指向已废弃/已退役/不存在的验收 ID（旧行为测试滞留信号），或验收 ID 在多份 Active 产物重复定义。',
   },
+  {
+    name: 'guard:editor-remote-model-static-truth',
+    command: ['pnpm', 'guard:editor-remote-model-static-truth'],
+    cascade: 'editor 静态模型真相回流守卫失败说明仍存在手写静态模型常量、硬编码 modelId、旧生成器路径或模型级 i18n 文案，静态模型目录有回流迹象。',
+  },
 ];
 
 const formatCommand = (command) => command.join(' ');

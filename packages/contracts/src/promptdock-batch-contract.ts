@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import { TaskSubmitMediaInputSchema } from './task-submit-media-input';
 import { MentionMapEntrySchema } from './task-submit-request';
-import { BatchIntentSnapshotSchema } from './provider-connection-contract';
+import { BatchIntentSnapshotSchema, MAX_BATCH_INTENT_COUNT } from './provider-connection-contract';
 
 /**
  * GenerationBatch 受理契约（contracts 层）—— PromptDock 一次提交的原子受理 DTO。
@@ -47,17 +47,47 @@ import { BatchIntentSnapshotSchema } from './provider-connection-contract';
 export const PromptDockBatchSubmitRequestSchema = z
   .object({
     model_id: z.string().min(1),
-    prompt: z.string(),
-    arguments: z.record(z.unknown()),
+    /**
+     * 现役形态：按序意图列表（spec 45 §5.1）。每个意图带自己的提示词、参数、媒体引用与任务数；
+     * 全部意图共享本请求的模型与项目。
+     */
+    intents: z
+      .array(
+        z
+          .object({
+            prompt: z.string(),
+            arguments: z.record(z.unknown()),
+            media_inputs: z.array(TaskSubmitMediaInputSchema).optional(),
+            reference_asset_ids: z.array(z.string().min(1)).optional(),
+            task_count: z.number().int().min(1).max(10),
+            mention_map: z.record(MentionMapEntrySchema).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(MAX_BATCH_INTENT_COUNT)
+      .optional(),
+    /** 历史形态（单意图）：旧客户端仍按顶层字段提交，受理侧归一成一个意图。 */
+    prompt: z.string().optional(),
+    arguments: z.record(z.unknown()).optional(),
     media_inputs: z.array(TaskSubmitMediaInputSchema).optional(),
     reference_asset_ids: z.array(z.string().min(1)).optional(),
-    task_count: z.number().int().min(1).max(10),
+    task_count: z.number().int().min(1).max(10).optional(),
     model_version: z.string().min(1),
     project_path: z.string().min(1),
     mention_map: z.record(MentionMapEntrySchema).optional(),
     client_request_id: z.string().min(1).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.intents !== undefined) return;
+    if (value.prompt !== undefined && value.arguments !== undefined && value.task_count !== undefined) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'batch_submit_requires_intents_or_legacy_single_intent',
+      path: ['intents'],
+    });
+  });
 
 export type PromptDockBatchSubmitRequest = z.infer<typeof PromptDockBatchSubmitRequestSchema>;
 
@@ -94,8 +124,10 @@ export const PromptDockBatchSubmitResponseSchema = z
   })
   .strict()
   .refine(
-    (value) => value.tasks.length === value.intent_snapshot.task_count,
-    { message: 'accepted tasks length must equal intent snapshot task_count (atomic acceptance)' },
+    (value) =>
+      value.tasks.length ===
+      value.intent_snapshot.intents.reduce((sum, intent) => sum + intent.task_count, 0),
+    { message: 'accepted tasks length must equal sum of intent task_count (atomic acceptance)' },
   )
   .refine(
     (value) => value.batch_id === value.intent_snapshot.batch_id,

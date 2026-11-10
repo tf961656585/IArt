@@ -1,3 +1,4 @@
+// @spec: OF-15, OF-18
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -8,6 +9,7 @@ import {
   ExecutableModelCatalogResponseSchema,
   ExecutableModelDirectoryEntrySchema,
 } from '@iart/contracts';
+import type { ParameterOverrides } from '@iart/contracts';
 import { listExecutableCatalogEntries } from '../model-catalog-entry.cts';
 import {
   clearCacheForTest as clearActiveRouteCache,
@@ -49,6 +51,10 @@ const NEUTRAL_NAMED_VIDEO_MODEL = 'catalog-entry-neutral-video';
 type SeedRecord = {
   modelId: string;
   familyAdapterId: typeof OPENAI_IMAGE_ADAPTER | typeof VEO_ADAPTER;
+  /** 记录级参数覆盖：用于验证 opt_in 取值显式启用后出现在目录里。 */
+  parameterOverrides?: ParameterOverrides;
+  /** 能力标签（spec 48 §5）：原样投影到目录条目。 */
+  capabilityLabels?: string[];
 };
 
 /** 隔离存储根 + 连接 + 若干生成模型记录（active route 指向各自记录）。 */
@@ -81,6 +87,12 @@ const seedCatalog = async (t: test.TestContext, records: SeedRecord[]): Promise<
       model_id: record.modelId,
       connection_id: connection.connection_id,
       family_adapter_id: record.familyAdapterId,
+      ...(record.capabilityLabels === undefined
+        ? {}
+        : { capability_labels: record.capabilityLabels }),
+      ...(record.parameterOverrides === undefined
+        ? {}
+        : { parameter_overrides: record.parameterOverrides }),
     });
     assert.equal(added.ok, true, `应能添加生成模型记录 ${record.modelId}`);
     if (!added.ok) continue;
@@ -152,4 +164,68 @@ void test('族归属由记录自带 family_adapter_id 决定，与 model_id 命�
     ['image'],
     'openai-image 族记录的输出模态必须是 image',
   );
+});
+
+void test('目录条目原样投影能力标签；未标注输出空数组（spec 48 OF-15）', async (t) => {
+  await seedCatalog(t, [
+    {
+      modelId: 'catalog-entry-image',
+      familyAdapterId: OPENAI_IMAGE_ADAPTER,
+      capabilityLabels: ['静态图', '动图'],
+    },
+    { modelId: 'catalog-entry-video', familyAdapterId: VEO_ADAPTER },
+  ]);
+  const entries = listExecutableCatalogEntries();
+  const image = entries.find((entry) => entry.model_id === 'catalog-entry-image');
+  const video = entries.find((entry) => entry.model_id === 'catalog-entry-video');
+  assert.ok(image);
+  assert.ok(video);
+
+  // 标签按用户填写顺序原样投影，不派生、不翻译。
+  assert.deepEqual(image.capability_labels, ['静态图', '动图']);
+  // 未标注 = 空数组（而不是省略字段）：消费端据此区分「没填」与「旧后端没给」。
+  assert.deepEqual(video.capability_labels, []);
+
+  // 默认关闭的取值仍不进入目录（参数可见性与能力标签无关）。
+  const format = image.parameter_schema.fields.find((field) => field.fieldKey === 'format');
+  assert.equal(format?.enumOptions?.find((option) => option.value === 'gif'), undefined);
+});
+
+void test('记录显式启用 opt_in 取值后才出现在目录里（参数可见性，与能力标签无关）', async (t) => {
+  await seedCatalog(t, [
+    {
+      modelId: 'catalog-entry-image-gif',
+      familyAdapterId: OPENAI_IMAGE_ADAPTER,
+      capabilityLabels: ['静态图', '动图'],
+      parameterOverrides: {
+        official: [{ field_key: 'format', enum_options: ['png', 'jpeg', 'webp', 'gif'] }],
+        custom: [],
+      },
+    },
+  ]);
+  const image = listExecutableCatalogEntries().find(
+    (entry) => entry.model_id === 'catalog-entry-image-gif',
+  );
+  assert.ok(image);
+  const format = image.parameter_schema.fields.find((field) => field.fieldKey === 'format');
+  assert.ok(format?.enumOptions?.some((option) => option.value === 'gif'));
+});
+
+void test('能力标签不参与任何运行时判定：除标签字段外条目内容与无标签模型一致（OF-18）', async (t) => {
+  await seedCatalog(t, [
+    { modelId: 'catalog-entry-labeled', familyAdapterId: OPENAI_IMAGE_ADAPTER, capabilityLabels: ['静态图'] },
+    { modelId: 'catalog-entry-plain', familyAdapterId: OPENAI_IMAGE_ADAPTER },
+  ]);
+  const entries = listExecutableCatalogEntries();
+  const labeled = entries.find((entry) => entry.model_id === 'catalog-entry-labeled');
+  const plain = entries.find((entry) => entry.model_id === 'catalog-entry-plain');
+  assert.ok(labeled);
+  assert.ok(plain);
+  assert.deepEqual(labeled.capability_labels, ['静态图']);
+  assert.deepEqual(plain.capability_labels, []);
+  // 除标签本身，参数 schema 与能力事实不因标签而变（标签不是可执行事实）。
+  assert.deepEqual(labeled.parameter_schema, plain.parameter_schema);
+  assert.deepEqual(labeled.capability, plain.capability);
+  const serialized = JSON.stringify({ ...labeled, model_id: '', capability_labels: [] });
+  assert.equal(serialized.includes('静态图'), false);
 });

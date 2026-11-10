@@ -75,6 +75,22 @@ export interface CliAssetGenerationSource {
  * 只覆盖生成产物；导入素材与媒体工具加工产物无产出来源，不进索引（检索时按无提示词处理，
  * asset list 条目的 batch_id 输出 null）。
  */
+
+/**
+ * 任务所属意图的提示词（spec 45 §5.1）：任务按意图顺序连续分配，按 task_ids 里的位置
+ * 累积各意图任务数即可定位；找不到任务时返回 null（退回「无提示词」而不是猜一个）。
+ */
+const resolveTaskIntentPrompt = (snapshot: BatchIntentSnapshot, taskId: string): string | null => {
+  const taskIndex = snapshot.task_ids.indexOf(taskId);
+  if (taskIndex < 0) return null;
+  let offset = 0;
+  for (const intent of snapshot.intents) {
+    offset += intent.task_count;
+    if (taskIndex < offset) return intent.prompt;
+  }
+  return null;
+};
+
 export const readCliAssetGenerationIndex = (projectPath: string): ReadonlyMap<string, CliAssetGenerationSource> => {
   const db = getDbForExistingProject(projectPath);
   if (db === null) {
@@ -111,11 +127,14 @@ export const readCliAssetGenerationIndex = (projectPath: string): ReadonlyMap<st
         : null;
     let prompt: string | null = null;
     if (batchId !== null) {
-      if (!promptByBatchId.has(batchId)) {
+      // 检索用的提示词归「该资产产出任务所属意图」：多意图批次里同一批次的不同任务
+      // 提示词不同，取批次级单一提示词会把它们串成一条。
+      const cacheKey = `${batchId}::${taskId}`;
+      if (!promptByBatchId.has(cacheKey)) {
         const batch = readBatchById(db, batchId);
-        promptByBatchId.set(batchId, batch === null ? null : batch.prompt);
+        promptByBatchId.set(cacheKey, batch === null ? null : resolveTaskIntentPrompt(batch, taskId));
       }
-      prompt = promptByBatchId.get(batchId) ?? null;
+      prompt = promptByBatchId.get(cacheKey) ?? null;
     }
     index.set(assetId, {
       taskId,

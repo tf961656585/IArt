@@ -14,6 +14,7 @@ import { startTaskRequery } from './task-executor.cts';
 import { normalizeString } from './task-normalizer.cts';
 import { getConnection } from './provider-connection/connection-store.cts';
 import { readCredentialValue } from './provider-connection/credential-store.cts';
+import { buildCredentialFailure } from './credential-failure.cts';
 
 /**
  * 失败任务重新查询（`succeeded` 之外唯一把 `failed` 送回非终态的受控出边）。
@@ -333,10 +334,13 @@ const requeryFailedTask = async (record: unknown): Promise<RequeryOutcome> => {
   }
   const credentialRef = normalizeString(snapshot.credential_ref);
   if (credentialRef) {
-    const credentialValue = await readCredentialValue(credentialRef);
-    if (credentialValue === null) {
-      return buildRejection(record, 'credential_unavailable', '原服务商凭证已失效，无法重新查询结果', {
+    const read = await readCredentialValue(credentialRef);
+    if (!read.ok) {
+      // 凭证不可读是重新查询无法自愈的前置条件：直接拒绝并给出人话指引，不带底层异常原文。
+      const failure = buildCredentialFailure(read.reason);
+      return buildRejection(record, 'credential_unavailable', failure.userMessage, {
         connectionId: snapshot.connection_id,
+        reason: read.reason,
       });
     }
   }

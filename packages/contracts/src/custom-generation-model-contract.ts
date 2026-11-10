@@ -51,6 +51,31 @@ import {
  */
 export const CustomGenerationModelIdSchema = z.string().regex(CUSTOM_CHAT_MODEL_ID_PATTERN);
 
+/** 一条模型能力标签最多 10 条（spec 48 §5）。 */
+export const CAPABILITY_LABELS_MAX_COUNT = 10;
+
+/** 一条模型能力标签的字符上限（按 Unicode 码点计，spec 48 §5）。 */
+export const CAPABILITY_LABEL_MAX_LENGTH = 12;
+
+/**
+ * 模型能力标签（spec 48）：用户添加或修改模型时手写的单行自由文本，说明这个模型能产出
+ * 什么素材（如「静态图」「动图」「矢量图」「首帧视频」）。
+ *
+ * 形状约束：去除首尾空白后 1–12 个字符、不含换行。数量上限由承载它的数组（`.max(10)`）
+ * 约束。跨条目的去重与超限拒绝理由由 Runtime Backend 写入侧给出可读原因——这里只保证
+ * 形状，不做语义归一（大小写与同义合并一律不做，spec 48 §5）。
+ */
+export const CapabilityLabelSchema = z
+  .string()
+  .transform((value) => value.trim())
+  .refine((value) => value.length > 0, { message: '标签不能为空' })
+  .refine((value) => !/[\r\n]/.test(value), { message: '标签不能包含换行' })
+  .refine((value) => [...value].length <= CAPABILITY_LABEL_MAX_LENGTH, {
+    message: `标签最多 ${CAPABILITY_LABEL_MAX_LENGTH} 个字符`,
+  });
+
+export type CapabilityLabel = z.infer<typeof CapabilityLabelSchema>;
+
 /**
  * 内置接口格式 id 的**预设清单快照**（不是记录值域，也不再是运行时校验域）。
  *
@@ -283,6 +308,13 @@ export const CustomGenerationModelSchema = z
      */
     accepted_media_slots: z.array(GenerationMediaSlotIdSchema).default([]),
     /**
+     * 该模型的能力标签（spec 48）：用户手写的自由文本，说明这个模型能产出什么素材。
+     *
+     * 给默认值是必需的：本 schema 是 `.strict()`，读取缺该键的历史配置文件会整条解析失败
+     * （等于数据丢失）。缺省物化为空数组，即「未标注」，它不等于模型不可用。
+     */
+    capability_labels: z.array(CapabilityLabelSchema).max(CAPABILITY_LABELS_MAX_COUNT).default([]),
+    /**
      * 参数覆盖（生成模型参数高级自定义设计 §3.2）：官方参数的启用/别名/枚举/预设/默认值
      * 覆盖与新增自定义参数。族模板仍是参数唯一来源，覆盖只是记录上的可选数据段，
      * 随该记录存储、不跨连接共享。
@@ -347,6 +379,8 @@ export const CustomGenerationModelCreateBodySchema = z
     remote_model_id: z.string().min(1).optional(),
     family_adapter_id: InterfaceFormatIdSchema,
     accepted_media_slots: z.array(GenerationMediaSlotIdSchema).optional(),
+    /** 能力标签（spec 48）：可省略，省略即标注为空。 */
+    capability_labels: z.array(CapabilityLabelSchema).max(CAPABILITY_LABELS_MAX_COUNT).optional(),
     parameter_overrides: ParameterOverridesSchema.optional(),
     recipe_id: InterfaceRecipeIdSchema.optional(),
   })
@@ -368,6 +402,11 @@ export type CustomGenerationModelCreateBody = z.infer<typeof CustomGenerationMod
 export const CustomGenerationModelUpdateBodySchema = z
   .object({
     accepted_media_slots: z.array(GenerationMediaSlotIdSchema),
+    /**
+     * 能力标签（spec 48 §4）：**缺省 = 保持现有标签不变；出现（含空数组）= 整体替换**。
+     * 与参数覆盖同语义，使既有调用方不带该字段时不会清空用户已填的标签。
+     */
+    capability_labels: z.array(CapabilityLabelSchema).max(CAPABILITY_LABELS_MAX_COUNT).optional(),
     parameter_overrides: ParameterOverridesSchema.optional(),
     /**
      * 接口配方引用。语义（钉死在此）：**缺省 = 保持现有引用不变；`null` = 清除引用（回到
@@ -432,6 +471,11 @@ export const FamilyTemplateOfficialFieldSchema = z
     required: z.boolean(),
     default_value: ParameterOverridesValueSchema.nullable(),
     enum_options: z.array(ParameterOverridesValueSchema),
+    /**
+     * 接口格式声明为默认关闭（`opt_in`）的取值：它们不进入 `enum_options`，编辑器据此
+     * 提供「显式启用」入口（加入可选值）。旧响应没有该键按空数组处理，不改变既有行为。
+     */
+    opt_in_enum_options: z.array(ParameterOverridesValueSchema).optional(),
     resolution_presets: z.array(FamilyTemplatePresetOptionSchema),
     aspect_presets: z.array(FamilyTemplatePresetOptionSchema),
     /**

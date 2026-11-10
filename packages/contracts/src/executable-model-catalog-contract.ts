@@ -1,5 +1,6 @@
+import { ParameterActivationSchema } from './parameter-activation';
 import * as z from 'zod';
-import { GenerationMediaSlotIdSchema } from './custom-generation-model-contract';
+import { CapabilityLabelSchema, GenerationMediaSlotIdSchema } from './custom-generation-model-contract';
 import { ThinkingTierSchema } from './thinking-tier-contract';
 
 /**
@@ -70,6 +71,7 @@ export type ExecutableModelFailureCode = z.infer<typeof ExecutableModelFailureCo
 export const ExecutableCatalogMediaTypeSchema = z.enum(['text', 'image', 'video', 'audio']);
 export type ExecutableCatalogMediaType = z.infer<typeof ExecutableCatalogMediaTypeSchema>;
 
+
 export const ExecutableCatalogParameterFieldSchema = z
   .object({
     fieldKey: z.string().min(1),
@@ -89,7 +91,11 @@ export const ExecutableCatalogParameterFieldSchema = z
     dataSource: z.enum(['connection', 'form', 'both']).optional(),
     /** 组件呈现属性（如 imageSize 的档位/比例/约束），由模型能力包投影透传；Editor 参数表单按 component 解释 */
     componentProps: z.record(z.unknown()).optional(),
-    visibleWhen: z.record(z.unknown()).optional(),
+    /**
+     * 参数启动条件（见 `parameter-activation`）：依赖另一个参数的取值决定本字段是否成立。
+     * 不成立时呈现层隐藏、发送层剔除；条件由接口格式声明，模型记录不可改写。
+     */
+    visibleWhen: ParameterActivationSchema.optional(),
     metadata: z.record(z.unknown()).optional(),
   })
   .strict();
@@ -190,6 +196,15 @@ export const ExecutableModelDirectoryEntrySchema = z
      * 生产侧（Runtime Backend 的目录投影）恒写该字段，不会省略。
      */
     media_slots: z.array(ExecutableCatalogMediaSlotSchema).optional(),
+    /**
+     * 该模型记录上的能力标签（spec 48 §6.1）：用户在添加或修改模型时填写的自由文本，
+     * 说明这个模型能产出什么素材（如「静态图」「动图」「矢量图」）。原样投影，不派生、
+     * 不翻译；未标注为空数组。
+     *
+     * **可选而不是 `.default([])`**：与 `media_slots` 同理由——`.default()` 会让输出类型
+     * 变必填，所有手工构造本 DTO 的消费方都要补值。消费端按 `?? []` 读；生产侧恒写。
+     */
+    capability_labels: z.array(CapabilityLabelSchema).optional(),
     parameter_schema: ExecutableCatalogParameterSchemaSchema,
     deployment: ExecutableCatalogDeploymentSchema,
   })

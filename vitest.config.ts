@@ -6,6 +6,17 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: "jsdom",
+    // 线程池而非默认的 forks 池（2026-11-07 实测）：本仓的接缝测试会临时接管
+    // `process.send`（backend 单向通知的出口），在 forks 池里这会污染 vitest 自己的
+    // tinypool 传输通道，父进程按二进制协议反序列化普通对象后直接
+    // `ERR_INVALID_ARG_TYPE` 崩溃，整份套件无法跑完（并留下孤儿 worker）。
+    // 线程池没有进程级 IPC 通道，同一批测试可正常跑完。
+    pool: "threads",
+    // 测试运行时前置（docs/harness/gates.md「测试入口运行时」）：Node 25 在 worker 线程收尾
+    // 阶段的 V8 内存回收里随机段错误（退出码 139，无失败用例）。globalSetup 用于覆盖
+    // `npx vitest run`、`pnpm test:watch` 等绕过 package 脚本的入口，判据与 `pnpm test`
+    // 的首个命令共用 tooling/scripts/assert-node-runtime.mjs 同一份实现。
+    globalSetup: ["./tooling/scripts/assert-node-runtime.mjs"],
     setupFiles: ["./vitest.setup.ts"],
     globals: true,
     // React 19 的 act 仅在 react.development.js 中导出（production 变体剥离）。

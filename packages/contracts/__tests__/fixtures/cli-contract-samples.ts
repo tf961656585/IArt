@@ -74,6 +74,17 @@ const generationArchive = (): Record<string, unknown> => ({
   references: [
     { asset_id: 'asset_ref_1', media_kind: 'image', file_key: 'ref.png', local_file_path: '/tmp/media/ref.png' },
   ],
+  // 多意图批次（2026-10）后档案必带 intents；本样例是单意图批次，顶层兜底字段与意图同值。
+  intents: [
+    {
+      prompt: '一只猫在窗台',
+      params: { aspect_ratio: '1:1' },
+      references: [
+        { asset_id: 'asset_ref_1', media_kind: 'image', file_key: 'ref.png', local_file_path: '/tmp/media/ref.png' },
+      ],
+      task_ids: ['task_1'],
+    },
+  ],
   task_ids: ['task_1'],
   created_at: ISO,
 });

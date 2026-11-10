@@ -3,11 +3,13 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-const repoRoot = path.resolve(process.cwd());
+const rootFlagIndex = process.argv.indexOf('--root');
+const repoRoot = path.resolve(
+  rootFlagIndex === -1 ? process.cwd() : (process.argv[rootFlagIndex + 1] ?? ''),
+);
 
 const TARGETS = {
   models: path.join(repoRoot, 'apps', 'editor', 'src', 'features', 'models'),
-  templates: path.join(repoRoot, 'apps', 'editor', 'src', 'features', 'canvas', 'templates'),
   canvasRuntime: path.join(repoRoot, 'apps', 'editor', 'src', 'features', 'canvas'),
   locales: path.join(repoRoot, 'apps', 'editor', 'src', 'client', 'locales'),
 };
@@ -304,14 +306,13 @@ async function validateLocalePagesJson(files, findings) {
 async function main() {
   const findings = [];
 
-  const [modelFiles, templateFiles, canvasRuntimeFiles, localeFiles] = await Promise.all([
+  const [modelFiles, canvasRuntimeFiles, localeFiles] = await Promise.all([
     listFiles(TARGETS.models),
-    listFiles(TARGETS.templates),
     listFiles(TARGETS.canvasRuntime),
     listFiles(TARGETS.locales),
   ]);
 
-  await validateCodeFiles([...new Set([...modelFiles, ...templateFiles, ...canvasRuntimeFiles])], findings);
+  await validateCodeFiles([...new Set([...modelFiles, ...canvasRuntimeFiles])], findings);
   await validateLocalePagesJson(localeFiles, findings);
 
   if (findings.length === 0) {

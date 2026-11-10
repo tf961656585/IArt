@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import type { ProviderConnection } from '@iart/contracts';
 import * as constantsModule from '../constants.cts';
 import * as httpUtilsModule from '../http-utils.cts';
 import { readJsonBodyOrSendError } from '../http/json-route.cts';
@@ -15,6 +16,7 @@ import {
 } from '../provider-connection/connection-store.cts';
 import {
   clearCredentialForConnection,
+  getCredentialProjection,
   hasActiveLeasesForConnection,
   setCredentialForConnection,
 } from '../provider-connection/credential-store.cts';
@@ -78,6 +80,26 @@ const NO_STORE_HEADERS = (corsHeaders: Record<string, string>): Record<string, s
 
 const splitPathname = (pathname: string): string[] => pathname.split('/').filter(Boolean);
 
+/**
+ * 凭证投影合成（2026-10-29 起）：`credential_protection` / `credential_status` 不持久化到
+ * 连接文件，凭证存储是唯一 owner，返回 DTO 前在这里统一补齐。
+ *
+ * - 没有绑定凭证（`has_credential=false` / 无 `credential_ref`）→ 双 null；
+ * - 有绑定 → `credential_protection` 取条目实际写入方案；`credential_status` 取读取留痕
+ *   （最近一次读取失败 → `needs_reentry`）。
+ */
+const projectConnectionCredential = (connection: ProviderConnection): ProviderConnection => {
+  if (!connection.has_credential || !connection.credential_ref) {
+    return { ...connection, credential_protection: null, credential_status: null };
+  }
+  const projection = getCredentialProjection(connection.credential_ref);
+  return {
+    ...connection,
+    credential_protection: projection.credential_protection,
+    credential_status: projection.credential_status,
+  };
+};
+
 // ----- schemas（路由层本地，非跨进程 DTO 不进 contracts）-----
 
 const ProviderConnectionCreateBodySchema = z
@@ -113,7 +135,7 @@ const createProviderConnectionRoutes = (): RouteDefinition[] => {
     name: 'provider-connections-list',
     match: ({ req, pathname }) => req.method === 'GET' && pathname === '/api/provider-connections',
     handle: ({ res, corsHeaders }) => {
-      sendJson(res, 200, { connections: listConnections() }, NO_STORE_HEADERS(corsHeaders));
+      sendJson(res, 200, { connections: listConnections().map(projectConnectionCredential) }, NO_STORE_HEADERS(corsHeaders));
     },
   },
   {
@@ -133,7 +155,7 @@ const createProviderConnectionRoutes = (): RouteDefinition[] => {
           display_name: parsed.data.display_name,
           base_url: parsed.data.base_url,
         });
-        sendJson(res, 200, { connection }, NO_STORE_HEADERS(corsHeaders));
+        sendJson(res, 200, { connection: projectConnectionCredential(connection) }, NO_STORE_HEADERS(corsHeaders));
       } catch (error) {
         loggingModule.logDebug('[provider-connection-routes] create failed', { error: error instanceof Error ? error.message : String(error) });
         sendError(res, 400, ERROR_CODES.INVALID_CONFIG, error instanceof Error ? error.message : '创建连接失败', corsHeaders);
@@ -154,7 +176,7 @@ const createProviderConnectionRoutes = (): RouteDefinition[] => {
         return;
       }
       if (req.method === 'GET') {
-        sendJson(res, 200, { connection: existing }, NO_STORE_HEADERS(corsHeaders));
+        sendJson(res, 200, { connection: projectConnectionCredential(existing) }, NO_STORE_HEADERS(corsHeaders));
         return;
       }
       if (req.method === 'PUT') {
@@ -175,7 +197,7 @@ const createProviderConnectionRoutes = (): RouteDefinition[] => {
             sendError(res, 404, ERROR_CODES.NOT_FOUND, 'ProviderConnection 不存在', corsHeaders);
             return;
           }
-          sendJson(res, 200, { connection: updated }, NO_STORE_HEADERS(corsHeaders));
+          sendJson(res, 200, { connection: projectConnectionCredential(updated) }, NO_STORE_HEADERS(corsHeaders));
         } catch (error) {
           sendError(res, 400, ERROR_CODES.INVALID_CONFIG, error instanceof Error ? error.message : '更新失败', corsHeaders);
         }
@@ -241,7 +263,7 @@ const createProviderConnectionRoutes = (): RouteDefinition[] => {
           const cleared = clearActiveRoutesForConnection(connectionId);
           if (cleared > 0) loggingModule.logDebug('[provider-connection-routes] retired: cleared active routes', { connectionId, cleared });
         }
-        sendJson(res, 200, { connection: updated }, NO_STORE_HEADERS(corsHeaders));
+        sendJson(res, 200, { connection: projectConnectionCredential(updated) }, NO_STORE_HEADERS(corsHeaders));
       } catch (error) {
         sendError(res, 400, ERROR_CODES.INVALID_CONFIG, error instanceof Error ? error.message : 'lifecycle 更新失败', corsHeaders);
       }
@@ -267,7 +289,7 @@ const createProviderConnectionRoutes = (): RouteDefinition[] => {
       if (req.method === 'DELETE') {
         clearCredentialForConnection(connectionId);
         const updated = setConnectionCredential(connectionId, null, null, false);
-        sendJson(res, 200, { connection: updated ?? existing, has_credential: false }, NO_STORE_HEADERS(corsHeaders));
+        sendJson(res, 200, { connection: projectConnectionCredential(updated ?? existing), has_credential: false }, NO_STORE_HEADERS(corsHeaders));
         return;
       }
       const body = await readJsonBodyOrSendError(req, res, corsHeaders);
@@ -288,7 +310,7 @@ const createProviderConnectionRoutes = (): RouteDefinition[] => {
         return;
       }
       const updated = setConnectionCredential(connectionId, result.credentialRef, result.version, true);
-      sendJson(res, 200, { connection: updated, has_credential: true, credential_ref: result.credentialRef }, NO_STORE_HEADERS(corsHeaders));
+      sendJson(res, 200, { connection: projectConnectionCredential(updated ?? existing), has_credential: true, credential_ref: result.credentialRef }, NO_STORE_HEADERS(corsHeaders));
     },
   },
   // ----- ActiveRoutes -----

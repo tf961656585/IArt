@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import type { ParamTranslate } from '../promptDockParamModel';
+import type { ParamSelectOption, ParamTranslate } from '../promptDockParamModel';
 import {
   buildImageSizeChoices,
   buildSelectOptions,
@@ -160,7 +160,7 @@ function ParamSelectControl({
 }: {
   label: string;
   value: unknown;
-  options: { value: string; label: string }[];
+  options: ParamSelectOption[];
   onValueChange: (next: unknown) => void;
   variant: 'compact' | 'sheet';
   disabled: boolean;

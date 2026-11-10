@@ -14,9 +14,11 @@ import {
 import { formatBeijingTime } from '@/shared/utils/time';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { focusHubModelProviders } from '@/features/promptdock/hubFocus';
 import type { NodeTaskInfo } from '../../../types';
 import { getTaskStatusLabel } from '../../../utils/taskStatusMeta';
 import { resolveTaskFailurePresentation } from '../../../utils/taskFailurePresentation';
+import { isCredentialMissingFailure } from '../../../utils/taskFailureActions';
 
 export interface TaskStatusDialogProps {
   open: boolean;
@@ -25,10 +27,14 @@ export interface TaskStatusDialogProps {
   taskInfo: NodeTaskInfo | null;
   backendMessage: string | null | undefined;
   batchId: string | null | undefined;
-  onCopyTaskId: () => void | undefined;
-  onOpenArchive: (taskId: string | undefined) => void | undefined;
-  canOpenArchive: boolean | undefined;
-  openArchiveDisabledReason: string | undefined;
+  /** 复制任务编号；不传则按钮禁用。 */
+  onCopyTaskId?: (() => void) | undefined;
+  /** 打开任务日志目录；不传则整块按钮不渲染（画布任务节点暂不接这条链）。 */
+  onOpenArchive?: ((taskId: string | undefined) => void) | undefined;
+  canOpenArchive?: boolean | undefined;
+  openArchiveDisabledReason?: string | undefined;
+  /** 关闭后焦点落点；不传则由浮层默认行为决定。 */
+  onCloseAutoFocus?: ((event: Event) => void) | undefined;
 }
 
 function FieldRow({ label, value, mono }: { label: string; value: string; mono: boolean | undefined }) {
@@ -74,6 +80,7 @@ export function TaskStatusDialog({
   onOpenArchive,
   canOpenArchive,
   openArchiveDisabledReason,
+  onCloseAutoFocus,
 }: TaskStatusDialogProps) {
   const statusLabel = getTaskStatusLabel((taskInfo !== null && taskInfo !== undefined ? taskInfo.status : undefined), (taskInfo !== null && taskInfo !== undefined && taskInfo.progress !== null && taskInfo.progress !== undefined ? taskInfo.progress.phase : undefined) as string | undefined) ?? ((taskInfo !== null && taskInfo !== undefined ? taskInfo.status : undefined) || '-');
   const failure = resolveTaskFailurePresentation({ taskInfo, backendMessage: backendMessage ?? null, fallback: undefined });
@@ -86,10 +93,12 @@ export function TaskStatusDialog({
     { label: '创建时间', value: formatTime((taskInfo !== null && taskInfo !== undefined ? taskInfo.createdAt : undefined)), mono: false },
   ];
   const archiveDisabledReason = openArchiveDisabledReason || '这次任务没有可查看的日志文件';
+  // 密钥缺失失败：在动作区提供跨窗口修复出口（跳 Hub「设置 → 服务商与模型」）。
+  const showCredentialFix = isCredentialMissingFailure(taskInfo?.failure);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent form="standard" size="wide">
+      <DialogContent form="standard" size="standard" onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader className="shrink-0">
           <DialogTitle>{title || '任务详情'}</DialogTitle>
         </DialogHeader>
@@ -170,15 +179,17 @@ export function TaskStatusDialog({
         </DialogBody>
 
         <DialogFooter className="shrink-0 flex-wrap gap-2">
+          {/* 这个按钮复制的是任务编号；错误详情文本的复制在「错误详情」区块里，
+              两者不得同名（曾同名，用户无从判断复制到的是什么）。 */}
           {onCopyTaskId ? (
             <Button type="button" variant="secondary" onClick={onCopyTaskId}>
               <IconCopy size={16} />
-              复制错误详情
+              复制任务编号
             </Button>
           ) : (
             <Button type="button" variant="secondary" disabled>
               <IconCopy size={16} />
-              复制错误详情
+              复制任务编号
             </Button>
           )}
 
@@ -196,6 +207,12 @@ export function TaskStatusDialog({
                 </Button>
               </DisabledActionTooltip>
             )
+          ) : null}
+
+          {showCredentialFix ? (
+            <Button type="button" variant="secondary" onClick={focusHubModelProviders}>
+              去填写密钥
+            </Button>
           ) : null}
 
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

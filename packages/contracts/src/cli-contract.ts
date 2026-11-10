@@ -484,6 +484,7 @@ export {
   CliAppStatusOpenedProjectSchema,
   CliTaskTerminalResultSchema,
   CliGenerateTaskIdentitySchema,
+  CliGenerateIntentAcceptanceSchema,
   CliGenerateAcceptanceSchema,
   CliTaskCancelParamsSchema,
 } from './cli-response-dto-contract';
@@ -494,6 +495,7 @@ export type {
   CliAppStatusOpenedProject,
   CliTaskTerminalResult,
   CliGenerateTaskIdentity,
+  CliGenerateIntentAcceptance,
   CliGenerateAcceptance,
   CliTaskCancelParams,
 } from './cli-response-dto-contract';
@@ -523,10 +525,15 @@ export { CliGenerationWarningSchema, type CliGenerationWarning } from './cli-gen
 // 生成档案（spec §5.2 batch get / asset get 与 task get 内联，CLI-038/039/040）承载在
 // cli-generation-archive-contract.ts（行数预算拆分）；re-export 保持单一取用面。
 export {
+  CliGenerationArchiveIntentSchema,
   CliGenerationArchiveReferenceSchema,
   CliGenerationArchiveSchema,
 } from './cli-generation-archive-contract';
-export type { CliGenerationArchiveReference, CliGenerationArchive } from './cli-generation-archive-contract';
+export type {
+  CliGenerationArchiveIntent,
+  CliGenerationArchiveReference,
+  CliGenerationArchive,
+} from './cli-generation-archive-contract';
 
 /** `iart --version` 输出（spec §5.5）：版本数据源是发现文件；null = 读不到（如实承载未知，不虚构占位值）。 */
 export const CliVersionReportSchema = z.object({ version: z.string().min(1).nullable() }).strict();

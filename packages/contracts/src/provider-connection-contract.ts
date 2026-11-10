@@ -285,6 +285,24 @@ export const resolveChatAdapterIdFromProtocolAdapter = (
 export const ProviderConnectionLifecycleSchema = z.enum(['enabled', 'disabled', 'retired']);
 export type ProviderConnectionLifecycle = z.infer<typeof ProviderConnectionLifecycleSchema>;
 
+/**
+ * 凭证条目的加密方案（凭证存储自描述字段，跨进程投影复用同一值域）。
+ *
+ * - `os_safe_storage`：宿主操作系统安全存储加密（Electron safeStorage）；
+ * - `obfuscated`：base64 弱保护（宿主安全存储不可用时的降级路径）。
+ */
+export const CredentialProtectionSchema = z.enum(['os_safe_storage', 'obfuscated']);
+export type CredentialProtection = z.infer<typeof CredentialProtectionSchema>;
+
+/**
+ * 凭证可用状态（投影自凭证存储的读取留痕）。
+ *
+ * - `ready`：可读；
+ * - `needs_reentry`：最近一次读取失败，需要用户到设置里重新填写。
+ */
+export const CredentialReadStatusSchema = z.enum(['ready', 'needs_reentry']);
+export type CredentialReadStatus = z.infer<typeof CredentialReadStatusSchema>;
+
 export const ProviderConnectionSchema = z
   .object({
     connection_id: z.string().regex(/^up_conn_[a-z0-9][a-z0-9-_]*$/),
@@ -301,6 +319,13 @@ export const ProviderConnectionSchema = z
     credential_ref: z.string().min(1).optional(),
     credential_version: z.number().int().nonnegative().optional(),
     has_credential: z.boolean(),
+    /**
+     * 凭证投影（2026-10-29 起）：由后端路由层从凭证存储合成，**不持久化到连接文件**
+     * （凭证存储是唯一 owner）。无凭证时两者为 `null`；返回该 DTO 的响应必须带齐。
+     * 可选仅为兼容持久化读取与既有字面量，路由层不得省略。
+     */
+    credential_protection: CredentialProtectionSchema.nullable().optional(),
+    credential_status: CredentialReadStatusSchema.nullable().optional(),
     lifecycle: ProviderConnectionLifecycleSchema,
     revision: z.number().int().nonnegative(),
     created_at: z.string(),
@@ -405,25 +430,97 @@ export type ProviderConnectionOkResponse = z.infer<typeof ProviderConnectionOkRe
  * - media_refs 与既有 `task-submit-media-input.ts` 的 MediaInput 类型对齐（AGENTS.md：禁止 z.record(z.unknown()) 泛化弱类型）。
  * - task_ids 为该批次固定任务成员（spec §5.1 固定任务成员）；task_count 与其长度一致，保留为显式冗余（提交受理契约按 N 原子校验）。
  */
+/** 一个批次内最多容纳的意图数（spec 45 §5.1：任务总数 1–10，意图数不超过任务总数）。 */
+export const MAX_BATCH_INTENT_COUNT = 10;
+/** 一个批次最多容纳的任务数（沿用提交侧既有 `--count` 上限，不另立第二套数量纪律）。 */
+export const MAX_BATCH_TASK_COUNT = 10;
+
+/**
+ * 批次意图（spec 45 §5.1）：一份完整的生成输入——提示词、有效参数、已解析的媒体引用，
+ * 加上它要产出的任务数。单意图批次是只有一个意图的批次，与引入意图结构前的提交等价。
+ */
+export const BatchIntentSchema = z
+  .object({
+    prompt: z.string(),
+    params: z.record(z.unknown()),
+    media_refs: z.array(TaskSubmitMediaInputSchema).optional(),
+    reference_asset_ids: z.array(z.string().min(1)).optional(),
+    task_count: z.number().int().min(1).max(MAX_BATCH_TASK_COUNT),
+  })
+  .strict();
+export type BatchIntent = z.infer<typeof BatchIntentSchema>;
+
+/**
+ * 批次意图快照（spec 45 §5.1）——受理时冻结的用户意图。
+ *
+ * 形态以「按序意图列表」为准；落库的历史批次只有顶层单意图字段（prompt/params/task_count），
+ * 读取时归一成「一个意图」，使已受理批次的档案、复用与重试语义不因结构升级而断。
+ * 归一化后的快照恒有 `intents`，消费方不再需要判空两条路径。
+ */
+export interface BatchIntentSnapshot {
+  batch_id: string;
+  model_id: string;
+  model_version: string;
+  intents: BatchIntent[];
+  task_ids: string[];
+  created_at: string;
+}
+
 export const BatchIntentSnapshotSchema = z
   .object({
     batch_id: z.string().min(1),
     model_id: z.string().min(1),
     model_version: z.string().min(1),
-    prompt: z.string(),
-    params: z.record(z.unknown()),
+    /** 现役形态：按序意图列表。历史批次没有该键，由顶层单意图字段归一。 */
+    intents: z.array(BatchIntentSchema).min(1).max(MAX_BATCH_INTENT_COUNT).optional(),
+    /** 历史形态（单意图）：只为读已落库批次保留，新写入一律写 `intents`。 */
+    prompt: z.string().optional(),
+    params: z.record(z.unknown()).optional(),
     media_refs: z.array(TaskSubmitMediaInputSchema).optional(),
     reference_asset_ids: z.array(z.string().min(1)).optional(),
-    task_count: z.number().int().min(1).max(10),
-    task_ids: z.array(z.string().min(1)).min(1).max(10),
+    task_count: z.number().int().min(1).max(MAX_BATCH_TASK_COUNT).optional(),
+    task_ids: z.array(z.string().min(1)).min(1).max(MAX_BATCH_TASK_COUNT),
     created_at: z.string(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    if (value.intents !== undefined) return;
+    if (value.prompt !== undefined && value.params !== undefined && value.task_count !== undefined) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'batch_intent_snapshot_requires_intents_or_legacy_single_intent',
+      path: ['intents'],
+    });
+  })
+  .transform((value): BatchIntentSnapshot => {
+    const intents: BatchIntent[] = value.intents ?? [
+      {
+        prompt: value.prompt ?? '',
+        params: value.params ?? {},
+        ...(value.media_refs === undefined ? {} : { media_refs: value.media_refs }),
+        ...(value.reference_asset_ids === undefined
+          ? {}
+          : { reference_asset_ids: value.reference_asset_ids }),
+        task_count: value.task_count ?? value.task_ids.length,
+      },
+    ];
+    return {
+      batch_id: value.batch_id,
+      model_id: value.model_id,
+      model_version: value.model_version,
+      intents,
+      task_ids: [...value.task_ids],
+      created_at: value.created_at,
+    };
+  })
   .refine(
-    (value) => value.task_ids.length === value.task_count,
-    { message: 'task_ids length must equal task_count (fixed task members, spec 45 §5.1)' },
+    (value) =>
+      value.task_ids.length === value.intents.reduce((sum, intent) => sum + intent.task_count, 0),
+    {
+      message:
+        'task_ids length must equal sum of intent task_count (fixed task members, spec 45 §5.1)',
+    },
   );
-export type BatchIntentSnapshot = z.infer<typeof BatchIntentSnapshotSchema>;
 
 /**
  * 快照冻结的协议身份与鉴权形态（2026-10-27 起执行链的唯一来源）。

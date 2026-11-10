@@ -29,8 +29,10 @@ const createFixture = () => {
       {
         stableZones: ['src/stable'],
         boundaryZones: ['src/stable/raw/**', '**/*.test.ts'],
-        openMapNames: ['*Map', 'Raw*'],
-        allowedRecordAliases: ['RawJsonObject'],
+        registeredOpenRecords: [
+          { path: 'src/stable/maps.ts', types: ['RuntimeValueMap'], reason: '测试夹具：运行时开放映射' },
+          { path: 'src/stable/heritage.ts', types: ['RawFoo'], reason: '测试夹具：外部原始结构' },
+        ],
         allowedFixedFieldObjects: ['process.env', 'process.versions', 'import.meta.env', '*.dataset', '*.userData'],
         fileExtensions: ['.ts'],
         ignorePaths: [],
@@ -58,7 +60,7 @@ const read = (entry: CatalogEntry) => entry["options"];
   assert.match(result.stderr, /stable\/no-fixed-field-bracket-access/);
 });
 
-test('boundary zone and open map naming are allowed', () => {
+test('boundary zone 与「文件+精确类型」登记放行开放形状', () => {
   const fixture = createFixture();
   writeFile(
     path.join(fixture.root, 'src/stable/raw/parser.ts'),
@@ -77,6 +79,54 @@ const read = (map: RuntimeValueMap, key: string) => map[key];
 
   const result = runGate(fixture.root, fixture.policyPath);
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('命名不再构成豁免：未登记的 *Result/*Map 类型即报红', () => {
+  const fixture = createFixture();
+  writeFile(
+    path.join(fixture.root, 'src/stable/naming.ts'),
+    `
+type CatalogResult = Record<string, unknown>;
+type ProviderMetadata = Record<string, unknown>;
+`,
+  );
+
+  const result = runGate(fixture.root, fixture.policyPath);
+  assert.notEqual(result.status, 0);
+  const recordIssues = result.stderr.match(/stable\/no-naked-record-string-unknown/g) ?? [];
+  assert.equal(recordIssues.length, 2, result.stderr);
+  assert.match(result.stderr, /registeredOpenRecords/);
+});
+
+test('登记按文件作用域生效：同名类型换个文件仍报红', () => {
+  const fixture = createFixture();
+  writeFile(path.join(fixture.root, 'src/stable/maps.ts'), 'type RuntimeValueMap = Record<string, unknown>;\n');
+  writeFile(path.join(fixture.root, 'src/stable/maps-copy.ts'), 'type RuntimeValueMap = Record<string, unknown>;\n');
+
+  const result = runGate(fixture.root, fixture.policyPath);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /src\/stable\/maps-copy\.ts:1:/);
+  assert.doesNotMatch(result.stderr, /src\/stable\/maps\.ts:1:/);
+});
+
+test('登记表拒绝通配类型名', () => {
+  const fixture = createFixture();
+  fs.writeFileSync(
+    path.join(fixture.root, fixture.policyPath),
+    JSON.stringify({
+      stableZones: ['src/stable'],
+      boundaryZones: [],
+      registeredOpenRecords: [{ path: 'src/stable/maps.ts', types: ['*Map'], reason: '旧口径残留' }],
+      allowedFixedFieldObjects: [],
+      fileExtensions: ['.ts'],
+      ignorePaths: [],
+    }),
+  );
+  writeFile(path.join(fixture.root, 'src/stable/maps.ts'), 'type RuntimeValueMap = Record<string, unknown>;\n');
+
+  const result = runGate(fixture.root, fixture.policyPath);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /命名通配豁免已退役/);
 });
 
 test('stable zone rejects fixed-field bracket access inside calls and access chains', () => {
@@ -125,7 +175,7 @@ const readUserData = (mesh: { userData: Record<string, string> }) => mesh.userDa
   assert.equal(result.status, 0, result.stderr);
 });
 
-test('stable zone rejects Record string unknown heritage unless naming marks an open structure', () => {
+test('stable zone rejects Record string unknown heritage unless the type is registered', () => {
   const fixture = createFixture();
   writeFile(
     path.join(fixture.root, 'src/stable/heritage.ts'),

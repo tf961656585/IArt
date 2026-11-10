@@ -91,6 +91,10 @@ const CODE_MESSAGES: Readonly<Record<string, string>> = {
   interface_format_polling_path_not_relative: '查任务状态的地址要是相对路径：以 / 开头，不能带域名或 ..',
   interface_format_parameter_key_duplicated: '这个发送位置和另一行重复或重叠了',
   interface_format_parameter_enum_values_missing: '选项类型至少要给一个可选值',
+  interface_format_parameter_enum_meta_requires_enum_type: '只有「选项」类型的参数才能设置默认关闭的取值',
+  interface_format_parameter_enum_meta_values_missing: '先给这个参数填可选值，再设置默认关闭的取值',
+  interface_format_parameter_enum_meta_value_duplicated: '同一个可选值只能设置一次默认关闭',
+  interface_format_parameter_enum_meta_value_unknown: '这个可选值已经不在列表里了，请重新选',
   interface_format_field_key_reserved: '这个请求体路径是系统保留的，提示词请用「提示词发送到」填写',
   interface_format_prompt_path_conflicts_with_parameter: '提示词的位置不能和参数的发送位置重叠',
   interface_format_model_path_conflicts: '模型 ID 的发送位置不能和提示词或参数重复',
@@ -132,6 +136,8 @@ const PARAMETER_FIELD_SUFFIXES: Readonly<Record<string, string>> = {
   type: 'type',
   default_value: 'default',
   enum_values: 'enum-values',
+  // 取值默认关闭声明与「可选值」共用同一块界面：错误落在取值列表控件上。
+  enum_value_meta: 'enum-values',
   required: 'required',
 };
 
@@ -253,9 +259,11 @@ const targetForPath = (
           ? '默认值'
           : leaf === 'enum_values'
             ? '可选值'
-            : leaf === 'required'
-              ? '必填'
-              : parameterKeyLabel(location);
+            : leaf === 'enum_value_meta'
+              ? '默认关闭的取值'
+              : leaf === 'required'
+                ? '必填'
+                : parameterKeyLabel(location);
     return {
       fieldId: `interface-format-param-${rowIndex}-${suffix}`,
       sectionId: SECTION_PARAMS,

@@ -3,6 +3,7 @@ import {
   ExecutableModelDirectoryEntrySchema,
   ExecutableModelFailureCodeSchema,
   GenerationMediaSlotIdSchema,
+  ParameterActivationSchema,
   canAdapterExpressThinkingTier,
   type ChatModelDirectoryEntry,
   type ExecutableCatalogMediaSlot,
@@ -10,6 +11,8 @@ import {
   type ExecutableModelFailureCode,
 } from '@iart/contracts';
 import * as loggingModule from './logging.cts';
+import {
+} from './model-package-catalog.parameter-schema.cts';
 import { buildDeclaredGenerationProjection, resolveReferencedRecipe } from './generation-declaration-projection.cts';
 import { getInterfaceFormat } from './interface-format/registry.cts';
 import { collectMediaSlotOfficialFields } from './generation-family-templates.cts';
@@ -225,9 +228,16 @@ const projectParameterFields = (projection: unknown): ExecutableModelDirectoryEn
           componentProps: f.component_props !== undefined && f.component_props !== null && typeof f.component_props === 'object' && !Array.isArray(f.component_props)
             ? (f.component_props as CatalogOpenMap)
             : undefined,
-          visibleWhen: f.visible_when !== undefined && f.visible_when !== null && typeof f.visible_when === 'object' && !Array.isArray(f.visible_when)
-            ? (f.visible_when as CatalogOpenMap)
-            : undefined,
+          visibleWhen: (() => {
+            const parsed = ParameterActivationSchema.safeParse(f.visible_when);
+            if (parsed.success) return parsed.data;
+            if (f.visible_when !== undefined && f.visible_when !== null) {
+              loggingModule.logWarn('[model-catalog] drop invalid parameter activation', {
+                fieldKey: typeof f.field_key === 'string' ? f.field_key : null,
+              });
+            }
+            return undefined;
+          })(),
           metadata: f.metadata !== undefined && f.metadata !== null && typeof f.metadata === 'object' && !Array.isArray(f.metadata)
             ? (f.metadata as CatalogOpenMap)
             : undefined,
@@ -397,6 +407,11 @@ const buildCatalogEntry = (item: {
    */
   mediaSlotSource?: { familyAdapterId: string; acceptedMediaSlots: readonly string[] };
   /**
+   * 该模型记录上的能力标签（spec 48 §6.1）。原样投影、不派生；未标注传空数组。
+   * 只有生成目录会传：对话模型没有这个字段（strict schema 会拒）。
+   */
+  capabilityLabels?: readonly string[];
+  /**
    * 记录合成失败的兜底原因码（可选）。
    *
    * 只在 `judgeExecutability` 判为可执行时生效：格式就绪、配方可解析，但投影构建失败
@@ -447,6 +462,7 @@ const buildCatalogEntry = (item: {
       supports_reference_media: capability.supports_reference_media === true ? true : undefined,
     },
     parameter_schema: parameterSchema,
+    capability_labels: item.capabilityLabels === undefined ? [] : [...item.capabilityLabels],
     media_slots:
       item.mediaSlotSource === undefined
         ? []
@@ -553,6 +569,7 @@ const listExecutableCatalogEntries = (): ExecutableModelDirectoryEntry[] => {
       familyAdapterId: record.family_adapter_id,
       acceptedMediaSlots: record.accepted_media_slots,
     };
+    const capabilityLabels = record.capability_labels;
     // 格式就绪是合成前提（契约值域已保证 family_adapter_id 合法，这里只判就绪与否）。
     const template = getFamilyTemplate(record.family_adapter_id);
     if (template === null || template.status !== 'ready') {
@@ -565,6 +582,7 @@ const listExecutableCatalogEntries = (): ExecutableModelDirectoryEntry[] => {
         modelId: record.model_id,
         projection: EMPTY_DECLARATION_PROJECTION,
         mediaSlotSource,
+        capabilityLabels,
       });
       if (entry !== null) entries.push(entry);
       continue;
@@ -576,6 +594,7 @@ const listExecutableCatalogEntries = (): ExecutableModelDirectoryEntry[] => {
         modelId: record.model_id,
         projection: EMPTY_DECLARATION_PROJECTION,
         mediaSlotSource,
+        capabilityLabels,
         executabilityFallback: 'deployment_invalid',
       });
       if (entry !== null) entries.push(entry);
@@ -585,6 +604,7 @@ const listExecutableCatalogEntries = (): ExecutableModelDirectoryEntry[] => {
       modelId: record.model_id,
       projection: built.projection,
       mediaSlotSource,
+      capabilityLabels,
     });
     if (entry !== null) entries.push(entry);
   }

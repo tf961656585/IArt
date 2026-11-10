@@ -30,30 +30,309 @@
     "**/migration/**",
     "**/migrations/**"
   ],
-  "openMapNames": [
-    "*Map",
-    "*ById",
-    "*ByKey",
-    "*Metadata",
-    "*Meta",
-    "*Payload",
-    "*Params",
-    "*Result",
-    "Raw*",
-    "External*",
-    "Legacy*",
-    "Dynamic*",
-    "Json*",
-    "UnknownRecord",
-    "PlainObject"
-  ],
-  "allowedRecordAliases": [
-    "UnknownRecord",
-    "PlainObject",
-    "JsonRecord",
-    "RawJsonObject",
-    "ExternalPayload",
-    "DynamicMetadata"
+  "openRecordRegistrationNote": "命名通配豁免已退役：开放 Record 只能按「文件路径 + 精确类型名」登记，逐条写 reason；禁止通配。",
+  "registeredOpenRecords": [
+    {
+      "path": "apps/backend/src/local-server/agent-tool-executor.cts",
+      "types": [
+        "DynamicFields"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/chat-streaming-engine.cts",
+      "types": [
+        "ChatUserParamsMap",
+        "ChatCoreLogMetaMap"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/files-key-resolver-registry.cts",
+      "types": [
+        "ResolverDynamicParams"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/interface-format/placeholder.cts",
+      "types": [
+        "RenderedValueMap"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/interface-format/registry.cts",
+      "types": [
+        "PresetModuleMap"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/model-catalog-entry.cts",
+      "types": [
+        "CatalogOpenMap"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/model-input-preparation/model-input-policy.cts",
+      "types": [
+        "DynamicEvalFields"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/model-package-catalog.types.cts",
+      "types": [
+        "PreRequestBodyPayload",
+        "PreRequestOutputPayload",
+        "VariantPayloadOverridesMap"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/project-graph.cts",
+      "types": [
+        "DynamicNodeGraphSettings",
+        "DynamicNodeGraphExtra"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/prompt-presets-store.cts",
+      "types": [
+        "RawPromptPresetItem"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/provider-connection/remote-model-injection.cts",
+      "types": [
+        "DynamicBodyObject"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/request-assembler-shared.cts",
+      "types": [
+        "PreRequestOutputsMap"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/request-wire-utils.cts",
+      "types": [
+        "DynamicJsonObject"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/task-archive-payloads.cts",
+      "types": [
+        "DynamicEventResult"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/task-archive-summary-projector.cts",
+      "types": [
+        "JsonRecord"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/task-cancel-service.cts",
+      "types": [
+        "TaskMetadataMap"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/task-payload-builder.cts",
+      "types": [
+        "PlainObject"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/task-result-materializer.cts",
+      "types": [
+        "DynamicJsonObject"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/task-result-output-mapping.cts",
+      "types": [
+        "PlainObject"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/task-storage-summary-projector.cts",
+      "types": [
+        "JsonRecord"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/local-server/utils.cts",
+      "types": [
+        "UnknownRecord",
+        "DynamicValueMap"
+      ],
+      "reason": "运行时载荷边界：外部服务商或用户提供的字段形状由接口格式配置决定"
+    },
+    {
+      "path": "apps/backend/src/main.cts",
+      "types": [
+        "DynamicModuleNamespace"
+      ],
+      "reason": "动态模块命名空间：入口按条件动态加载的模块导出"
+    },
+    {
+      "path": "apps/desktop-shell/src/cli/cli-generation-archive.cts",
+      "types": [
+        "DynamicParamsMap"
+      ],
+      "reason": "CLI 归档载荷沿用运行时快照形状"
+    },
+    {
+      "path": "apps/desktop-shell/src/preload.cts",
+      "types": [
+        "E2eEventPayload"
+      ],
+      "reason": "E2E 调试事件载荷是跨进程开放形状"
+    },
+    {
+      "path": "apps/desktop-shell/src/storage/editor-storage-ipc.cts",
+      "types": [
+        "JsonObject"
+      ],
+      "reason": "存储投影边界：JSON 列键集由写入方决定"
+    },
+    {
+      "path": "apps/desktop-shell/src/storage/editor-storage-media.cts",
+      "types": [
+        "MediaAssetMap"
+      ],
+      "reason": "存储投影边界：JSON 列键集由写入方决定"
+    },
+    {
+      "path": "apps/desktop-shell/src/storage/editor-storage-prompt-presets.cts",
+      "types": [
+        "ExternalPayload"
+      ],
+      "reason": "存储投影边界：JSON 列键集由写入方决定"
+    },
+    {
+      "path": "apps/desktop-shell/src/storage/editor-storage-read-model.cts",
+      "types": [
+        "JsonObject"
+      ],
+      "reason": "存储投影边界：JSON 列键集由写入方决定"
+    },
+    {
+      "path": "apps/editor/src/client/api/clientTypes.ts",
+      "types": [
+        "DynamicPayload"
+      ],
+      "reason": "编辑器承接运行时下发的动态载荷与 JSON"
+    },
+    {
+      "path": "apps/editor/src/client/types/generation.ts",
+      "types": [
+        "SchemaGenerationMeta",
+        "SchemaGenerationPayload"
+      ],
+      "reason": "编辑器承接运行时下发的动态载荷与 JSON"
+    },
+    {
+      "path": "apps/editor/src/client/utils/desktopE2E.ts",
+      "types": [
+        "DynamicDetail"
+      ],
+      "reason": "编辑器承接运行时下发的动态载荷与 JSON"
+    },
+    {
+      "path": "apps/editor/src/client/utils/hubCanvasStartupConfig.ts",
+      "types": [
+        "ExternalPayload"
+      ],
+      "reason": "编辑器承接运行时下发的动态载荷与 JSON"
+    },
+    {
+      "path": "apps/editor/src/client/utils/media-localization/rewriter.ts",
+      "types": [
+        "DynamicObj"
+      ],
+      "reason": "编辑器承接运行时下发的动态载荷与 JSON"
+    },
+    {
+      "path": "apps/editor/src/client/utils/taskMediaCache.ts",
+      "types": [
+        "DynamicObj"
+      ],
+      "reason": "编辑器承接运行时下发的动态载荷与 JSON"
+    },
+    {
+      "path": "apps/editor/src/client/utils/typeGuards.ts",
+      "types": [
+        "UnknownRecord"
+      ],
+      "reason": "编辑器承接运行时下发的动态载荷与 JSON"
+    },
+    {
+      "path": "apps/editor/src/features/canvas/utils/taskFailurePresentation.ts",
+      "types": [
+        "PlainObject"
+      ],
+      "reason": "编辑器承接运行时下发的动态载荷与 JSON"
+    },
+    {
+      "path": "packages/contracts/src/media-asset-row-projector.ts",
+      "types": [
+        "JsonRecord"
+      ],
+      "reason": "契约边界：外部载荷与参数覆盖映射的键集由用户配置决定"
+    },
+    {
+      "path": "packages/contracts/src/model-asset-contract/formal-resource-crud.ts",
+      "types": [
+        "ModelAssetFormalDynamicMap"
+      ],
+      "reason": "契约边界：外部载荷与参数覆盖映射的键集由用户配置决定"
+    },
+    {
+      "path": "packages/contracts/src/model-asset-contract/projection-schema.ts",
+      "types": [
+        "ModelAssetLocalizationResourceMap"
+      ],
+      "reason": "契约边界：外部载荷与参数覆盖映射的键集由用户配置决定"
+    },
+    {
+      "path": "packages/contracts/src/model-asset-contract/runtime-dsl.ts",
+      "types": [
+        "PreRequestOutputMap"
+      ],
+      "reason": "契约边界：外部载荷与参数覆盖映射的键集由用户配置决定"
+    },
+    {
+      "path": "packages/contracts/src/parameter-activation.ts",
+      "types": [
+        "ParameterValueMap",
+        "ParameterValueDraftMap"
+      ],
+      "reason": "契约边界：外部载荷与参数覆盖映射的键集由用户配置决定"
+    },
+    {
+      "path": "packages/contracts/src/runtime-hydrated-projector.ts",
+      "types": [
+        "JsonRecord"
+      ],
+      "reason": "契约边界：外部载荷与参数覆盖映射的键集由用户配置决定"
+    }
   ],
   "allowedFixedFieldObjects": [
     "process.env",
@@ -62,7 +341,12 @@
     "*.dataset",
     "*.userData"
   ],
-  "fileExtensions": [".ts", ".tsx", ".cts", ".mts"],
+  "fileExtensions": [
+    ".ts",
+    ".tsx",
+    ".cts",
+    ".mts"
+  ],
   "ignorePaths": [
     "node_modules/**",
     "**/*.d.ts",

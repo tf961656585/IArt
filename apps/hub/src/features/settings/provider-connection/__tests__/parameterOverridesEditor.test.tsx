@@ -169,3 +169,39 @@ describe('参数覆盖：按命名空间查重', () => {
     ).toBe(true);
   });
 });
+
+describe('参数覆盖：默认关闭（opt_in）取值', () => {
+  it('提供「添加 gif」入口，点击后加入可选值（格式的形态声明随启用保留）', () => {
+    const onChange = vi.fn();
+    const withOptIn: FamilyTemplateParameterDescriptor = {
+      ...descriptor,
+      official_fields: [
+        field({
+          field_key: 'format',
+          label: '图片格式',
+          component: 'select',
+          wire_name: 'format',
+          enum_options: ['png', 'jpeg', 'webp'],
+          opt_in_enum_options: ['gif'],
+          default_value: 'jpeg',
+        }),
+      ],
+    };
+    render(
+      <ParameterOverridesEditor
+        descriptor={withOptIn}
+        value={emptyParameterOverrides()}
+        onChange={onChange}
+        liveMediaSlotIds={[]}
+      />,
+    );
+
+    expect(screen.getByText('格式还支持（默认关闭）：')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '添加 gif' }));
+
+    expect(onChange).toHaveBeenCalledWith({
+      official: [{ field_key: 'format', enum_options: ['png', 'jpeg', 'webp', 'gif'] }],
+      custom: [],
+    });
+  });
+});

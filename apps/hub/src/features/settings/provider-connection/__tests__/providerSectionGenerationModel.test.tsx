@@ -172,6 +172,7 @@ const stubFetch = ({ failCreate = false, failDeterministic = false, failTemplate
             remote_model_id: declared.remote_model_id ?? declared.model_id,
             family_adapter_id: 'openai-image-v1',
             accepted_media_slots: Array.isArray(declared.accepted_media_slots) ? declared.accepted_media_slots : [],
+            capability_labels: [],
             parameter_overrides: { official: [], custom: [] },
             created_at: '2026-09-24T00:00:00.000Z',
           },
@@ -191,6 +192,7 @@ const stubFetch = ({ failCreate = false, failDeterministic = false, failTemplate
             remote_model_id: decodeURIComponent(modelId),
             family_adapter_id: 'openai-image-v1',
             accepted_media_slots: body.accepted_media_slots,
+            capability_labels: [],
             parameter_overrides: body.parameter_overrides ?? { official: [], custom: [] },
             created_at: '2026-09-24T00:00:00.000Z',
           },
@@ -307,6 +309,7 @@ const declaredRecord: CustomGenerationModel = {
   remote_model_id: 'my-image-model',
   family_adapter_id: 'openai-image-v1',
   accepted_media_slots: ['reference_image'],
+  capability_labels: [],
   parameter_overrides: { official: [], custom: [] },
   created_at: '2026-09-24T00:00:00.000Z',
 };
@@ -351,6 +354,7 @@ describe('生成族服务商：添加模型提交流', () => {
       remote_model_id: 'remote-name',
       family_adapter_id: 'openai-image-v1',
       accepted_media_slots: ['reference_image'],
+      capability_labels: [],
     });
     // active 接入由后端在创建内写入：没有第二次写入（也不再有任何接入载体端点的调用——
     // /api/model-deployments 已随部署载体退场删除）
@@ -375,6 +379,7 @@ describe('生成族服务商：添加模型提交流', () => {
         connection_id: generationConnection.connection_id,
         family_adapter_id: 'openai-image-v1',
         accepted_media_slots: [],
+        capability_labels: [],
       });
     });
   });
@@ -517,6 +522,7 @@ describe('生成族服务商：添加时自定义参数（高级参数自定义�
         connection_id: generationConnection.connection_id,
         family_adapter_id: 'openai-image-v1',
         accepted_media_slots: [],
+        capability_labels: [],
         parameter_overrides: {
           official: [
             { field_key: 'format', wire_name: 'image_format' },
@@ -632,6 +638,7 @@ describe('生成族服务商：素材位行的参数设置', () => {
         connection_id: generationConnection.connection_id,
         family_adapter_id: 'openai-image-v1',
         accepted_media_slots: ['reference_image'],
+        capability_labels: [],
         parameter_overrides: {
           official: [{ field_key: 'referenceImage', wire_name: 'image' }],
           custom: [],
@@ -659,6 +666,7 @@ describe('生成族服务商：素材位行的参数设置', () => {
         connection_id: generationConnection.connection_id,
         family_adapter_id: 'openai-image-v1',
         accepted_media_slots: ['reference_image'],
+        capability_labels: [],
       });
     });
   });
@@ -677,6 +685,7 @@ describe('生成族服务商：素材位行的参数设置', () => {
         connection_id: generationConnection.connection_id,
         family_adapter_id: 'openai-image-v1',
         accepted_media_slots: ['reference_image'],
+        capability_labels: [],
         parameter_overrides: {
           official: [{ field_key: 'referenceImage', media_max_files: 9 }],
           custom: [],
@@ -704,6 +713,7 @@ describe('生成族服务商：素材位行的参数设置', () => {
         connection_id: generationConnection.connection_id,
         family_adapter_id: 'openai-image-v1',
         accepted_media_slots: ['reference_image'],
+        capability_labels: [],
       });
     });
   });
@@ -755,6 +765,7 @@ describe('生成族服务商：素材位行的参数设置', () => {
         connection_id: generationConnection.connection_id,
         family_adapter_id: 'openai-image-v1',
         accepted_media_slots: [],
+        capability_labels: [],
       });
     });
   });
@@ -803,6 +814,7 @@ describe('生成族服务商：编辑已添加模型（素材位 + 参数覆盖�
       expect(put).toBeDefined();
       expect(JSON.parse(String(put?.[1]?.body))).toEqual({
         accepted_media_slots: [],
+        capability_labels: [],
         parameter_overrides: { official: [], custom: [] },
       });
     });
@@ -843,6 +855,7 @@ describe('生成族服务商：编辑已添加模型（素材位 + 参数覆盖�
       // 未勾选位留下的覆盖不进请求体：后端按本次勾选的模板校验，带上它整次保存会被拒
       expect(JSON.parse(String(put?.[1]?.body))).toEqual({
         accepted_media_slots: [],
+        capability_labels: [],
         parameter_overrides: {
           official: [{ field_key: 'format', wire_name: 'image_format' }],
           custom: [],
@@ -880,6 +893,7 @@ describe('生成族服务商：编辑已添加模型（素材位 + 参数覆盖�
       expect(put).toBeDefined();
       expect(JSON.parse(String(put?.[1]?.body))).toEqual({
         accepted_media_slots: ['reference_image'],
+        capability_labels: [],
         parameter_overrides: {
           official: [{ field_key: 'format', wire_name: 'image_format2' }],
           custom: [],

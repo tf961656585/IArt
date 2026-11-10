@@ -1,3 +1,4 @@
+// @spec: CLI-008, CLI-063
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/client/api/promptDockApi', () => ({
@@ -120,9 +121,7 @@ const acceptanceResponse = (taskCount: number): PromptDockBatchSubmitResponse =>
     batch_id: 'batch_1',
     model_id: 'model-a',
     model_version: '1.0.0',
-    prompt: '一只猫',
-    params: {},
-    task_count: taskCount,
+    intents: [{ prompt: '一只猫', params: {}, task_count: taskCount }],
     task_ids: Array.from({ length: taskCount }, (_, index) => `task_${index + 1}`),
     created_at: '2026-10-07T00:00:00.000Z',
   },
@@ -198,25 +197,29 @@ describe('程序化提交共享核心（与界面提交同一构造路径）', (
     expect(request).toEqual({
       model_id: 'model-a',
       model_version: '1.0.0',
-      prompt: '一只猫',
-      arguments: {},
-      media_inputs: [
+      intents: [
         {
-          media_kind: 'image',
-          source_kind: 'attachment',
-          value: 'local-media://demo/asset_1.png',
-          mime_type: 'image/png',
-          filename: null,
-          field_key: 'image',
-          // 资产身份与产品级用途随媒体条目下发（档案据此把出网文件对回资产与用途）。
-          asset_id: 'asset_1',
-          slot_id: 'reference_image',
+          prompt: '一只猫',
+          arguments: {},
+          media_inputs: [
+            {
+              media_kind: 'image',
+              source_kind: 'attachment',
+              value: 'local-media://demo/asset_1.png',
+              mime_type: 'image/png',
+              filename: null,
+              field_key: 'image',
+              // 资产身份与产品级用途随媒体条目下发（档案据此把出网文件对回资产与用途）。
+              asset_id: 'asset_1',
+              slot_id: 'reference_image',
+            },
+          ],
+          reference_asset_ids: ['asset_1'],
+          task_count: 2,
+          mention_map: { image: { media_kind: 'image', index: 0 } },
         },
       ],
-      reference_asset_ids: ['asset_1'],
-      task_count: 2,
       project_path: '/tmp/iart-programmatic-submit-test',
-      mention_map: { image: { media_kind: 'image', index: 0 } },
     });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) throw new Error('expected ok outcome');
@@ -418,7 +421,7 @@ describe('CLI 程序化提交纯入口（CLI-008 / CLI-007）', () => {
 
     if (!result.ok) throw new Error('expected ok result');
     const request = submitGenerationBatchMock.mock.calls[0]?.[0];
-    expect(request?.arguments).toEqual({ enhance: true, steps: 30, quality: 'hd' });
+    expect(request?.intents?.[0]?.arguments).toEqual({ enhance: true, steps: 30, quality: 'hd' });
   });
 
   it('枚举参数取值不在可选值内 → command_rejected 且定位参数名', async () => {
@@ -461,6 +464,35 @@ describe('CLI 程序化提交纯入口（CLI-008 / CLI-007）', () => {
       expect(result.error.message).toContain(String(count));
     }
     expect(submitGenerationBatchMock).not.toHaveBeenCalled();
+  });
+
+  it('多意图合计超过 10 个任务 → command_rejected 并给出可改动作，不发起提交', async () => {
+    const result = await submitGenerationBatchFromIntent(
+      legalIntent({ extraPrompts: ['第二个提示词'], count: 10, refs: [] }),
+    );
+
+    if (result.ok) throw new Error('expected error result');
+    expect(result.error.code).toBe('command_rejected');
+    expect(result.error.message).toContain('最多 10 个任务');
+    expect(result.error.message).toContain('2 个提示词');
+    expect(result.error.message).toContain('20 个');
+    expect(submitGenerationBatchMock).not.toHaveBeenCalled();
+  });
+
+  it('后端 400 业务拒绝 → command_rejected 保留后端原因，不冒充内部错误', async () => {
+    submitGenerationBatchMock.mockRejectedValue({
+      message: 'HTTP 400',
+      status: 400,
+      body: { code: 'invalid_task', message: '一个批次最多 10 个任务，当前各意图合计 20 个' },
+    });
+
+    const result = await submitGenerationBatchFromIntent(legalIntent());
+
+    if (result.ok) throw new Error('expected error result');
+    expect(result.error.code).toBe('command_rejected');
+    expect(result.error.message).toBe('一个批次最多 10 个任务，当前各意图合计 20 个');
+    expect(result.error.message).not.toContain('[object Object]');
+    expect(submitGenerationBatchMock).toHaveBeenCalledTimes(1);
   });
 
   it('提交传输层失败 → internal_error 原样映射，不重试', async () => {
@@ -631,7 +663,7 @@ describe('引用用途：意图携带 / §8 兜底 / 阻断文案可执行', () 
     );
 
     expect(outcome.ok).toBe(true);
-    const mediaInputs = submitGenerationBatchMock.mock.calls[0]?.[0].media_inputs;
+    const mediaInputs = submitGenerationBatchMock.mock.calls[0]?.[0].intents?.[0]?.media_inputs;
     // 显式用途不被兜底改写：首帧就是首帧（后端据此分桶到 firstFrameImage）
     expect(mediaInputs?.[0]?.field_key).toBe('firstFrameImage');
   });
@@ -645,7 +677,7 @@ describe('引用用途：意图携带 / §8 兜底 / 阻断文案可执行', () 
     );
 
     expect(outcome.ok).toBe(true);
-    expect(submitGenerationBatchMock.mock.calls[0]?.[0].media_inputs?.[0]?.field_key).toBe('image');
+    expect(submitGenerationBatchMock.mock.calls[0]?.[0].intents?.[0]?.media_inputs?.[0]?.field_key).toBe('image');
   });
 
   it('未表达用途且模型全是单张位 → 阻断，CLI 文案给出 --ref 可执行动作与可用用途', async () => {
@@ -764,8 +796,56 @@ describe('引用用途：意图携带 / §8 兜底 / 阻断文案可执行', () 
     const result = await submitGenerationBatchFromIntent(intent);
 
     if (!result.ok) throw new Error(`expected ok result, got ${result.error.message}`);
-    expect(submitGenerationBatchMock.mock.calls[0]?.[0].media_inputs?.[0]?.field_key).toBe(
+    expect(submitGenerationBatchMock.mock.calls[0]?.[0].intents?.[0]?.media_inputs?.[0]?.field_key).toBe(
       'lastFrameImage',
     );
+  });
+});
+
+describe('多意图提交（spec 45 §5.1 / CLI-063）', () => {
+  const multiIntentResponse = (): PromptDockBatchSubmitResponse => ({
+    batch_id: 'batch_1',
+    intent_snapshot: {
+      batch_id: 'batch_1',
+      model_id: 'model-a',
+      model_version: '1.0.0',
+      intents: [
+        { prompt: '一只猫', params: {}, task_count: 2 },
+        { prompt: '一只狗', params: {}, task_count: 2 },
+      ],
+      task_ids: ['task_1', 'task_2', 'task_3', 'task_4'],
+      created_at: '2026-11-06T00:00:00.000Z',
+    },
+    tasks: Array.from({ length: 4 }, (_, index) => ({
+      task_id: `task_${index + 1}`,
+      task_index: index,
+    })),
+  });
+
+  it('附加提示词按序进入同一提交的意图列表，共享其余输入', async () => {
+    submitGenerationBatchMock.mockResolvedValue(multiIntentResponse());
+
+    const outcome = await runGenerationBatchSubmission(
+      legalIntent({ extraPrompts: ['一只狗'] }),
+      { selectCreatedNodes: false },
+    );
+
+    const request = submitGenerationBatchMock.mock.calls[0]?.[0];
+    expect(request?.intents?.map((intent) => intent.prompt)).toEqual(['一只猫', '一只狗']);
+    // 同批意图共享参数、引用与任务数：只有提示词不同。
+    expect(request?.intents?.[0]?.arguments).toEqual({});
+    expect(request?.intents?.[1]?.arguments).toEqual({});
+    expect(request?.intents?.[0]?.reference_asset_ids).toEqual(['asset_1']);
+    expect(request?.intents?.[1]?.reference_asset_ids).toEqual(['asset_1']);
+    expect(request?.intents?.[0]?.task_count).toBe(2);
+    expect(request?.intents?.[1]?.task_count).toBe(2);
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error('expected ok outcome');
+    // 受理回执按意图切开任务：前两个属第一个意图，后两个属第二个。
+    expect(outcome.intents).toEqual([
+      { task_count: 2, task_ids: ['task_1', 'task_2'] },
+      { task_count: 2, task_ids: ['task_3', 'task_4'] },
+    ]);
   });
 });

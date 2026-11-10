@@ -197,3 +197,29 @@ test('--retired-spec 点名列出验收 ID 的全部测试引用者', () => {
   assert.match(result.stdout, /b\.test\.ts:1/);
   assert.match(result.stdout, /V-002 ← 无测试引用/);
 });
+
+test('公开快照无 docs 目录时显式标记不适用，而不是静默放行', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'linkage-nodocs-'));
+  writeTree(root, {
+    'policy.json': JSON.stringify(BASE_POLICY),
+    'apps/x/src/__tests__/good.test.ts': '// @spec: ANY-1\n',
+  });
+
+  const result = runGuard(root);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /test-linkage 不适用/);
+  assert.match(result.stdout, /未执行，不代表通过/);
+});
+
+test('docs 目录存在但解析不出任何 spec 时判红（检查基准缺失）', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'linkage-empty-'));
+  writeTree(root, {
+    'policy.json': JSON.stringify(BASE_POLICY),
+    'docs/README.md': '# 只有目录，没有 spec\n',
+    'apps/x/src/__tests__/good.test.ts': '// @spec: ANY-1\n',
+  });
+
+  const result = runGuard(root);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /检查基准缺失/);
+});

@@ -39,6 +39,7 @@ import {
   type PlainObject,
   type ProjectionRuntimeRaw,
 } from "./request-assembler-shared.cts";
+import { applyActivationFromProjection } from "./parameter-activation-projection.cts";
 import { materializeSubtree } from "./model-input-preparation/model-input-materializer.cts";
 import { readValueByPath } from "./task-engine-polling-utils.cts";
 import { normalizeTaskPollingStrategy } from "./model-package-catalog.task-plan.cts";
@@ -417,6 +418,11 @@ const buildRuntimePayloadFromRules = async (
     projection,
     projectPath,
   );
+  // 参数启动条件先结算：后续必填素材位判空、字段合并、规则求值都只看结算后的参数集。
+  const activatedArguments = applyActivationFromProjection(
+    readOpenField(inputRecord, "arguments"),
+    projection,
+  );
   const mediaInputFieldsEntries = Object.entries(mediaInputFields);
   const mediaInputFieldsSummary = mediaInputFieldsEntries.map(([k, v]) => `${k}=${Array.isArray(v) ? v.length : 0}`).join(", ");
   loggingModule.logDebug("[request-assembler] buildRuntimePayloadFromRules: mediaInputBuckets", { summary: mediaInputFieldsSummary || "(empty)" });
@@ -429,8 +435,7 @@ const buildRuntimePayloadFromRules = async (
   const mediaFieldInfos = collectMediaFieldKeysFromProjection(projection);
   const requiredMediaFieldKeys = mediaFieldInfos.filter((info) => info.required);
   if (requiredMediaFieldKeys.length > 0) {
-    const argumentsObj = readOpenField(inputRecord, "arguments");
-    const argumentsSource = isPlainObject(argumentsObj) ? argumentsObj : {};
+    const argumentsSource = isPlainObject(activatedArguments) ? activatedArguments : {};
     const argumentsMap = new Map<string, unknown>(Object.entries(argumentsSource));
     const missingKeys: string[] = [];
     for (const { fieldKey } of requiredMediaFieldKeys) {
@@ -450,7 +455,7 @@ const buildRuntimePayloadFromRules = async (
     }
   }
   const fields = mergeFieldMaps(
-    argumentsWithoutReservedPrompt(readOpenField(inputRecord, "arguments")),
+    argumentsWithoutReservedPrompt(activatedArguments),
     mediaInputFields,
     readOpenField(inputRecord, "input_assets"),
     promptFields(inputRecord),

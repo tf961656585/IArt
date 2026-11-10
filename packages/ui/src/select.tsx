@@ -37,6 +37,8 @@ function SelectGroup({
 function SelectValue({
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Value>) {
+  // Radix 会把「选中条目」的整块内容投影进这里：条目里带徽章/说明文字时，trigger 会连同它们一起显示。
+  // 要让 trigger 只显示精简内容（如列表条目带注释、trigger 只留名称），显式传子节点即可覆盖。
   return <SelectPrimitive.Value data-slot="select-value" {...props} />
 }
 

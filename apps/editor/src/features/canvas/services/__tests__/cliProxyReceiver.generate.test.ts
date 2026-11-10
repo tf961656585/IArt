@@ -120,9 +120,7 @@ const acceptanceResponse = (taskCount: number): PromptDockBatchSubmitResponse =>
     batch_id: 'batch_cli',
     model_id: 'model-a',
     model_version: '1.0.0',
-    prompt: '一只猫在窗台',
-    params: {},
-    task_count: taskCount,
+    intents: [{ prompt: '一只猫在窗台', params: {}, task_count: taskCount }],
     task_ids: Array.from({ length: taskCount }, (_, index) => `task_${index + 1}`),
     created_at: '2026-10-07T00:00:00.000Z',
   },
@@ -206,8 +204,8 @@ describe('CLI 代理执行通道 · generate（CLI-007/CLI-008 Editor 侧映射�
     // 提交请求形状：k=v 参数按 schema 收敛类型后进入 arguments
     expect(submitGenerationBatchMock).toHaveBeenCalledTimes(1);
     const request = submitGenerationBatchMock.mock.calls[0]?.[0];
-    expect(request?.arguments).toEqual({ size: '1024x1024' });
-    expect(request?.reference_asset_ids).toEqual(['asset_1']);
+    expect(request?.intents?.[0]?.arguments).toEqual({ size: '1024x1024' });
+    expect(request?.intents?.[0]?.reference_asset_ids).toEqual(['asset_1']);
     // 受理回执 → 任务节点落位（与界面提交同一函数）；画布选中态保持原样
     expect(findTaskNodeData('task_1')?.batchId).toBe('batch_cli');
     expect(findTaskNodeData('task_2')?.batchId).toBe('batch_cli');

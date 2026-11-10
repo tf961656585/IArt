@@ -1,8 +1,9 @@
 import {
   BatchIntentSnapshotSchema,
   TaskSubmitMediaKindSchema,
-  type BatchIntentSnapshot,
+  type BatchIntent,
   type CliGenerationArchive,
+  type CliGenerationArchiveIntent,
   type CliGenerationArchiveReference,
   type RuntimeMediaAssetView,
   type RuntimeTaskView,
@@ -116,12 +117,13 @@ const buildContentKeyIndex = (assets: readonly RuntimeMediaAssetView[]): Map<str
  *   同思路；非 attachment 引用不对应画布资产，跳过并留痕）。
  */
 const resolveReferences = (
-  snapshot: BatchIntentSnapshot,
+  intent: BatchIntent,
   projectPath: string,
   assets: CliGenerationArchiveAssetSource,
+  batchId: string,
 ): CliGenerationArchiveReference[] => {
-  const mediaRefs = snapshot.media_refs ?? [];
-  const referenceAssetIds = snapshot.reference_asset_ids ?? [];
+  const mediaRefs = intent.media_refs ?? [];
+  const referenceAssetIds = intent.reference_asset_ids ?? [];
   const buildWithBinding = (
     assetId: string,
     binding: { fieldKey: string | undefined; slotId: string | undefined },
@@ -162,7 +164,7 @@ const resolveReferences = (
   for (const ref of mediaRefs) {
     if (ref.source_kind !== "attachment") {
       console.debug("[cli-generation-archive] media_ref 非 attachment 引用，不对应画布资产，跳过", {
-        batchId: snapshot.batch_id,
+        batchId,
         sourceKind: ref.source_kind,
       });
       continue;
@@ -170,7 +172,7 @@ const resolveReferences = (
     const kind = TaskSubmitMediaKindSchema.safeParse(ref.media_kind);
     if (!kind.success) {
       console.debug("[cli-generation-archive] media_ref 媒体类型不在 image/video/audio 内，跳过", {
-        batchId: snapshot.batch_id,
+        batchId,
         mediaKind: ref.media_kind,
       });
       continue;
@@ -178,7 +180,7 @@ const resolveReferences = (
     const refFileKey = extractMediaFileKey(ref.value);
     if (refFileKey === null || refFileKey.length === 0) {
       console.debug("[cli-generation-archive] media_ref 无法解析内容文件键，跳过", {
-        batchId: snapshot.batch_id,
+        batchId,
       });
       continue;
     }
@@ -186,7 +188,7 @@ const resolveReferences = (
     const assetId = refHash === null ? undefined : contentKeyToAssetId.get(`${kind.data}:${refHash}`);
     if (assetId === undefined) {
       console.debug("[cli-generation-archive] media_ref 内容指纹未命中资产注册表，跳过", {
-        batchId: snapshot.batch_id,
+        batchId,
         fileKey: refFileKey,
       });
       continue;
@@ -248,12 +250,27 @@ export const buildGenerationArchive = (params: {
     return null;
   }
   const snapshot = parsed.data;
+  const archiveIntents: CliGenerationArchiveIntent[] = [];
+  let offset = 0;
+  for (const intent of snapshot.intents) {
+    archiveIntents.push({
+      prompt: intent.prompt,
+      params: stripBoundMediaParams(intent.params, intent.media_refs ?? []),
+      references: resolveReferences(intent, params.projectPath, params.assets, snapshot.batch_id),
+      task_ids: snapshot.task_ids.slice(offset, offset + intent.task_count),
+    });
+    offset += intent.task_count;
+  }
+  const single = archiveIntents.length === 1 ? archiveIntents[0] : undefined;
   return {
     batch_id: snapshot.batch_id,
     model_id: snapshot.model_id,
-    prompt: snapshot.prompt,
-    params: stripBoundMediaParams(snapshot.params, snapshot.media_refs ?? []),
-    references: resolveReferences(snapshot, params.projectPath, params.assets),
+    // 单意图批次保留三个顶层字段（等于 intents 的唯一一项），让引入意图结构前的消费方继续可读；
+    // 多意图批次省略它们，消费方必须遍历 intents，不得把某一个意图的提示词当作整批。
+    ...(single === undefined
+      ? {}
+      : { prompt: single.prompt, params: single.params, references: single.references }),
+    intents: archiveIntents,
     task_ids: [...snapshot.task_ids],
     created_at: snapshot.created_at,
   };

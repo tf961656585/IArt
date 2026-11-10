@@ -20,12 +20,15 @@ import { TaskNode } from '../TaskNode';
  * - 提交类/无阶段失败只显示「重试」+「删除任务」，不出现重新生成；
  * - 点击重新查询后保持失败卡、主按钮进入 pending 且三个动作 aria-disabled；
  * - 后端拒绝时原位显示用户文案，按钮恢复；
- * - 重新查询后的等待态显示胶囊副行「重新查询结果」。
+ * - 重新查询后的等待态显示胶囊副行「重新查询结果」；
+ * - 密钥缺失失败（credential_missing）额外显示次级动作「去填写密钥」，点击触发跨窗口
+ *   聚焦 Hub 服务商设置；其他失败码不出现该动作。
  */
 
-const { requeryTaskMock, reuseTaskToDraftMock } = vi.hoisted(() => ({
+const { requeryTaskMock, reuseTaskToDraftMock, focusHubModelProvidersMock } = vi.hoisted(() => ({
   requeryTaskMock: vi.fn(),
   reuseTaskToDraftMock: vi.fn(),
+  focusHubModelProvidersMock: vi.fn(),
 }));
 
 vi.mock('@/client/api/promptDockApi', async (importOriginal) => {
@@ -35,6 +38,10 @@ vi.mock('@/client/api/promptDockApi', async (importOriginal) => {
 
 vi.mock('@/features/promptdock/assetReuse', () => ({
   reuseTaskToDraft: reuseTaskToDraftMock,
+}));
+
+vi.mock('@/features/promptdock/hubFocus', () => ({
+  focusHubModelProviders: focusHubModelProvidersMock,
 }));
 
 const GRAPH_ID = 'graph-task-failure-actions';
@@ -102,6 +109,7 @@ beforeEach(() => {
   cleanup();
   requeryTaskMock.mockReset();
   reuseTaskToDraftMock.mockReset();
+  focusHubModelProvidersMock.mockReset();
   useCanvasStore.setState({ nodeGraph: null });
 });
 
@@ -141,7 +149,12 @@ describe('TaskNode 失败动作', () => {
     expect(screen.getByRole('button', { name: '删除任务 #1' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '重试任务 #1' }));
-    expect(reuseTaskToDraftMock).toHaveBeenCalledWith({ batchId: 'batch-1', modelId: MODEL_ID });
+    // 复用按来源任务定位所属意图（多意图批次回填对应提示词），故带上 taskId。
+    expect(reuseTaskToDraftMock).toHaveBeenCalledWith({
+      batchId: 'batch-1',
+      modelId: MODEL_ID,
+      taskId: 'task-1',
+    });
     expect(requeryTaskMock).not.toHaveBeenCalled();
   });
 
@@ -207,5 +220,107 @@ describe('TaskNode 失败动作', () => {
     expect(screen.getByText('重新查询结果')).toBeInTheDocument();
     expect(screen.getByText('等待结果…')).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: `任务 #1 · ${MODEL_ID} 失败` })).toBeNull();
+  });
+
+  it('密钥缺失失败：失败提示旁显示次级动作「去填写密钥」，点击聚焦 Hub 服务商设置', () => {
+    renderNode({
+      failure: {
+        code: 'credential_missing',
+        message: 'credential missing',
+        userMessage: '没能读取这个服务商的密钥，请到「设置 → 服务商与模型」重新填写。',
+        details: { reason: 'unreadable' },
+      },
+    });
+
+    // 摘要仍由 userMessage 承载，文案优先级未被改动
+    expect(
+      screen.getByText('没能读取这个服务商的密钥，请到「设置 → 服务商与模型」重新填写。'),
+    ).toBeInTheDocument();
+    // 既有动作顺序与权重不变：主「重试」仍在首位
+    expect(screen.getByRole('button', { name: '重试任务 #1' })).toHaveTextContent('重试');
+    expect(screen.getByRole('button', { name: '删除任务 #1' })).toBeInTheDocument();
+
+    const credentialFix = screen.getByRole('button', { name: '去填写密钥' });
+    expect(credentialFix).toHaveTextContent('去填写密钥');
+
+    fireEvent.click(credentialFix);
+    expect(focusHubModelProvidersMock).toHaveBeenCalledTimes(1);
+    // 跨窗口动作不触发任何任务命令
+    expect(requeryTaskMock).not.toHaveBeenCalled();
+    expect(reuseTaskToDraftMock).not.toHaveBeenCalled();
+  });
+
+  it('其他失败码不出现「去填写密钥」', () => {
+    renderNode({
+      failure: {
+        code: 'task_execution_failed',
+        message: '提交失败',
+        stage: 'submit',
+      },
+    });
+
+    expect(screen.getByRole('button', { name: '重试任务 #1' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '去填写密钥' })).toBeNull();
+  });
+});
+
+/**
+ * 失败卡信息分层（docs/editor/失败任务重新查询-design.md §6/§7.2）：
+ * 卡片内只放两行钳制摘要，完整摘要 / 错误码 / 服务返回原文由「错误详情」弹窗承载。
+ */
+describe('TaskNode 失败卡信息可读性', () => {
+  const LONG_MESSAGE =
+    '服务商在等待 107 秒后断开了连接（阶段：提交请求）。若反复出现，可尝试降低图片尺寸或参考图数量后重新提交';
+
+  const longFailure = (): Partial<TaskNodeData> => ({
+    failure: {
+      code: 'connection_dropped',
+      stage: 'submit',
+      userMessage: LONG_MESSAGE,
+      backendMessage: '{"error":"socket hang up"}',
+      details: { phase: 'requesting', elapsedMs: 107000 },
+    },
+  });
+
+  it('摘要固定两行钳制，内联详情折叠不再渲染', () => {
+    renderNode(longFailure());
+
+    const summary = screen.getByText(LONG_MESSAGE);
+    expect(summary).toHaveClass('sum-clamp-2');
+    // 卡片内不再有第二套阅读面：既没有 <details>，也没有旧的详情样式钩子
+    expect(document.querySelector('details')).toBeNull();
+    expect(document.querySelector('.failure-details')).toBeNull();
+  });
+
+  it('短摘要失败同样显示「错误详情」入口', () => {
+    renderNode({
+      failure: { code: 'submit_failed', stage: 'submit', userMessage: '提交失败。' },
+    });
+
+    expect(screen.getByText('提交失败。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看任务 #1 的详情' })).toBeInTheDocument();
+  });
+
+  it('点「错误详情」打开弹窗，展示完整摘要、错误码与服务返回原文', async () => {
+    renderNode(longFailure());
+
+    fireEvent.click(screen.getByRole('button', { name: '查看任务 #1 的详情' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent(LONG_MESSAGE);
+    expect(dialog).toHaveTextContent('connection_dropped');
+    expect(dialog).toHaveTextContent('socket hang up');
+  });
+
+  it('关闭弹窗后焦点回到「错误详情」入口', async () => {
+    renderNode(longFailure());
+
+    const entry = screen.getByRole('button', { name: '查看任务 #1 的详情' });
+    fireEvent.click(entry);
+    await screen.findByRole('dialog');
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(entry).toHaveFocus();
   });
 });

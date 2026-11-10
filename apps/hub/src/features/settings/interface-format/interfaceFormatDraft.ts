@@ -55,6 +55,41 @@ export type PayloadFormat = CustomInterfaceFormatPayloadFormat;
 export type FormFieldStyle = CustomInterfaceFormatFormFieldStyle;
 export type FormArrayStyle = CustomInterfaceFormatFormArrayStyle;
 
+/**
+ * 可选值的「默认关闭」声明行（`docs/model-assets/17` 的取值默认关闭段）。
+ *
+ * 与草稿契约的 `enum_value_meta` 一一对应。取值本身随格式分发；`optIn = true` 表示模型
+ * 记录显式启用前不出现在目录、创作面与执行表单。与产物形态、媒体类型无关。
+ */
+export type EnumValueMetaRow = {
+  value: string;
+  optIn: boolean;
+};
+
+/** 按取值读取声明行；没有声明时给默认（界面用，不写回草稿）。 */
+export const enumMetaOf = (
+  rows: readonly EnumValueMetaRow[],
+  value: string,
+): EnumValueMetaRow => rows.find((row) => row.value === value) ?? { value, optIn: false };
+
+/** 写入/更新一个取值的默认关闭声明行；值列表变化后由 `pruneEnumMeta` 清掉已删取值。 */
+export const upsertEnumMeta = (
+  rows: readonly EnumValueMetaRow[],
+  next: EnumValueMetaRow,
+): EnumValueMetaRow[] => {
+  const found = rows.some((row) => row.value === next.value);
+  return found ? rows.map((row) => (row.value === next.value ? next : row)) : [...rows, next];
+};
+
+/** 可选值列表变化后，丢掉已不存在取值的声明行（改名的旧值不再残留）。 */
+export const pruneEnumMeta = (
+  rows: readonly EnumValueMetaRow[],
+  values: readonly string[],
+): EnumValueMetaRow[] => {
+  const alive = new Set(values);
+  return rows.filter((row) => alive.has(row.value));
+};
+
 /** 固定请求头 / 固定查询参数的一行草稿。 */
 export type NameValueRow = {
   name: string;
@@ -71,6 +106,8 @@ export type ParamRow = {
   required: boolean;
   defaultValue: string;
   enumValues: string[];
+  /** 可选值的「默认关闭」声明（与 `enumValues` 按 value 对齐）。 */
+  enumMeta: EnumValueMetaRow[];
   /** 最近一次自动清空默认值的弱提示；用户再改值时清掉（不进请求体）。 */
   defaultNote: string;
   /** 换发送位置后的弱提示（旧值已清空）；用户再改键时清掉（不进请求体）。 */
@@ -171,6 +208,7 @@ export const isBlankParameterRow = (row: ParamRow): boolean =>
   && row.label.trim() === ''
   && row.defaultValue.trim() === ''
   && row.enumValues.every((value) => value.trim() === '')
+  && row.enumMeta.length === 0
   && row.type === 'string'
   && !row.required;
 
@@ -292,6 +330,11 @@ export const buildInterfaceFormatDraft = (
     const enumValues = row.enumValues
       .map((value) => value.trim())
       .filter((value) => value.length > 0);
+    // 「默认关闭」声明只随实际存在的取值进草稿；没勾的取值不进 meta 数组（缺项 = 不默认关闭）。
+    const enumValueMeta = enumValues
+      .map((value) => enumMetaOf(row.enumMeta, value))
+      .filter((meta) => meta.optIn)
+      .map((meta) => ({ value: meta.value, opt_in: true }));
     parameters.push({
       binding: bindingFor(row.location, row.key),
       label: row.label.trim(),
@@ -301,6 +344,7 @@ export const buildInterfaceFormatDraft = (
         ? { default_value: parsedDefault.value }
         : {}),
       ...(row.type === 'enum' && enumValues.length > 0 ? { enum_values: enumValues } : {}),
+      ...(row.type === 'enum' && enumValueMeta.length > 0 ? { enum_value_meta: enumValueMeta } : {}),
     });
   });
 

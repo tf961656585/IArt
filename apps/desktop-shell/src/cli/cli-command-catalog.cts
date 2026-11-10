@@ -46,7 +46,7 @@ export const FLAG_SPECS = new Map<string, FlagSpec>([
   ["--project", { field: "project", kind: "string", usage: "--project <路径或名称>", help: "目标项目（路径或项目名）" }],
   ["--name", { field: "name", kind: "string", usage: "--name <名称>", help: "名称：project create 为项目名，canvas group create/rename 为组名" }],
   ["--path", { field: "path", kind: "string", usage: "--path <目录>", help: "项目所在父目录（不推断默认位置）" }],
-  ["--prompt", { field: "prompt", kind: "string", usage: "--prompt <文本>", help: "生成提示词" }],
+  ["--prompt", { field: "prompt", kind: "rawList", usage: "--prompt <文本>", help: "生成提示词；重复传入时每个提示词形成一个意图（同批共享模型/参数/引用/出生组）" }],
   ["--model", { field: "model", kind: "string", usage: "--model <模型id>", help: "模型标识（generate 必填；asset list 按生成模型过滤）" }],
   ["--query", { field: "query", kind: "string", usage: "--query <关键词>", help: "按原始文件名或提交提示词做大小写不敏感子串筛选" }],
   ["--media-type", { field: "media_type", kind: "string", usage: "--media-type <image|video|audio>", help: "按媒体类型过滤" }],

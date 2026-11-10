@@ -225,9 +225,25 @@ const main = () => {
   if (args.retiredSpec) return listRetiredSpecReferences(root, policy, args.retiredSpec);
 
   const docs = policy.docs;
+  // 公开快照（publish-opensource 的 EXCLUDES）不含 docs/。此时关联检查没有基准可对，
+  // 必须显式声明「不适用」并退出 0——静默放行会被当成「已检查且通过」。
+  const presentDocsDirs = docs.dirs.filter((dirName) => fs.existsSync(path.join(root, dirName)));
+  if (presentDocsDirs.length === 0) {
+    console.log(
+      `test-linkage 不适用：未找到 spec 目录（${docs.dirs.join(' / ')}）。` +
+      '公开快照不携带内部文档，本项检查未执行，不代表通过。',
+    );
+    return 0;
+  }
   const activeStatuses = new Set(docs.activeStatuses);
   const terminalStatuses = new Set(docs.terminalStatuses);
   const eligibleSpecs = collectSpecFiles(root, docs).filter((spec) => docs.specTypes.includes(spec.type));
+  if (eligibleSpecs.length === 0) {
+    console.error(
+      `guard:spec-test-linkage failed: spec 目录存在（${presentDocsDirs.join(' / ')}）但未解析出任何 spec/contract，检查基准缺失。`,
+    );
+    return 1;
+  }
   const activeSpecs = eligibleSpecs.filter((spec) => activeStatuses.has(spec.status));
 
   const activeIdOwners = new Map();

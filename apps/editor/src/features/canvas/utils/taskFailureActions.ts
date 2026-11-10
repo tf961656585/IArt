@@ -18,6 +18,10 @@ import type { TaskNodeStatus } from '../types/taskNode';
  *   查询类失败用 `regenerate` 明确「会再生成一次」，其余失败用最短动作词 `retry`。
  * - `delete`：只移除画布任务投影，属失败终态的固定危险动作。
  *
+ * 另有不参与上表分流的跨窗口修复动作：密钥缺失失败（`credential_missing`）在失败提示旁
+ * 追加「去填写密钥」（判据 `isCredentialMissingFailure`），点击跳 Hub「设置 → 服务商与模型」；
+ * 它是次级动作，不改变主/次/危险动作的顺序与权重。
+ *
  * 非 `failed` 状态不提供失败动作（`primary`/`secondary` 为 null），调用方只应在失败 overlay
  * 内取值。
  */
@@ -43,6 +47,24 @@ const NO_FAILURE_ACTIONS: TaskFailureActionSet = {
   primary: null,
   secondary: null,
   delete: true,
+};
+
+/** 服务商密钥缺失/不可读的稳定失败码（后端 RuntimeTaskFailure.code 取值）。 */
+const CREDENTIAL_MISSING_FAILURE_CODE = 'credential_missing';
+
+/**
+ * 该失败是否由「服务商密钥读不出来 / 没设置」引起。
+ *
+ * 命中时两处失败展示面（任务节点失败浮层、任务详情弹层）在失败提示旁追加跨窗口动作
+ * 「去填写密钥」→ Hub「设置 → 服务商与模型」。判据只看稳定错误码：后端从不校验 Key 有效性，
+ * `details.reason`（absent / unreadable / version_mismatch）只决定后端 userMessage 的措辞，
+ * 不参与 Editor 侧动作判定。
+ */
+export const isCredentialMissingFailure = (
+  failure: RuntimeTaskFailure | null | undefined,
+): boolean => {
+  const code = typeof failure?.code === 'string' ? failure.code.trim() : '';
+  return code === CREDENTIAL_MISSING_FAILURE_CODE;
 };
 
 export const resolveTaskFailureActions = (

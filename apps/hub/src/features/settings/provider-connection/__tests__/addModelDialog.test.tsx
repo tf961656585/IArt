@@ -110,6 +110,7 @@ describe('AddModelDialog 提交', () => {
         modelId: 'my-image-model',
         remoteModelId: null,
         acceptedMediaSlots: [],
+        capabilityLabels: [],
         parameterOverrides: null,
         recipeId: null,
       });

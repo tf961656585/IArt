@@ -5,6 +5,7 @@ import {
   isBlankNameValueRow,
   isBlankParameterRow,
   parsePollingBody,
+  pruneEnumMeta,
   type EditorState,
   type ParamRow,
 } from '../interfaceFormatDraft';
@@ -24,6 +25,7 @@ const param = (over: Partial<ParamRow> = {}): ParamRow => ({
   required: false,
   defaultValue: '',
   enumValues: [],
+  enumMeta: [],
   defaultNote: '',
   locationNote: '',
   ...over,
@@ -328,5 +330,32 @@ describe('草稿构建：空白行判定', () => {
     expect(isBlankParameterRow(param({ location: 'body', key: '', label: '' }))).toBe(true);
     expect(isBlankParameterRow(param({ location: 'query', key: '', label: '' }))).toBe(false);
     expect(isBlankParameterRow(param({ location: 'body', key: '', label: '', required: true }))).toBe(false);
+  });
+});
+
+describe('草稿构建：取值的默认关闭声明', () => {
+  it('选项参数把每个取值的默认关闭写进 enum_value_meta；没勾的不写', () => {
+    const build = buildInterfaceFormatDraft(baseState({
+      params: [
+        param({
+          type: 'enum',
+          enumValues: ['png', 'gif', 'webp'],
+          enumMeta: [
+            { value: 'png', optIn: false },
+            { value: 'gif', optIn: true },
+          ],
+        }),
+      ],
+    }));
+    expect(build.draft.parameters[0]?.enum_value_meta).toEqual([{ value: 'gif', opt_in: true }]);
+    expect(build.draft.parameters[0]?.enum_value_meta?.some((entry) => entry.value === 'png')).toBe(false);
+  });
+
+  it('删掉可选值后，它的默认关闭声明不残留（同名值重新添加时不会复活旧声明）', () => {
+    const rows = [
+      { value: 'png', optIn: false },
+      { value: 'gif', optIn: true },
+    ];
+    expect(pruneEnumMeta(rows, ['png'])).toEqual([{ value: 'png', optIn: false }]);
   });
 });

@@ -58,6 +58,7 @@ const recordReferencing = (recipeId: string | undefined): CustomGenerationModel 
   remote_model_id: 'my-image-model',
   family_adapter_id: 'openai-image-v1',
   accepted_media_slots: [],
+  capability_labels: [],
   parameter_overrides: { official: [], custom: [] },
   ...(recipeId === undefined ? {} : { recipe_id: recipeId }),
   created_at: '2026-10-24T00:00:00.000Z',

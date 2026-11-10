@@ -1,5 +1,6 @@
 import type {
   CustomInterfaceFormatDraft,
+  CustomInterfaceFormatEnumValueMeta,
   CustomInterfaceFormatParameterDraft,
   CustomInterfaceFormatSubmitAuth,
   InterfaceRecipeCreateBody,
@@ -157,10 +158,20 @@ const parameterField = (
     field.default_value = parameter.default_value;
   }
   if (parameter.type === 'enum') {
-    field.enum_options = (parameter.enum_values ?? []).map((value, optionIndex) => ({
-      value,
-      label: `fields.p${index}.options.o${optionIndex}.label`,
-    }));
+    // 取值的默认关闭声明随草稿进实体（`docs/model-assets/17` 的取值默认关闭段）。
+    // 按取值对齐：取值不在声明里就不写标记，不猜。
+    const metaByValue = new Map<string, CustomInterfaceFormatEnumValueMeta>();
+    for (const meta of parameter.enum_value_meta ?? []) {
+      metaByValue.set(meta.value, meta);
+    }
+    field.enum_options = (parameter.enum_values ?? []).map((value, optionIndex) => {
+      const meta = metaByValue.get(value);
+      return {
+        value,
+        label: `fields.p${index}.options.o${optionIndex}.label`,
+        ...(meta?.opt_in === true ? { opt_in: true } : {}),
+      };
+    });
   }
   return field;
 };

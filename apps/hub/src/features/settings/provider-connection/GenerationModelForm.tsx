@@ -10,6 +10,7 @@ import {
   CustomGenerationModelIdSchema,
   GENERATION_FAMILY_ADAPTER_IDS,
 } from '@iart/contracts';
+import { CapabilityLabelsField } from './CapabilityLabelsField';
 import { interfaceFormatLabel, type InterfaceFormatOption } from './useInterfaceFormatOptions';
 import { FieldLabelRow } from './InfoHint';
 import {
@@ -106,6 +107,11 @@ export type GenerationModelFormPayload = {
    */
   acceptedMediaSlots: GenerationMediaSlotId[];
   /**
+   * 能力标签（spec 48 §4）：说明这个模型能产出什么素材的自由文本，最多 10 条。
+   * 空数组 = 未标注，不阻断提交。
+   */
+  capabilityLabels: string[];
+  /**
    * 参数覆盖（生成模型参数高级自定义-design §3.4）；null = 没有自定义任何参数，
    * 请求体不带 parameter_overrides，与不带本字段的既有行为完全一致。
    */
@@ -154,6 +160,9 @@ export function useGenerationModelForm({
   const [busy, setBusy] = useState(false);
   /** 模型 ID 非空但格式非法（失焦或提交时按 contracts 的 model_id schema 判定）。空串不算——它由按钮禁用拦截。 */
   const [idFormatInvalid, setIdFormatInvalid] = useState(false);
+  /** 能力标签：默认未标注，用户按自己接的服务手写（spec 48 §5）。改接口格式不动它。 */
+  const [capabilityLabels, setCapabilityLabels] = useState<string[]>([]);
+
   // 素材位按所选接口格式的族能力逐项勾选：换接口格式时清空并给可见反馈（不静默清空）
   const mediaSlots = useGenerationMediaSlots({
     familyAdapterId,
@@ -250,6 +259,7 @@ export function useGenerationModelForm({
       modelId: trimmedId,
       remoteModelId: remoteModelId.trim() === '' ? null : remoteModelId.trim(),
       acceptedMediaSlots: liveMediaSlots,
+      capabilityLabels,
       parameterOverrides: hasOverrides ? submittedOverrides : null,
       recipeId,
     })
@@ -262,6 +272,8 @@ export function useGenerationModelForm({
   return {
     familyAdapterId,
     onFamilyAdapterIdChange: changeFamilyAdapterId,
+    capabilityLabels,
+    onCapabilityLabelsChange: setCapabilityLabels,
     familyAdapterOptions: formatOptions ?? PRESET_FORMAT_FALLBACK_OPTIONS,
     onCreateInterfaceFormat,
     availableRecipes,
@@ -400,6 +412,13 @@ export function GenerationModelFields({ form }: { form: GenerationModelFormState
 
       {/* 素材位按所选接口格式的族能力逐项渲染；0 位族（可灵文生视频）整块不出现 */}
       <GenerationMediaSlotChecklist state={form.mediaSlots} />
+
+      {/* 能力标签：说明这个模型能产出什么素材，选模型的人靠它判断 */}
+      <CapabilityLabelsField
+        id="generation-capability-labels"
+        labels={form.capabilityLabels}
+        onChange={form.onCapabilityLabelsChange}
+      />
 
       <GenerationOverridesSection
         state={form.overrides}

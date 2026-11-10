@@ -80,9 +80,7 @@ const acceptanceResponse = (prompt: string): PromptDockBatchSubmitResponse => ({
     batch_id: 'batch_1',
     model_id: 'gpt-image-2',
     model_version: '1.0.0',
-    prompt,
-    params: { size: 'auto' },
-    task_count: 1,
+    intents: [{ prompt, params: { size: 'auto' }, task_count: 1 }],
     task_ids: ['task_1'],
     created_at: '2026-09-08T00:00:00.000Z',
   },
@@ -161,7 +159,7 @@ describe('PromptDock / 触发提示词预设', () => {
     await submit();
 
     expect(submitGenerationBatch).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(submitGenerationBatch).mock.calls[0]?.[0]?.prompt).toBe(
+    expect(vi.mocked(submitGenerationBatch).mock.calls[0]?.[0]?.intents?.[0]?.prompt).toBe(
       'portrait prompt 一只猫',
     );
   });

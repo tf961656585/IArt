@@ -543,9 +543,10 @@ describe('链路 C：generate 主链（程序化提交）', () => {
     expect(submitGenerationBatchMock).toHaveBeenCalledTimes(1);
     expect(submitRequests[0]).toMatchObject({
       model_id: 'seam-model-a',
-      task_count: 2,
-      reference_asset_ids: ['asset_seam_1'],
       project_path: openProjectDir,
+      // 多意图批次（spec 48）：单提示词提交为一个意图，任务数与参考素材挂在意图上，
+      // 批次级只保留模型与项目定位。
+      intents: [{ task_count: 2, reference_asset_ids: ['asset_seam_1'] }],
     });
     // 程序化提交不读写创作面草稿、不触发创作面 UI 状态（spec §6.4/§13）
     expect(usePromptDockStore.getState().draft).toEqual(draftBefore);

@@ -29,6 +29,8 @@ const TASK_METADATA_KEYS = [
   'compatMode',
   'compatRoute',
   'executionId',
+  // 多意图批次（spec 45 §5.1）：任务在批次意图列表里的序号，用于回填/重试定位所属意图。
+  'intentIndex',
   'legacyClientTaskId',
   'model_id',
   'modelId',

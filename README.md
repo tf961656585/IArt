@@ -1,6 +1,25 @@
 # IARTStudio（PC 桌面版）
 
-IARTStudio 是一款**资产上下文画布创作空间**桌面应用：资产是第一公民，PromptDock 是唯一生成入口；画布承载资产/素材节点、任务节点、注释与空间组织，生成产物直接落进画布。官方分发面向 Windows PC 桌面；macOS 可按下方步骤本地打包（产物未签名）。
+IARTStudio 是一款**资产上下文画布创作空间**桌面应用：资产是第一公民，PromptDock 是唯一生成入口；画布承载资产/素材节点、任务节点、注释与空间组织，生成产物直接落进画布。
+
+## 下载与安装
+
+正式版安装包在 [Releases](https://github.com/tf961656585/IArt/releases/latest) 页面下载，覆盖三个平台：
+
+| 平台 | 安装包 |
+|---|---|
+| Windows（x64） | NSIS 安装程序（`.exe`） |
+| macOS（Apple Silicon / Intel） | `.dmg`（拖入「应用程序」）；另附 `.zip` 供应用内更新使用 |
+| Linux（x64） | AppImage |
+
+安装包均未做代码签名，首次打开可能需要手动放行：
+
+- **macOS**：右键点击应用 →「打开」，或到「系统设置 → 隐私与安全性」选择「仍要打开」。若提示「已损坏 / 无法验证」，在终端执行 `sudo xattr -cr /Applications/IARTStudio.app`。
+- **Windows**：SmartScreen 提示「未知发布者」时，点「更多信息 → 仍要运行」。
+
+更新方式：Windows 与 macOS 可在应用内「设置 → 检查更新」发现新版本、自行决定是否下载，下载完成后按提示打开安装文件并手动替换；Linux 不提供应用内更新，请从 Releases 页面下载新的 AppImage。
+
+## 仓库结构
 
 运行形态为 **Electron 宿主 + Hub 前端 + Editor 前端 + Backend**：
 
@@ -98,35 +117,34 @@ pnpm desktop:dist:win:x64
 
 ### macOS（本地打包，未签名）
 
-> 说明：此方式会产出未签名的 macOS 包（用于本地运行与测试）。在 macOS 上首次打开通常需要 **右键 → 打开**（或到“系统设置 → 隐私与安全性”里允许）。
-> 说明：`desktop:dist:mac` 需要在 macOS 上运行，会自动生成 `apps/desktop-shell/resources/icons/icon.icns`。
-> 说明：DMG 安装页面已内置“拖动应用到 Applications”指引背景。
-
-构建 `dmg + zip`（x64 + arm64）：
+需在 macOS 上执行。两个架构要**分别构建**：FFmpeg 与 better-sqlite3 这类原生依赖在单次构建里只能是一种架构，一次调用同时出双架构会得到架构错配的产物。
 
 ```bash
-pnpm desktop:dist:mac
+# Apple Silicon
+pnpm desktop:dist:mac:arm64
+
+# Intel（构建前会先切换原生依赖形态）
+pnpm desktop:dist:mac:x64
 ```
 
-产物输出到 `dist-desktop/`，包含：
-- `IARTStudio-<version>-mac-x64.dmg`（Intel）
-- `IARTStudio-<version>-mac-arm64.dmg`（Apple Silicon）
-- `IARTStudio-<version>-mac-x64.zip`（Intel）
-- `IARTStudio-<version>-mac-arm64.zip`（Apple Silicon）
+每次构建产出该架构的 `dmg + zip`，输出到 `dist-desktop/`：
 
-若首次启动仍遇到系统拦截（如“已损坏/无法验证”），可在终端执行：
+- `IARTStudio-<version>-mac-arm64.dmg` / `.zip`（Apple Silicon）
+- `IARTStudio-<version>-mac-x64.dmg` / `.zip`（Intel）
+
+`pnpm desktop:dist:mac` 只构建 Apple Silicon（等同于 `desktop:dist:mac:arm64`）；`pnpm desktop:dist:mac:zip` 只产出 Apple Silicon 的 zip。要发双架构，两条架构命令都要跑一次。
+
+DMG 安装页已内置「拖动应用到 Applications」指引背景。
+
+### Linux（x64）
+
+需在 Linux 上执行：
 
 ```bash
-sudo xattr -cr /Applications/IARTStudio.app
+pnpm desktop:dist:linux:x64
 ```
 
-建议直接把 `/Applications/IARTStudio.app` 从 Finder 拖入终端，自动填充完整路径后再回车执行。
-
-如需兼容旧流程（仅构建 `zip`）：
-
-```bash
-pnpm desktop:dist:mac:zip
-```
+产物为 `dist-desktop/` 下的 AppImage。Linux 版不提供应用内更新。
 
 ## 测试与门禁
 
@@ -143,7 +161,11 @@ npx vitest run
 pnpm check:types-and-boundaries
 ```
 
-应用内更新基于 [electron-updater](https://www.electron.build/auto-update) 实现：Windows 走 NSIS 安装器；macOS 产物未签名，更新形态为「提示新版本 → 打开已下载安装器」。更新源由打包配置（根 `package.json` 的 `build.publish`）决定，可指向 GitHub Releases 或任意 generic 静态源。
+应用内更新基于 [electron-updater](https://www.electron.build/auto-update) 实现，更新源由打包配置（根 `package.json` 的 `build.publish`）决定，默认指向本仓库的 Releases。
+
+- **Windows**：发现新版本后由你决定是否下载；下载完成后「打开安装器」，按向导升级。
+- **macOS**：产物未签名，走不了系统自动安装。下载完成后按提示「打开文件所在位置」，用新包替换「应用程序」里的旧版再重启。
+- **Linux**：不发起应用内更新检查，设置页给「前往下载页」入口，从 Releases 手动下载新的 AppImage。
 
 ## 许可证
 

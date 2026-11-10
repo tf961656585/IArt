@@ -199,6 +199,7 @@ const buildDeclaration = (recipeId: string | undefined) => ({
   remote_model_id: 'remote-projection-recipe',
   family_adapter_id: 'openai-image-v1' as const,
   accepted_media_slots: [],
+  capability_labels: [],
   parameter_overrides: { official: [], custom: [] },
   ...(recipeId === undefined ? {} : { recipe_id: recipeId }),
   created_at: new Date(0).toISOString(),

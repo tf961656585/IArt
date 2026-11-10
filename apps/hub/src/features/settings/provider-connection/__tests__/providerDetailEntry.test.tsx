@@ -182,6 +182,7 @@ describe('服务商详情模型行与空态', () => {
     remote_model_id: 'gpt-image-1',
     family_adapter_id: 'openai-image-v1',
     accepted_media_slots: [],
+    capability_labels: [],
     parameter_overrides: { official: [], custom: [] },
     created_at: '2026-09-25T00:00:00.000Z',
   };

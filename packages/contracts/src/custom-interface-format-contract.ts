@@ -371,6 +371,16 @@ export const CustomInterfaceFormatSubmitDraftSchema = z
 
 export type CustomInterfaceFormatSubmitDraft = z.infer<typeof CustomInterfaceFormatSubmitDraftSchema>;
 
+/** 候选值的默认关闭声明单条目（`enum_value_meta` 的元素，编辑器/合成器共用）。 */
+export const CustomInterfaceFormatEnumValueMetaSchema = z
+  .object({
+    value: z.string().trim().min(1).max(160),
+    opt_in: z.boolean().optional(),
+  })
+  .strict();
+
+export type CustomInterfaceFormatEnumValueMeta = z.infer<typeof CustomInterfaceFormatEnumValueMetaSchema>;
+
 export const CustomInterfaceFormatParameterDraftSchema = z
   .object({
     /**
@@ -386,8 +396,55 @@ export const CustomInterfaceFormatParameterDraftSchema = z
     default_value: CustomInterfaceFormatParameterValueSchema.optional(),
     /** `type = 'enum'` 时的候选值；其余类型忽略（写入侧按类型只取所需）。 */
     enum_values: z.array(z.string().trim().min(1).max(160)).max(50).optional(),
+    /**
+     * 候选值的默认关闭声明（`docs/model-assets/17-模型能力包定义与协作语义.md`
+     * 的取值默认关闭段）：`opt_in: true` 表示该取值默认不进入可选值清单，模型记录显式
+     * 启用后才出现。它与产物形态、媒体类型无关，只控制可见性。
+     *
+     * 只对 `type = 'enum'` 的参数有意义；`value` 必须与 `enum_values` 中的条目对应，
+     * 且同一取值不得出现两条（由本 schema 的 superRefine 逐项校验）。
+     */
+    enum_value_meta: z
+      .array(CustomInterfaceFormatEnumValueMetaSchema)
+      .max(50)
+      .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((parameter, ctx) => {
+    const meta = parameter.enum_value_meta ?? [];
+    if (parameter.type !== 'enum' && meta.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'interface_format_parameter_enum_meta_requires_enum_type',
+        path: ['enum_value_meta'],
+      });
+    }
+    if (parameter.type === 'enum' && (parameter.enum_values ?? []).length === 0 && meta.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'interface_format_parameter_enum_meta_values_missing',
+        path: ['enum_value_meta'],
+      });
+    }
+    const seen = new Set<string>();
+    for (const [index, entry] of meta.entries()) {
+      if (seen.has(entry.value)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'interface_format_parameter_enum_meta_value_duplicated',
+          path: ['enum_value_meta', index, 'value'],
+        });
+      }
+      seen.add(entry.value);
+      if (!(parameter.enum_values ?? []).includes(entry.value)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'interface_format_parameter_enum_meta_value_unknown',
+          path: ['enum_value_meta', index, 'value'],
+        });
+      }
+    }
+  });
 
 export type CustomInterfaceFormatParameterDraft = z.infer<typeof CustomInterfaceFormatParameterDraftSchema>;
 

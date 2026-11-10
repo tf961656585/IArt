@@ -153,6 +153,7 @@ describe('GenerationModelForm（添加）', () => {
         modelId: 'my-image-model',
         remoteModelId: 'remote-name',
         acceptedMediaSlots: ['reference_image'],
+        capabilityLabels: [],
         parameterOverrides: null,
         recipeId: null,
       });
@@ -183,6 +184,7 @@ describe('GenerationModelForm（添加）', () => {
         modelId: 'my-video-model',
         remoteModelId: null,
         acceptedMediaSlots: ['first_frame', 'reference_video'],
+        capabilityLabels: [],
         parameterOverrides: null,
         recipeId: null,
       });
@@ -209,6 +211,7 @@ describe('GenerationModelForm（添加）', () => {
         modelId: 'my-t2v-model',
         remoteModelId: null,
         acceptedMediaSlots: [],
+        capabilityLabels: [],
         parameterOverrides: null,
         recipeId: null,
       });
@@ -261,6 +264,7 @@ describe('GenerationModelForm（添加）', () => {
         modelId: 'my-i2v-model',
         remoteModelId: null,
         acceptedMediaSlots: ['first_frame'],
+        capabilityLabels: [],
         parameterOverrides: null,
         recipeId: null,
       });

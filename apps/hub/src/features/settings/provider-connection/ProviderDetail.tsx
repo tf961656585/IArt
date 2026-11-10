@@ -12,13 +12,16 @@ import type { ProviderConnection } from '@iart/contracts';
 import type { ModelTableProps } from './ModelTable';
 import { ModelTable } from './ModelTable';
 import { StatusDot } from './StatusDot';
+import { CredentialStatusText } from './CredentialStatusText';
+import { CREDENTIAL_WEAK_PROTECTION_HINT, credentialDisplay } from './credentialDisplay';
+import { InfoHint } from './InfoHint';
 
 /**
  * 服务商详情：紧凑头部 + 模型表格。
  *
  * 动作分层（2026-10-19，替换原「修改 / 更换密钥 / 停用 / 删除密钥 / 删除」五键同排）：
  * - 主操作「添加模型」（primary）：用户来这里最主要做的事
- * - 次操作「更换密钥 / 设置密钥」（outline）
+ * - 次操作「更换密钥 / 设置密钥 / 重新填写密钥」（outline）
  * - 「⋯」菜单：修改服务商 / 停用·启用 / 删除密钥 / 删除服务商，后两项独立成组
  *
  * 五键同排的问题是触发点自身不说明后果：「删除」与「删除密钥」都以「删除」开头、相距 4px，
@@ -55,6 +58,8 @@ export function ProviderDetail({
   // disabled 只停用生成参与，服务商仍可编辑，动作照常渲染。
   const editable = connection.lifecycle !== 'retired';
   const modelCount = modelTable.rows.length;
+  // 密钥状态词与弱保护说明走唯一实现（详情与列表共用，见 credentialDisplay）
+  const credential = credentialDisplay(connection);
 
   return (
     <section className="flex min-w-0 flex-col" data-provider-detail>
@@ -82,7 +87,13 @@ export function ProviderDetail({
           <p className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-muted-foreground">
             <span className="min-w-0 truncate" title={connection.base_url}>{connection.base_url}</span>
             <span aria-hidden="true">·</span>
-            <span>{connection.has_credential ? '密钥已保存' : '还没设置密钥'}</span>
+            {/* 读不出来是异常态：复用 StatusDot 的点 + 文字（异常色走既有语义令牌），
+                正常态仍是纯文本——密钥不参与胶囊徽章（ui-copy-standard 第 9 条） */}
+            <CredentialStatusText credential={credential} />
+            {/* 弱保护说明只在需要时出现：默认不印解释文字，悬停/聚焦才展开气泡 */}
+            {credential.weakProtection ? (
+              <InfoHint text={CREDENTIAL_WEAK_PROTECTION_HINT} subject="密钥" />
+            ) : null}
           </p>
         </div>
 
@@ -90,7 +101,7 @@ export function ProviderDetail({
           <div className="flex shrink-0 items-center gap-2">
             <AddModelButton onAddModelByKind={onAddModelByKind} />
             <Button size="sm" variant="outline" onClick={onCredential}>
-              {connection.has_credential ? '更换密钥' : '设置密钥'}
+              {credential.needsReentry ? '重新填写密钥' : connection.has_credential ? '更换密钥' : '设置密钥'}
             </Button>
             <ProviderMenu
               connection={connection}

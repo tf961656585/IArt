@@ -1,15 +1,17 @@
-import type {
-  CliError,
-  CliGenerateAcceptance,
-  CliGenerateArgEntry,
-  CliGenerateParams,
-  CliGenerateTaskIdentity,
-  ExecutableCatalogParameterField,
-  ProjectMediaAssets,
+import {
+  MAX_BATCH_TASK_COUNT,
+  type CliError,
+  type CliGenerateAcceptance,
+  type CliGenerateIntentAcceptance,
+  type CliGenerateArgEntry,
+  type CliGenerateParams,
+  type CliGenerateTaskIdentity,
+  type ExecutableCatalogParameterField,
+  type ProjectMediaAssets,
 } from '@iart/contracts';
 import type { TaskSubmitMediaInput } from '@iart/contracts/task-submit-media-input';
 import type { MentionMapEntry } from '@iart/contracts/task-submit-request';
-import type { DynamicPayload } from '@/client/api/clientTypes';
+import { isApiError, type DynamicPayload } from '@/client/api/clientTypes';
 import { submitGenerationBatch } from '@/client/api/promptDockApi';
 import type { PromptDockCatalogEntry } from '@/client/api/promptDockApi';
 import { getRuntimeProjectPath } from '@/client/store/runtimeStore';
@@ -72,6 +74,11 @@ export type ProgrammaticSubmitIntent = {
    * token 形态是 Editor 保留语法，不把字面量发给后端）。
    */
   prompt: string;
+  /**
+   * 同批附加提示词（spec 45 §5.1 / CLI spec §5.4 多意图）：每个提示词形成一个意图，
+   * 同批意图共享模型、参数、引用、任务数与出生组，只有提示词不同。缺省 = 单意图批次。
+   */
+  extraPrompts?: readonly string[];
   /** 模型参数空间（UI 为类型化表单值；CLI 为 k=v 收敛后的参数记录） */
   args: DynamicPayload;
   /** 引用条目（顺序即引用顺序；重复资产标识按一个引用处理，与参考区去重同语义） */
@@ -135,8 +142,30 @@ export type GenerationSubmissionOutcome =
       tasks: CliGenerateTaskIdentity[];
       /** 幂等重放标志（spec §5.4 受理幂等键）：true = 命中既有批次，未重新受理、未创建投影。 */
       replayed: boolean;
+      /** 按序意图受理结果（spec 45 §5.1）：每个意图的任务数与任务标识。 */
+      intents: CliGenerateIntentAcceptance[];
     }
   | { ok: false; failure: GenerationSubmissionFailure };
+
+/**
+ * 把批次任务按意图切开（spec 45 §5.1）：任务按意图顺序连续分配，用各意图的任务数累积切片
+ * 即可还原归属；不重新排序、不按提示词反查。
+ */
+const buildIntentAcceptances = (
+  intents: readonly { task_count: number }[],
+  taskIds: readonly string[],
+): CliGenerateIntentAcceptance[] => {
+  const accepted: CliGenerateIntentAcceptance[] = [];
+  let offset = 0;
+  for (const intent of intents) {
+    accepted.push({
+      task_count: intent.task_count,
+      task_ids: taskIds.slice(offset, offset + intent.task_count),
+    });
+    offset += intent.task_count;
+  }
+  return accepted;
+};
 
 // ---------------------------------------------------------------------------
 // 构造辅助（自 PromptDock.tsx 下沉：引用条目 → 提交媒体输入 / mention 映射，单一实现两路复用）
@@ -285,9 +314,18 @@ export const runGenerationBatchSubmission = async (
     promptPresetSnapshots: intent.promptPresetSnapshots,
     taskCount: intent.count,
   };
-  const preflight = runPromptDockPreflight(preflightDraft, entry, mediaAssets, 'generate');
-  if (!preflight.ok) {
-    return { ok: false, failure: { kind: 'preflight', issues: preflight.issues, entry } };
+  // 多意图：每个提示词都要过同一套前置校验（token 检查与提示词约束按各自正文判定）。
+  const promptList = [intent.prompt, ...(intent.extraPrompts ?? [])];
+  for (const promptText of promptList) {
+    const preflight = runPromptDockPreflight(
+      promptText === intent.prompt ? preflightDraft : { ...preflightDraft, prompt: promptText },
+      entry,
+      mediaAssets,
+      'generate',
+    );
+    if (!preflight.ok) {
+      return { ok: false, failure: { kind: 'preflight', issues: preflight.issues, entry } };
+    }
   }
   // 前置校验通过蕴含模型在目录内（entry 非空是生成式校验通过的前提）；此分支是类型收窄
   // 兜底（校验实现被破坏时按同一 preflight 问题形状返回，不让 null 流入请求构造）。
@@ -340,19 +378,24 @@ export const runGenerationBatchSubmission = async (
 
   // 提交正文：预设 token 展开为正文（spec「提交契约边界」）；失效 token 已被前置校验阻断，
   // 此处展开不会走 missing:'throw' 兜底。
-  const submitPrompt = resolvePromptDockSubmitPrompt(preflightDraft);
   const mediaInputs = buildReferenceMediaInputs(references, mediaAssets, entry);
   const mentionMap = buildMentionMap(references);
+  // 意图列表：每个提示词展开成正文后各自成一个意图，其余输入同批共享。
+  const submitIntents = promptList.map((promptText) => ({
+    prompt: resolvePromptDockSubmitPrompt(
+      promptText === intent.prompt ? preflightDraft : { ...preflightDraft, prompt: promptText },
+    ),
+    arguments: intent.args,
+    ...(mediaInputs.length > 0 ? { media_inputs: mediaInputs } : {}),
+    reference_asset_ids: references.map((reference) => reference.assetId),
+    task_count: intent.count,
+    mention_map: mentionMap,
+  }));
   const response = await submitGenerationBatch({
     model_id: entry.model_id,
     model_version: entry.model_version,
-    prompt: submitPrompt,
-    arguments: intent.args,
-    media_inputs: mediaInputs.length > 0 ? mediaInputs : undefined,
-    reference_asset_ids: references.map((reference) => reference.assetId),
-    task_count: intent.count,
+    intents: submitIntents,
     project_path: projectPath,
-    mention_map: mentionMap,
     ...(intent.clientRequestId !== undefined ? { client_request_id: intent.clientRequestId } : {}),
   });
 
@@ -377,6 +420,10 @@ export const runGenerationBatchSubmission = async (
         group_id: identities.get(task.task_id)?.group_id ?? null,
       })),
       replayed: true,
+      intents: buildIntentAcceptances(
+        response.intent_snapshot.intents,
+        response.tasks.map((task) => task.task_id),
+      ),
     };
   }
 
@@ -425,6 +472,10 @@ export const runGenerationBatchSubmission = async (
       group_id: identities.get(task.task_id)?.group_id ?? null,
     })),
     replayed: false,
+    intents: buildIntentAcceptances(
+      response.intent_snapshot.intents,
+      response.tasks.map((task) => task.task_id),
+    ),
   };
 };
 
@@ -446,16 +497,23 @@ export type CliProgrammaticSubmitOutcome =
  */
 export const buildProgrammaticIntentFromCliParams = (
   params: CliGenerateParams,
-): ProgrammaticSubmitIntent => ({
-  modelId: params.model,
-  prompt: params.prompt,
-  args: argsRecordFromCliEntries(params.arg ?? []),
-  refs: (params.ref ?? []).map((ref) => ({ assetId: ref.asset_id, slotId: ref.slot_id })),
-  count: params.count ?? 1,
-  promptPresetSnapshots: undefined,
-  clientRequestId: params.client_request_id,
-  groupName: params.group,
-});
+): ProgrammaticSubmitIntent => {
+  const rawPrompt: unknown = params.prompt;
+  const promptList: string[] = Array.isArray(rawPrompt)
+    ? rawPrompt.filter((item): item is string => typeof item === 'string')
+    : [typeof rawPrompt === 'string' ? rawPrompt : ''];
+  return {
+    modelId: params.model,
+    prompt: promptList[0] ?? '',
+    ...(promptList.length > 1 ? { extraPrompts: promptList.slice(1) } : {}),
+    args: argsRecordFromCliEntries(params.arg ?? []),
+    refs: (params.ref ?? []).map((ref) => ({ assetId: ref.asset_id, slotId: ref.slot_id })),
+    count: params.count ?? 1,
+    promptPresetSnapshots: undefined,
+    clientRequestId: params.client_request_id,
+    groupName: params.group,
+  };
+};
 
 /** CLI `--arg k=v` 条目 → 参数记录：同名键后者覆盖（重复键留 debug 痕，条件跳过必须留痕）。 */
 const argsRecordFromCliEntries = (entries: readonly CliGenerateArgEntry[]): DynamicPayload => {
@@ -641,6 +699,19 @@ const MEDIA_TYPE_CLI_LABEL: Record<'image' | 'video' | 'audio', string> = {
 };
 
 /**
+ * 后端业务错误的用户可读原因（HTTP body 形如 `{ code, message }`）。
+ *
+ * 只取 message：code 是内部错误码，不进入 CLI 文案。形状不对时返回 null，由调用方
+ * 给一句通用原因——绝不把对象字符串化成 `[object Object]` 上屏。
+ */
+const readApiErrorBodyMessage = (body: unknown): string | null => {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return null;
+  const message = (body as { message?: unknown }).message;
+  const normalized = typeof message === 'string' ? message.trim() : '';
+  return normalized.length > 0 ? normalized : null;
+};
+
+/**
  * CLI 程序化提交纯入口：给定生成意图，走与界面提交完全同一的共享核心
  * （前置校验 → 提交受理 → 受理回执创建任务节点并落位），并把失败收敛为 CLI 错误码。
  *
@@ -648,18 +719,35 @@ const MEDIA_TYPE_CLI_LABEL: Record<'image' | 'video' | 'audio', string> = {
  * - 不做任务节点选中反馈（selectCreatedNodes: false）；
  * - 失败以 `{ code, message }` 错误返回（定位到问题输入），不触发任何创作面 UI 状态。
  *
- * 提交传输层失败原样映射为 internal_error（附诊断线索），不重试（spec §5.4/§10）。
+ * 传输层与后端拒绝的分工（2026-11-06 多意图批次修复）：
+ * - 4xx 是「这次提交不合法」：保留后端给的用户可读原因，映射为 `command_rejected`；
+ * - 5xx / 网络失败才是应用侧意外：`internal_error`，附可读诊断，不重试（spec §5.4/§10）。
+ * 此前所有失败都落成 `internal_error`，超限批次会显示「技术细节：[object Object]」，
+ * 用户与 Agent 会把用法错误当成软件故障。
  */
 export const submitGenerationBatchFromIntent = async (
   intent: ProgrammaticSubmitIntent,
 ): Promise<CliProgrammaticSubmitOutcome> => {
   // 任务数与提交契约同界（1..10）：在这里定位拒绝，不让契约 parse 的 ZodError 冒充内部错误。
-  if (!Number.isInteger(intent.count) || intent.count < 1 || intent.count > 10) {
+  if (!Number.isInteger(intent.count) || intent.count < 1 || intent.count > MAX_BATCH_TASK_COUNT) {
     return {
       ok: false,
       error: {
         code: 'command_rejected',
-        message: `生成任务数必须是 1 到 10 之间的整数，收到 ${intent.count}。`,
+        message: `生成任务数必须是 1 到 ${MAX_BATCH_TASK_COUNT} 之间的整数，收到 ${intent.count}。`,
+      },
+    };
+  }
+  // 多意图（spec 45 §5.1）：批次上限是**意图任务数之和**，不是单个意图的任务数。
+  // 后端会按总和拒绝；这里先算一次，让 CLI 给出可操作的用法错误而不是 HTTP 400。
+  const promptCount = 1 + (intent.extraPrompts?.length ?? 0);
+  const totalTaskCount = promptCount * intent.count;
+  if (totalTaskCount > MAX_BATCH_TASK_COUNT) {
+    return {
+      ok: false,
+      error: {
+        code: 'command_rejected',
+        message: `一次提交最多 ${MAX_BATCH_TASK_COUNT} 个任务：当前 ${promptCount} 个提示词 × 每个 ${intent.count} 个 = ${totalTaskCount} 个。请减少提示词或 --count 后重试。`,
       },
     };
   }
@@ -703,6 +791,8 @@ export const submitGenerationBatchFromIntent = async (
         acceptance: {
           batch_id: outcome.batchId,
           tasks: outcome.tasks,
+          // 多意图受理回执（spec 45 §5.1 / CLI spec §5.4）：每个意图的任务数与任务标识。
+          intents: outcome.intents,
           ...(intent.clientRequestId !== undefined ? { client_request_id: intent.clientRequestId } : {}),
           ...(outcome.replayed ? { replayed: true } : { replayed: false }),
         },
@@ -737,9 +827,34 @@ export const submitGenerationBatchFromIntent = async (
         return { ok: false, error: { code: 'internal_error', message: outcome.failure.reason } };
     }
   } catch (error) {
-    // 提交传输层失败原样映射为错误响应，不重试（spec §5.4）；诊断线索随 message 携带。
-    const detail = error instanceof Error ? error.message : String(error);
-    console.debug('[programmaticSubmission] generate submit transport failure', { detail });
+    // 不重试（spec §5.4）。后端明确拒绝（4xx）是用法问题，必须保留它给出的原因；
+    // 只有 5xx / 网络失败才是应用侧意外。旧实现把所有失败都归成 internal_error，
+    // 超限批次会显示「技术细节：[object Object]」，把可操作的用法错误伪装成软件故障。
+    console.debug('[programmaticSubmission] generate submit failed', { error });
+    if (isApiError(error) && typeof error.status === 'number') {
+      if (error.status >= 400 && error.status < 500) {
+        return {
+          ok: false,
+          error: {
+            code: 'command_rejected',
+            message:
+              readApiErrorBodyMessage(error.body) ?? '提交被拒绝，请检查提示词与参数后重试。',
+          },
+        };
+      }
+      return {
+        ok: false,
+        error: {
+          code: 'internal_error',
+          message: '生成提交失败，服务暂时不可用，请稍后重试。',
+        },
+      };
+    }
+    const detail = error instanceof Error
+      ? error.message
+      : isApiError(error)
+        ? error.message
+        : '未知错误';
     return {
       ok: false,
       error: { code: 'internal_error', message: `生成提交失败，应用侧出现意外错误。技术细节：${detail}` },

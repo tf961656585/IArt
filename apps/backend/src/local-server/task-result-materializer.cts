@@ -16,7 +16,9 @@ import * as taskRecordViewModule from './task-record-view.cts';
 import * as mediaAssetRegistryModule from './media-asset-registry.cts';
 import { resolveSnapshotAuth } from './provider-connection/snapshot-protocol.cts';
 import { acquireLease, releaseLease } from './provider-connection/credential-store.cts';
+import { buildCredentialFailure } from './credential-failure.cts';
 import type { DownloadResult } from './media-download.cts';
+import { sniffMediaFormat } from './media-sniff.cts';
 import { toRecord } from './task-engine-shared.cts';
 
 
@@ -391,7 +393,27 @@ const buildDownloadOptions = (taskId: string, mediaDir: string | null, controlle
 
 type DownloadAuthResolution =
   | { ok: true; injection: AdapterAuthInjection | null; release: () => void }
-  | { ok: false; code: string; message: string };
+  | {
+      ok: false;
+      code: string;
+      message: string;
+      userMessage?: string;
+      details?: unknown;
+    };
+
+/** 凭证类下载鉴权失败 → 统一失败对象（`credential-failure.cts` 是唯一文案 owner）。 */
+const toCredentialDownloadFailure = (
+  reason: 'absent' | 'unreadable' | 'version_mismatch',
+): Extract<DownloadAuthResolution, { ok: false }> => {
+  const failure = buildCredentialFailure(reason);
+  return {
+    ok: false,
+    code: failure.code,
+    message: failure.message,
+    userMessage: failure.userMessage,
+    details: failure.details,
+  };
+};
 
 /**
  * 结果下载鉴权头（`result_output_mapping.requires_auth`）。
@@ -460,16 +482,13 @@ const resolveDownloadAuth = async (taskRecordInput: unknown): Promise<DownloadAu
     credentialVersion: snapshot.credential_version ?? 0,
     connectionRevision: snapshot.connection_revision,
   });
-  if (!lease) {
-    loggingModule.logDebug('[task-result-materializer] requires_auth but credential lease unavailable', {
-      taskId: readTaskRecordId(taskRecord),
+  if (!lease.ok) {
+    loggingModule.logWarn('[task-result-materializer] requires_auth but credential unavailable', {
+      credentialRef: snapshot.credential_ref,
       connectionId: snapshot.connection_id,
+      reason: lease.reason,
     });
-    return {
-      ok: false,
-      code: 'credential_missing',
-      message: '结果地址需要鉴权，但没能读取到这条连接的凭证，请检查设置后重新提交任务',
-    };
+    return toCredentialDownloadFailure(lease.reason);
   }
   const header = buildAdapterAuthInjection(auth, lease.value);
   return {
@@ -538,7 +557,11 @@ const persistInlineMediaToFiles = (
   // Gemini TTS 返回裸 PCM（audio/l16），必须补 WAV 头，否则播放器无法识别。
   // 补头后 mime 归一为 audio/wav，扩展名为 .wav，保证扩展名/容器/内容三者一致。
   const coerced = coercePcmToWavIfNeeded(parsed.buffer, normalizedMime, parsed.params);
-  const ext = EXT_BY_INLINE_MIME[coerced.mimeType] || '.bin';
+  // 扩展名与 mime 以字节为准（spec 48 §5.5 / OF-05）：实测 `format=gif` 的产物被上游声明成
+  // image/png，body 是 GIF89a；只信声明会让文件载体与内容不符。
+  const sniffed = sniffMediaFormat(coerced.buffer);
+  const effectiveMime = sniffed?.mimeType ?? coerced.mimeType;
+  const ext = sniffed?.extension ?? (EXT_BY_INLINE_MIME[effectiveMime] || '.bin');
   const digest = crypto.createHash('sha256').update(coerced.buffer).digest('hex');
   const filename = `${digest}${ext}`;
   const targetPath = path.join(mediaDir, filename);
@@ -547,7 +570,7 @@ const persistInlineMediaToFiles = (
     url: `/files/${encodeURIComponent(filename)}`,
     fileKey: filename,
     sizeBytes: coerced.buffer.length,
-    mimeType: coerced.mimeType,
+    mimeType: effectiveMime,
     mediaType,
   };
 };
@@ -620,7 +643,13 @@ async function executeTaskResultMaterialization(
       await patchTaskRecord(taskRecord, toRecord({
         status: 'failed',
         finishedAt: Date.now(),
-        error: { code: authResolution.code, message: authResolution.message, stage: 'download' },
+        error: {
+          code: authResolution.code,
+          message: authResolution.message,
+          ...(authResolution.userMessage !== undefined ? { userMessage: authResolution.userMessage } : {}),
+          ...(authResolution.details !== undefined ? { details: authResolution.details } : {}),
+          stage: 'download',
+        },
         progress: { phase: null },
       }));
       throw new Error(authResolution.message);

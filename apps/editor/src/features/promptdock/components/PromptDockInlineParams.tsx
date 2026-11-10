@@ -38,7 +38,7 @@ export function PromptDockInlineParams({
     [t],
   );
 
-  const fields = useMemo(() => inlineFields(entry), [entry]);
+  const fields = useMemo(() => inlineFields(entry, args), [entry, args]);
   const frameSpec = useMemo(() => deriveFrameSpec(entry), [entry]);
 
   // 画幅 chip 只在其消费字段确实处于 inline 子集时接管（其余字段保持通用控件派生规则不变）

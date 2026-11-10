@@ -138,10 +138,16 @@ describe("runtimeModelSelection（族模板投影）", () => {
       required: false,
       default_value: "jpeg",
     });
+    // 本文件走的是族模板的**未过滤**投影（buildProjectionFromPackageSources），
+    // gif / svg 的「默认关闭」由模型目录合成层 applyOptInEnumDefaults 收口：
+    // 目录条目默认只给 png/jpeg/webp，记录在高级参数里显式加入后才出现。
+    // 该过滤口径由 model-catalog-entry.record-driven.test.ts 覆盖，此处只断言族模板本身声明的取值集。
     expect(formatField?.enum_options?.map((option) => option.value)).toEqual([
       "png",
       "jpeg",
       "webp",
+      "gif",
+      "svg",
     ]);
     // 枚举文案是投影后的本地化 key（投影处不硬编码文案）
     const formatOptionLabels = (formatField?.enum_options ?? []).map(

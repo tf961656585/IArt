@@ -38,16 +38,34 @@ export type CliGenerationArchiveReference = z.infer<typeof CliGenerationArchiveR
  * params 与快照同形透传。三入口（batch get / asset get / task get 内联）经同一构建函数产出本形状，
  * 任何入口不得出现字段子集。
  */
+/**
+ * 单意图档案（spec 45 §5.1 / CLI spec §5.2）：一份意图的提示词全文、参数、引用与它名下的任务。
+ */
+export const CliGenerationArchiveIntentSchema = z
+  .object({
+    prompt: z.string(),
+    params: z.record(z.unknown()),
+    references: z.array(CliGenerationArchiveReferenceSchema),
+    task_ids: z.array(z.string().min(1)).min(1),
+  })
+  .strict();
+export type CliGenerationArchiveIntent = z.infer<typeof CliGenerationArchiveIntentSchema>;
+
 export const CliGenerationArchiveSchema = z
   .object({
     batch_id: z.string().min(1),
     model_id: z.string().min(1),
-    /** 提交提示词全文（非任务 metadata 的 512 字符预览摘要）。 */
-    prompt: z.string(),
-    /** 提交时冻结的模型参数（与受理快照同形透传）。 */
-    params: z.record(z.unknown()),
-    /** 参考资产引用（快照无 media_refs 时为空数组，不以 null 占位）。 */
-    references: z.array(CliGenerationArchiveReferenceSchema),
+    /**
+     * 单意图批次的提交提示词全文（非任务 metadata 的 512 字符预览摘要）。
+     * 多意图批次省略该字段——消费方遍历 `intents[]`，不得把顶层 prompt 当作整批提示词。
+     */
+    prompt: z.string().optional(),
+    /** 单意图批次的提交参数（与受理快照同形透传）；多意图批次省略。 */
+    params: z.record(z.unknown()).optional(),
+    /** 单意图批次的参考资产引用；多意图批次省略。 */
+    references: z.array(CliGenerationArchiveReferenceSchema).optional(),
+    /** 按序意图档案：恒输出，长度等于该批次的意图数。 */
+    intents: z.array(CliGenerationArchiveIntentSchema).min(1),
     /** 批次固定任务成员（受理期任务标识全集）。 */
     task_ids: z.array(z.string().min(1)).min(1),
     /** 受理时刻（快照冻结值，UTC ISO 8601 存储口径）。 */

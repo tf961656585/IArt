@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { BatchIntentSnapshot, ProjectMediaAssets } from '@iart/contracts';
+import type { BatchIntent, BatchIntentSnapshot, ProjectMediaAssets } from '@iart/contracts';
 import type { AssetNodeData } from '@/features/canvas/types/taskNode';
 import { fetchBatchIntentSnapshot } from '@/client/api/promptDockApi';
 import { usePromptDockStore } from '../promptDockStore';
@@ -70,14 +70,18 @@ const assetFixture = (overrides: Partial<AssetNodeData> = {}): AssetNodeData => 
   ...overrides,
 });
 
-const snapshotFixture = (overrides: Partial<BatchIntentSnapshot> = {}): BatchIntentSnapshot => ({
-  batch_id: 'batch_1',
-  model_id: 'gpt-image-2',
-  model_version: '1.0.0',
+const defaultIntent = (): BatchIntent => ({
   prompt: '一只在雨中弹吉他的柴犬',
   params: { size: 'auto', quality: 'high' },
   reference_asset_ids: ['asset_ref_1'],
   task_count: 2,
+});
+
+const snapshotFixture = (overrides: Partial<BatchIntentSnapshot> = {}): BatchIntentSnapshot => ({
+  batch_id: 'batch_1',
+  model_id: 'gpt-image-2',
+  model_version: '1.0.0',
+  intents: [defaultIntent()],
   task_ids: ['task_1', 'task_2'],
   created_at: '2026-09-09T00:00:00.000Z',
   ...overrides,
@@ -149,17 +153,57 @@ describe('资产「复用」回填（batch 快照恢复）', () => {
     expect(fetchBatchIntentSnapshot).toHaveBeenCalledWith('batch_1');
   });
 
+  it('多意图批次：按素材来源任务回填它所属意图，不落回第一个提示词', async () => {
+    vi.mocked(fetchBatchIntentSnapshot).mockResolvedValue(
+      snapshotFixture({
+        intents: [
+          {
+            prompt: '第一个提示词：红色背景',
+            params: { size: 'auto' },
+            task_count: 1,
+          },
+          {
+            prompt: '第二个提示词：蓝色背景',
+            params: { size: '1024x1024', quality: 'high' },
+            reference_asset_ids: ['asset_ref_1'],
+            task_count: 2,
+          },
+        ],
+        // 意图 1 占 task_1；意图 2 占 task_2/task_3。
+        task_ids: ['task_1', 'task_2', 'task_3'],
+      }),
+    );
+
+    // 素材来自第二个意图的第一个任务。
+    reuseAssetToDraft(assetFixture({ sourceTaskId: 'task_2' }));
+    await vi.waitFor(() => {
+      expect(usePromptDockStore.getState().draft.prompt).toBe('第二个提示词：蓝色背景');
+    });
+
+    const draft = usePromptDockStore.getState().draft;
+    expect(draft.prompt).toBe('第二个提示词：蓝色背景');
+    expect(draft.arguments).toEqual({ size: '1024x1024', quality: 'high' });
+    expect(draft.taskCount).toBe(2);
+    expect(draft.references.map((reference) => reference.assetId)).toEqual(['asset_ref_1']);
+  });
+
   it('旧快照无 reference_asset_ids：按 media_refs attachment fileKey 反查画布资产兜底', async () => {
     vi.mocked(fetchBatchIntentSnapshot).mockResolvedValue(
       snapshotFixture({
-        reference_asset_ids: undefined,
-        media_refs: [
+        intents: [
           {
-            media_kind: 'image',
-            source_kind: 'attachment',
-            value: 'local-media://prj_0123456789abcdef0123456789abcdef/ref-1.file',
-            mime_type: 'image/png',
-            filename: null,
+            prompt: '一只在雨中弹吉他的柴犬',
+            params: { size: 'auto', quality: 'high' },
+            media_refs: [
+              {
+                media_kind: 'image',
+                source_kind: 'attachment',
+                value: 'local-media://prj_0123456789abcdef0123456789abcdef/ref-1.file',
+                mime_type: 'image/png',
+                filename: null,
+              },
+            ],
+            task_count: 2,
           },
         ],
       }),
@@ -206,7 +250,9 @@ describe('资产「复用」回填（batch 快照恢复）', () => {
   });
 
   it('重试入口：沿用原任务配置回填，任务数固定 1 不回填原批次 N', async () => {
-    vi.mocked(fetchBatchIntentSnapshot).mockResolvedValue(snapshotFixture({ task_count: 4 }));
+    vi.mocked(fetchBatchIntentSnapshot).mockResolvedValue(
+      snapshotFixture({ intents: [{ ...defaultIntent(), task_count: 4 }] }),
+    );
 
     restoreDraftFromBatchSnapshot({
       batchId: 'batch_1',

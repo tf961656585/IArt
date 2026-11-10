@@ -8,6 +8,7 @@ import {
   readCredentialValue,
   releaseLease,
 } from "./provider-connection/credential-store.cts";
+import { buildCredentialFailure } from "./credential-failure.cts";
 import {
   buildAdapterAuthInjection,
   ExecutionSnapshotSchema,
@@ -350,10 +351,10 @@ const executePollingTask = async (
       });
     } else if (existingLeaseId) {
       const existingLease = getLease(existingLeaseId);
-      const value = await readCredentialValue(currentCredRef);
-      if (existingLease && value !== null) {
+      const read = await readCredentialValue(currentCredRef);
+      if (existingLease && read.ok) {
         pollingLeaseId = existingLease.leaseId;
-        pollingLeaseValue = value;
+        pollingLeaseValue = read.value;
         loggingModule.logDebug('[task-engine-polling] polling reuses submit lease', {
           leaseId: existingLeaseId,
           connectionId: snapshotForPolling.connection_id,
@@ -363,7 +364,7 @@ const executePollingTask = async (
           existingLeaseId,
           credentialRef: currentCredRef,
           hasExistingLease: Boolean(existingLease),
-          hasCredentialValue: value !== null,
+          hasCredentialValue: read.ok,
         });
         const leaseRes = await acquireLease({
           connectionId: snapshotForPolling.connection_id,
@@ -371,15 +372,13 @@ const executePollingTask = async (
           credentialVersion: snapshotForPolling.credential_version ?? 0,
           connectionRevision: snapshotForPolling.connection_revision,
         });
-        if (!leaseRes) {
-          loggingModule.logDebug("[task-engine-polling] acquireLease for polling failed", {
+        if (!leaseRes.ok) {
+          loggingModule.logWarn("[task-engine-polling] credential lease unavailable for polling", {
             credentialRef: currentCredRef,
             connectionId: snapshotForPolling.connection_id,
+            reason: leaseRes.reason,
           });
-          return failPollingTask(next, {
-            code: "credential_missing",
-            message: "failed to acquire credential lease for polling",
-          }, "recovery");
+          return failPollingTask(next, buildCredentialFailure(leaseRes.reason), "recovery");
         }
         pollingLeaseId = leaseRes.lease.leaseId;
         pollingLeaseValue = leaseRes.value;
@@ -391,15 +390,13 @@ const executePollingTask = async (
         credentialVersion: snapshotForPolling.credential_version ?? 0,
         connectionRevision: snapshotForPolling.connection_revision,
       });
-      if (!leaseRes) {
-        loggingModule.logDebug("[task-engine-polling] acquireLease for polling failed", {
+      if (!leaseRes.ok) {
+        loggingModule.logWarn("[task-engine-polling] credential lease unavailable for polling", {
           credentialRef: currentCredRef,
           connectionId: snapshotForPolling.connection_id,
+          reason: leaseRes.reason,
         });
-        return failPollingTask(next, {
-          code: "credential_missing",
-          message: "failed to acquire credential lease for polling",
-        }, "recovery");
+        return failPollingTask(next, buildCredentialFailure(leaseRes.reason), "recovery");
       }
       pollingLeaseId = leaseRes.lease.leaseId;
       pollingLeaseValue = leaseRes.value;
@@ -415,7 +412,7 @@ const executePollingTask = async (
         credentialVersion: refreshed.credential_version ?? 0,
         connectionRevision: refreshed.connection_revision,
       });
-      if (leaseRes) {
+      if (leaseRes.ok) {
         pollingLeaseId = leaseRes.lease.leaseId;
         pollingLeaseValue = leaseRes.value;
       }
@@ -446,6 +443,9 @@ const executePollingTask = async (
         error: {
           code: acquisition.code,
           message: acquisition.message,
+          // 凭证类失败带人话与原因（acquisition 侧已按 credential-failure 统一构造）。
+          ...(acquisition.userMessage !== undefined ? { userMessage: acquisition.userMessage } : {}),
+          ...(acquisition.details !== undefined ? { details: acquisition.details } : {}),
           stage: "result_acquisition",
         },
         progress: mergeTaskProgressPatch(failedRecord.progress, {

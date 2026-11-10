@@ -123,6 +123,8 @@ export function useGenerationModelManagement(options: {
         // 接口格式随表单选择落库（2026-09-26 起协议归属模型级，不再从连接继承）
         family_adapter_id: payload.familyAdapterId,
         accepted_media_slots: payload.acceptedMediaSlots,
+        // 能力标签随记录落库（spec 48 §4）：空数组即未标注
+        capability_labels: payload.capabilityLabels,
         // 没有自定义任何参数时请求体不带 parameter_overrides：与不带本字段的既有行为完全一致
         ...(payload.parameterOverrides === null ? {} : { parameter_overrides: payload.parameterOverrides }),
         // 不选配方时请求体不带 recipe_id：缺省即该族内置默认（契约口径）
@@ -188,6 +190,8 @@ export function useGenerationModelManagement(options: {
     try {
       await api.updateCustomGenerationModel(record.model_id, {
         accepted_media_slots: payload.acceptedMediaSlots,
+        // 整体替换：弹层回填的是记录现值，未改动的保存等于原样写回
+        capability_labels: payload.capabilityLabels,
         parameter_overrides: payload.parameterOverrides,
         // 三态：undefined = 不改（列表读不到）；null = 清除引用；字符串 = 换成该配方
         ...(payload.recipeId === undefined ? {} : { recipe_id: payload.recipeId }),

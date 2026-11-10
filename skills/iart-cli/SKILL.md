@@ -2,9 +2,11 @@
 name: iart-cli
 description: |
   通过 iart 命令行驱动正在运行的 IARTStudio 桌面应用（资产上下文画布创作空间）：
-  打开/创建项目、提交生成并把产物落进画布、建组/加成员/移出成员、整理布局（含计划文件一次整理）、查询与等待生成任务。
+  打开/创建项目、提交生成并把产物落进画布（支持一次提交多个不同提示词，成套出图）、
+  建组/加成员/移出成员、整理布局（含计划文件一次整理）、查询与等待生成任务。
   当用户提到「IARTStudio」「iArtStudio」「iart 命令」「在软件里生成」「把图放进画布」
-  「打开项目」「建个组」「整理布局」「查一下生成任务」等意图时触发。
+  「做一个表情包 / 一套动图 / 一组贴纸」「打开项目」「建个组」「整理布局」「查一下生成任务」
+  等意图时触发。用户要在项目里成套生成素材、或要判断某个模型能不能出动图时，也用本 skill。
   前提：IARTStudio 应用正在运行（CLI 不会自动启动应用）；Agent 的每一步操作都在应用
   画布上可见、可撤销。若用户只想要图片文件、不涉及画布与项目，直接用你自己的图像生成
   能力产出文件即可，不必走本 skill。
@@ -22,6 +24,15 @@ description: |
 > 的运行时输出为准：`iart canvas inspect --help` 与 `iart canvas group --help` 都应正常输出，
 > 报「无法识别的命令」说明应用低于 0.6.7，请升级并重启。0.6.7 之前的旧入口还可能启动慢、
 > 偶发无输出崩溃、控制台中文乱码；遇到时请用户升级并重启——应用启动时会自动修正入口。
+>
+> **0.6.9 起**新增：`generate --prompt` 可重复（多意图批次）、受理回执与生成档案的 `intents[]`、
+> 产物文件扩展名按实际媒体格式。低于该版本没有这些键与用法：`--prompt` 只能传一次，
+> 档案没有 `intents`——用 `iart --help` 是否列出新用法来判断，不要假设旧版本认识它们。
+>
+> **能力标签（`capability_labels`）随下一版到来**：模型条目带一组用户手写的自由文本，
+> 说明这个模型能产出什么素材（如「静态图」「动图」「矢量图」）。它是**用户填的说明文字**，
+> 不是软件判定的枚举：有的模型可能一条都没填（空数组 = 能力未标注，不代表不能产出）。
+> 旧版本没有这个键——README 里说的「产物形态 / `output_forms`」已经退场，不要再读那两个字段。
 
 `iart` 是随 IARTStudio 分发的命令行入口，让 agent 驱动正在运行的应用。Agent 做的事
 与用户在界面上做的是同一套机制：生成提交走创作面提交主链，画布操作走既有编辑动作，
@@ -127,15 +138,20 @@ description: |
 
 | 命令 | 说明 |
 |---|---|
-| `iart generate --prompt T --model M [--count N] [--ref id[:用途],id2] [--arg k=v,k2=v2] [--group 组名] [--request-id ID] [--wait] --project P` | 提交生成（见下） |
+| `iart generate --prompt T [--prompt T2 …] --model M [--count N] [--ref id[:用途],id2] [--arg k=v,k2=v2] [--group 组名] [--request-id ID] [--wait] --project P` | 提交生成（见下）；`--prompt` 可重复，每个提示词形成一个意图 |
 | `iart task cancel <taskId> --project P` | 取消任务（与界面取消同语义） |
 | `iart task wait <taskId> [--timeout S] --project P` | 轮询至终态。默认不设时限；`--timeout` 到期只是本次命令以 `wait_timeout` 退出，任务继续跑 |
 
 `generate` 细节：
-- `--count` 缺省 1，范围 1–10；越界由提交侧按业务拒绝（`command_rejected`，退出 1），不是用法错误。
+- **动手前先读模型能力**：`iart model get <model_id> --json` 里四件事决定工艺路线——① `capability_labels` 是用户手写的产出说明（如「静态图」「动图」「矢量图」「首帧视频」），按它的字面意思理解，**不要当固定枚举去精确匹配**；空数组表示还没人填，不代表模型什么都产不出，需要时问用户或先跑一次确认；② `parameter_schema.fields[].enumOptions[]` 是可选取值；③ `media_slots[]` 是参考位用途与 `maxFiles` 上限；④ `parameter_schema` 的默认值。**先看标签再定路线**：标签说能出动态（如「动图」且 `format=gif` 在可选值里）就直接提交，不要自己切帧再合成 GIF——那是多余工序，还会引入对齐与调色问题。
+- **目录里没有的取值不要猜**：`gif` 与 `svg` 默认关闭、模型目录不会列出——它们在服务商侧另有额外约束（如 gif 只有部分模型版本与具备权限的账号可用），软件不把它们放进默认输出格式。需要让用户先在 Hub 的模型「高级参数自定义 → 可选值」里加入 `gif` 或 `svg`，再用 `--arg format=gif|svg`；直接传目录里没有的取值会被参数校验拒绝。**`svg` 只支持纯文生图**：带 `--ref` 走的是编辑端点，服务商不接受 svg，会直接失败。
+- **`--prompt` 可重复（0.6.9 起）**：每个提示词形成一个意图，一次提交形成多意图批次；同批意图共享 `--model` / `--ref` / `--arg` / `--group`，只有提示词不同。`--count` 是**每个意图**的任务数，批次任务总数 = 意图数 × `--count`，必须落在 1–10；任一意图不合法整批拒绝、画布零改动。受理回执带 `intents[]`（每个意图的任务数与任务标识）。只传一个 `--prompt` 时行为与旧版一致（单意图批次）。成套素材怎么用见 R2.6。
+- `--count` 缺省 1，单意图内范围 1–10；越界由提交侧按业务拒绝（`command_rejected`，退出 1），不是用法错误。
 - `--ref` 引用**已存在**的资产（id 来源：`asset list`（可 `--query` 按文件名/提示词搜）、`canvas nodes list` 的 `asset_id`，或用户从画布右键菜单「复制素材 ID」贴给你的 id；同一内容出现多个 id 时任一等效，`asset get` 的 `equivalent_asset_ids` 可核对）。**本地文件路径不是合法输入**——本地文件需先导入成为素材才能引用：用 `iart asset import --file <绝对路径>` 导入（见 §1 与 R1.5），或由用户在画布中拖入。
 - `--ref` 可带用途后缀：`--ref <素材标识>:<用途>`，如 `--ref a:first_frame,b:last_frame`（可与不带用途的条目混写）。用途标识取 `iart model get <model_id> --json` 的 `media_slots[].slotId`，**不要猜**。省略用途时按模型能力自动归入：模型声明了可放多张的参考位（图像编辑类）→ 普通参考；只有单张位（图生视频的首帧/尾帧）→ 拒绝并列出可选用途，此时必须显式指定。**（0.6.8 起）**每个用途有 `media_slots[].maxFiles` 张数上限，超出会在提交前以 `command_rejected` 拒绝并点名该用途（`该用途最多 N 个，当前给了 M 个`）——先按 `maxFiles` 分配条目，不要靠反复重试试上限。
 - `--arg` 的参数名与取值域以 `model get` 的 `parameter_schema` 为准，**不要猜**。
+- **参数可能带生效条件（`visibleWhen`）**：字段上的 `visibleWhen`（`{field, op, value}`，`op` 取 `eq`/`neq`/`in`/`not_in`）表示「当另一个参数取某值时它才成立」。条件不满足时**传了也不生效——后端不发送该参数**，不报错、不提示（只在应用日志留痕）。典型：`output_compression` 只在 `format` 为 `jpeg`/`webp` 时成立，`frame_count`/`frame_duration_ms` 只在 `format=gif` 时成立。传之前先看依赖参数的取值，别把「传了没效果」当成模型不支持。
+- **参数能否被服务商接受取决于型号**：字段说明与取值说明会写「仅某型号支持」这类限制（如复杂程度 `complexity` 仅 2.6、输入保真 `input_fidelity` 仅 1.5）；越界传参会被服务商拒绝并表现为任务失败——按说明选，不要靠试。
 - `--arg size=WxH` 是**请求值，不是保证值**。带参考图的编辑类模型、`auto`/档位式尺寸可能按服务商策略产出不同尺寸；终态以产物 `asset.original.width/height` 为准。`task wait`/`generate --wait` 的终态结果带 `warnings[]`：请求是字面量 WxH 且实际图片尺寸不同时给出 `requested_size_not_honored`（信息性，**不改变任务成功状态**）。
 - `--request-id` 受理幂等键（batch 级）：不传时 CLI 自动生成 uuid 并在受理回执回显；**重提时复用同一 request_id 即幂等**——命中已受理批次会原样返回既有批次与任务身份（`replayed: true`），不重复出图。
 - `--group <组名>` 出生组：唯一同名组 → 本批任务出生其内（组内按任务号网格续排）；没有同名组 → 受理成功后自动建组再出生；多个同名组 → 报 `group_name_ambiguous` 且不提交。指定后落位锚点改为组内续排（不再以参考资产旁为锚）。**先规划分组、再提交生成**的标准工作流见 R2。匹配只针对 `type=group` 的节点组，Agent 容器不参与——若画布上只有同名 Agent 容器，会按「没有同名组」自动新建一个同名节点组。不指定时行为不变（`group_id` 为 null）。
@@ -174,7 +190,8 @@ iart task list --request-id <回执里的幂等键> --project P --json
 | 主题 | 事实 | agent 该怎么做 |
 |---|---|---|
 | 请求尺寸 | `--arg size=WxH` 是请求值，不保证精确尺寸；带参考图的编辑类模型可能改变尺寸 | 终态用 `asset.original.width/height` 核对；读 `warnings[]`，不要当作失败 |
-| 透明背景/免抠 | `format=png` 只决定文件格式，不保证背景透明（alpha 可以全不透明）；内置图像模板没有背景/透明参数 | 免抠意图必须显式声明：先 `model get` 看有无背景/透明字段（有就传），提示词写清「全透明背景、禁止背景元素」，终态核验 alpha；非透明不得宣告完成。完整配方见 R1.6 |
+| 透明背景/免抠 | `format=png` 只决定文件格式，不保证背景透明（alpha 可以全不透明）；当前内置图像模板另有独立背景参数 `background`（`auto`/`opaque`/`transparent`），`transparent` 要求输出格式为 PNG 或 WebP | 免抠意图必须显式声明：`model get` 有 `background` 字段就传 `--arg format=png --arg background=transparent`，再配提示词「全透明背景、禁止背景元素」，终态核验 alpha；非透明不得宣告完成。完整配方见 R1.6 |
+| 矢量产物（`format=svg`） | 产物是 SVG 文本、不是位图：像素尺寸与 alpha 通道的核验手段对它无意义，`sips`/Pillow 也读不了 | 需要像素级用途（贴图、合成、透明叠加）时别选 svg，改 png/webp；确实要矢量时按文本核验根标签与 `viewBox`，并如实告诉用户「产物是矢量，不能按像素核验」 |
 | 失败与重试 | `retryable` 只是信息字段；CLI 不自动重试；失败任务已落库 | 同 `--request-id` 重提只重放失败批次；真正重试用新提交或调整参数 |
 | 「网络连接失败」 | 可能是上游长时间无响应后断开，不等于本地断网 | 结合 `failure.message`、`startedAt/finishedAt` 判断；不要只让用户查网络 |
 | `canvas group create` | 永远新建，不按名合并；组名不是唯一键 | 组名取唯一；要加成员用 `canvas group add` |
@@ -203,9 +220,10 @@ iart task list --request-id <回执里的幂等键> --project P --json
 退出 2、stdout 为空，只往 stderr 写一行纯文本，不产出 JSON 信封）：
 
 - **受理回执**（generate 不带 `--wait`；`--wait` 时也先经 **stderr** 即时输出一次再开始等待）：
-  `{ ok, batch_id, tasks: [{task_id, task_index, node_id, group_id}], client_request_id, replayed }`（响应还含 `command` 与 `task_results: []`）——`client_request_id`
+  `{ ok, batch_id, tasks: [{task_id, task_index, node_id, group_id}], intents: [{task_count, task_ids}], client_request_id, replayed }`（响应还含 `command` 与 `task_results: []`）——`client_request_id`
   是本次受理幂等键（显式传入或自动生成），`replayed: true` 表示命中既有批次（未重复创建）；
-  `node_id` 是该任务的画布任务节点标识，`group_id` 是出生组标识（未指定 `--group` 时为 null）。
+  `node_id` 是该任务的画布任务节点标识，`group_id` 是出生组标识（未指定 `--group` 时为 null）；
+  `intents[]` 按提示词顺序给出每个意图的任务数与任务标识（0.6.9 起；单意图批次只有一项）。
   stdout 是最终结果的数据通道，进度信息走 stderr——解析最终结果只读 stdout。
 - **终态产物**（`generate --wait` 的 `task_results[]` / `task wait` 的 `task_result`）：
   每项 `{ task: {taskId, status, errorMessage, failure, ...}, assets: [{ local_file_path, asset: {assetId, mediaType, original, ...} }], node_id, group_id, warnings }`。
@@ -222,7 +240,7 @@ iart task list --request-id <回执里的幂等键> --project P --json
   `progressPhase`（status 的从属阶段；failed/cancelled 恒为 null）、`startedAt`/`finishedAt`
   （执行真实开始/结束时刻，可空）、`errorMessage`/`errorCode`/`failure`、`metadata`、`request`。
   ⚠ `metadata` **顶层没有提示词字段**：提交请求摘要在 `metadata.taskExecutionPlan.submit_request(_summary).body`，
-  长文本是 `{kind:"omitted_text",size,preview}` 对象（`preview` 才是截断摘要）；全文一律看 `generation.prompt`。
+  长文本是 `{kind:"omitted_text",size,preview}` 对象（`preview` 才是截断摘要）；全文看生成档案的 `generation.intents[].prompt`（单意图批次也可直接读顶层的 `generation.prompt`）。
 - **任务请求摘要**（`task.request.body`，0.6.8 起）：`__formData` 除 `fields` 外给出 `fileCount` 与
   `files[]`；每个文件条目同时有**出网值**（`filename`/`contentType`）与**来源描述**
   （`sourceFilename`/`mimeType`/`assetId`/`slotId`），`dataBase64` 省略为 `{kind:"omitted_base64",size}`。
@@ -252,9 +270,11 @@ iart task list --request-id <回执里的幂等键> --project P --json
   （**对象 `{a_id,b_id,gap}`；`gap` 为负表示重叠；不足两个顶层容器时为 `null`**）。
   `--full` 才内联资产摘要与完整提示词；`--prompt-limit` 控制预览长度（0=不输出）。
 - **生成档案**（`batch get` 的 `generation`；`asset get`/`task get` 内联的同名 `generation`
-  字段，三者同一形状）：`{ batch_id, model_id, prompt（提示词全文）, params（提交参数）,
-  references: [{ asset_id, media_kind?, file_key?, local_file_path?, slot_id?, field_key? }],
-  task_ids, created_at }`。其中 `references` 是参考资产引用：`slot_id`/`field_key` 是提交时绑定的
+  字段，三者同一形状）：`{ batch_id, model_id, intents: [{ prompt（提示词全文）, params（提交参数）,
+  references: [{ asset_id, media_kind?, file_key?, local_file_path?, slot_id?, field_key? }], task_ids }],
+  task_ids, created_at }`，单意图批次另带顶层的 `prompt` / `params` / `references`（等于 `intents` 的唯一一项）。
+  **多意图批次没有那三个顶层字段**——要拿某个任务的提示词，按 `intents[].task_ids` 找到它所属的意图，
+  不要把某一个意图的提示词当作整批（0.6.9 起；旧版本只有顶层单份 prompt）。其中 `references` 是参考资产引用：`slot_id`/`field_key` 是提交时绑定的
   用途与执行层字段键（**0.6.8 起**输出），其余字段实体可查才带。`params` 会剥离确实被媒体占用
   （`media_refs` 绑定）的字段键，未绑定的媒体位保持原样。资产是生成产物且批次快照可读时
   `asset get` 附 `generation`；任务属于某批次且批次快照可读时 `task get` 带出同一档案；
@@ -349,20 +369,26 @@ iart generate --prompt "<提示词>" --model <model_id> --ref <asset_id> --wait 
 ```bash
 # 1) 先看模型支持什么——不要猜参数
 iart model get <model_id> --json
-#    parameter_schema.fields[] 有 background/transparent 一类字段 → 按 schema 取值显式传
 #    有输出格式字段且枚举含 png（OpenAI 图像模板是 format）→ --arg format=png
-#    没有 png 选项（如只有 jpeg）→ 这个模型做不出透明 PNG：换模型，或在提交前如实告知用户
+#    另有背景字段（OpenAI 图像模板是 background，取值 auto/opaque/transparent）→ --arg background=transparent
+#    只有 jpeg 等不带 alpha 的格式 → 这个模型做不出透明图：换模型，或在提交前如实告知用户
+#    既没有格式选项也没有背景字段（较早的应用版本）→ 按提示词法做，见下面要点
 
 # 2) 提交：参数显式 + 提示词显式，两者缺一不可
 iart generate \
   --prompt "<主体描述>。背景完全透明（alpha=0），主体以外所有像素全透明；不要任何背景色、渐变、地面、投影、文字、边框、装饰；不要用棋盘格图案表示透明；主体边缘干净，无白边或杂色。" \
-  --model <model_id> --arg format=png --wait --json --project <路径或名称>
+  --model <model_id> --arg format=png --arg background=transparent --wait --json --project <路径或名称>
 ```
 
 要点：
 
 - ⚠ **PNG 不等于透明**：PNG 只是容器，alpha 通道可以全为不透明；JPEG 则根本没有 alpha。
   只选 PNG 不写透明要求，模型通常会补白底/纯色底/场景底。
+- **背景参数优先于提示词**：目录里有 `background` 字段时传 `background=transparent`（配 `format=png` 或
+  `webp`；`transparent` 只在带 alpha 的格式下有效），比纯提示词可靠得多——但两者仍要一起用，
+  提示词负责约束主体边缘与「不要画棋盘格」。
+- **没有背景字段时不要放弃**：较早版本的内置图像模板没有背景参数，此时只能靠提示词 + 事后 alpha 核验，
+  按下面两条执行；不要把「目录里没有字段」当成「这个模型做不了透明」。
 - **必须写否定项**：只写「透明背景」不够，模型常画棋盘格或白底来「表示」透明；要明确禁止
   背景色、地面、阴影、边框、棋盘格。
 - **主体自身的半透明单独说明**：玻璃、薄纱、烟雾、发光边缘需要保留 alpha 渐变，否则容易被一起抠掉。
@@ -476,6 +502,39 @@ iart canvas undo --operation <operation_id> --project <路径或名称> --json
 - **先预演再执行**：`--dry-run` 零副作用；执行后把 `operation_id` 留着，便于按操作回退。
 - **不要连按撤销**：按操作撤销不会碰到用户期间的手工编辑。
 
+### R2.6 一次生成一套素材（多意图提交）
+
+一套东西（8 个表情包动作、同角色的若干变体）提示词各不相同。不要连发 8 条命令各等一轮——
+用一次提交，让它们同属一个批次、落进同一个组：
+
+```bash
+# 1) 先试水：跑一条，量出单条耗时、尺寸与形态，再决定整批跑不跑
+#    试水不要带 --group，否则这一条也会进成套组，用户还要手动清
+iart generate --prompt "动作：被吓到掉凳…" --model <model_id> --arg format=gif \
+  --wait --json --project P
+
+# 2) 整批提交：每个 --prompt 一个意图，同批共享模型/参数/参考/出生组
+iart generate \
+  --prompt "动作：掉凳…" \
+  --prompt "动作：绷不住了…" \
+  --prompt "动作：装高手翻车…" \
+  --model <model_id> --arg format=gif --group "贴吧表情包" \
+  --request-id <自己生成的唯一键> --project P --json      # 不带 --wait，受理即返回
+
+# 3) 观察进度，全部终态后逐条取产物（档案里按 intents[] 对上各自的提示词）
+iart task list --project P --json
+iart task wait <taskId> --json --project P
+```
+
+要点：
+
+- **先试水再整批**：单条生成可能要几十秒，8 条就是十几分钟。先把「一条多久、什么尺寸、形态对不对」告诉用户，让他决定整批跑还是改提示词。
+- **动图节奏可调**：`format=gif` 时目录里会多出 `frame_count`（帧数）与 `frame_duration_ms`（每帧时长），默认值看 `model get`；两者依赖 `format=gif`（`visibleWhen`），别的格式传了也不生效。要调快慢改这两个值，不要自己切帧合成。
+- **不带 `--wait` 提交**：受理立刻返回，8 条任务在后台并发跑；用 `task list` 观察，比一条条等快得多。需要一次等到全部终态时再加 `--wait`。
+- **一个批次一条命**：同一 `--request-id` 重提是幂等重放，不会重复出图；要重跑必须换新的 id。示例里的键不要照抄，按本次任务生成一个。
+- **产物路径只能逐条取**：`task wait <taskId>` 是唯一给本地绝对路径的入口，8 条就是 8 次（每次都已终态，很快）；失败的任务读 `task.failure` 决定重试还是调提示词。
+- **产物按意图分组可查**：`batch get` 的 `intents[]` 给出每条提示词与它名下的任务标识；`task get` 的档案没有「本任务属于哪个意图」字段，按 `task_ids` 自己匹配。
+
 ### R3 任务观测与取消
 
 ```bash
@@ -510,7 +569,7 @@ iart task cancel <taskId> --project <路径或名称>
 - **什么 id 都没有** → 用 `iart asset list --query <关键词> --project P --json` 定位资产 id
   （命中文件名与提交提示词；只定位条目、不给提示词片段），回到第一支。
 
-判断生成质量时同理：先对照 `generation.prompt` 与 `params` 看提交是否符合预期，再看图核对
+判断生成质量时同理：先对照 `generation.intents[].prompt` 与 `params` 看提交是否符合预期（单意图批次也可读顶层的 `prompt`/`params`），再看图核对
 （`local_file_path`）；不要反过来从图猜参数。
 
 ---
@@ -532,6 +591,9 @@ iart task cancel <taskId> --project <路径或名称>
   不要把文件路径直接传给 `--ref`（会得到 `invalid_reference`）。
 - **画布不是输出垃圾场**：批量生成前想清楚数量与必要性；命令排队执行、用户手工操作优先，
   不要与用户抢画布。
+- **产物的视觉质量由用户确认**：你只核验技术属性（尺寸、帧数、格式、透明通道、是不是真的动画、矢量产物是不是真 SVG 文本），
+  把文件绝对路径交出来给用户看。不要自己抽帧拼接触印相表代替用户判断——那是越界，用户也会觉得你在
+  浪费时间；他问「好不好看」时，把图给他，而不是替他下结论。
 - **应用未运行时不绕路**：不要直连应用内部接口或发明替代实现；`not_running` 就引导启动应用。
 - **每一步都可见可撤销**：操作前告诉用户你要做什么；用户随时可在界面上撤销你的画布操作。
 

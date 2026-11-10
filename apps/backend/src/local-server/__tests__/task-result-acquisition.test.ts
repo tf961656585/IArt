@@ -274,7 +274,10 @@ void test('acquisition: requires_auth 但凭证不可读时按可读错误收口
   assert.equal(outcome.kind, 'failed');
   if (outcome.kind !== 'failed') throw new Error('expected failed');
   assert.equal(outcome.code, 'credential_missing');
-  assert.match(outcome.message, /鉴权/);
+  // 凭证类失败统一由 credential-failure 构造：技术字段短英文 + 用户可见人话 + 原因分类。
+  assert.equal(outcome.message, 'credential unavailable: absent');
+  assert.equal(outcome.userMessage, '这个服务商还没设置密钥，请到「设置 → 服务商与模型」填写。');
+  assert.deepEqual(outcome.details, { reason: 'absent' });
 });
 
 void test('acquisition: identity_source=remote_request_id 从 metadata 读取标识', async (t) => {

@@ -159,6 +159,14 @@
             {
               "value": "high",
               "label": "fields.quality.options.high.label"
+            },
+            {
+              "value": "xhigh",
+              "label": "fields.quality.options.xhigh.label"
+            },
+            {
+              "value": "max",
+              "label": "fields.quality.options.max.label"
             }
           ],
           "component_props": {},
@@ -192,6 +200,150 @@
           "default_value": "jpeg"
         },
         {
+          "field_key": "background",
+          "label": "fields.background.label",
+          "description": "fields.background.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            {
+              "value": "auto",
+              "label": "fields.background.options.auto.label"
+            },
+            {
+              "value": "opaque",
+              "label": "fields.background.options.opaque.label"
+            },
+            {
+              "value": "transparent",
+              "label": "fields.background.options.transparent.label"
+            }
+          ],
+          "component_props": {},
+          "default_value": "auto"
+        },
+        {
+          "field_key": "output_compression",
+          "label": "fields.output_compression.label",
+          "description": "fields.output_compression.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "number",
+          "component_props": {
+            "min": 0,
+            "max": 100,
+            "step": 1
+          },
+          "visible_when": {
+            "field": "format",
+            "op": "in",
+            "value": [
+              "jpeg",
+              "webp"
+            ]
+          },
+          "default_value": 100
+        },
+        {
+          "field_key": "complexity",
+          "label": "fields.complexity.label",
+          "description": "fields.complexity.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            {
+              "value": "low",
+              "label": "fields.complexity.options.low.label"
+            },
+            {
+              "value": "medium",
+              "label": "fields.complexity.options.medium.label"
+            },
+            {
+              "value": "high",
+              "label": "fields.complexity.options.high.label"
+            }
+          ],
+          "component_props": {}
+        },
+        {
+          "field_key": "frame_count",
+          "label": "fields.frame_count.label",
+          "description": "fields.frame_count.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "number",
+          "component_props": {
+            "min": 2,
+            "max": 16,
+            "step": 1
+          },
+          "visible_when": {
+            "field": "format",
+            "op": "eq",
+            "value": "gif"
+          },
+          "default_value": 9
+        },
+        {
+          "field_key": "frame_duration_ms",
+          "label": "fields.frame_duration_ms.label",
+          "description": "fields.frame_duration_ms.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "number",
+          "component_props": {
+            "min": 20,
+            "max": 2000,
+            "step": 10
+          },
+          "visible_when": {
+            "field": "format",
+            "op": "eq",
+            "value": "gif"
+          },
+          "default_value": 200
+        },
+        {
+          "field_key": "input_fidelity",
+          "label": "fields.input_fidelity.label",
+          "description": "fields.input_fidelity.description",
+          "required": false,
+          "validation_rules": [],
+          "layout": {
+            "colSpan": 1
+          },
+          "component": "select",
+          "enum_options": [
+            {
+              "value": "low",
+              "label": "fields.input_fidelity.options.low.label"
+            },
+            {
+              "value": "high",
+              "label": "fields.input_fidelity.options.high.label"
+            }
+          ],
+          "component_props": {}
+        },
+        {
           "field_key": "moderation",
           "label": "fields.moderation.label",
           "description": "fields.moderation.description",
@@ -221,6 +373,10 @@
         "size": "auto",
         "quality": "auto",
         "format": "jpeg",
+        "background": "auto",
+        "output_compression": 100,
+        "frame_count": 9,
+        "frame_duration_ms": 200,
         "moderation": "auto",
         "image": []
       }
@@ -362,6 +518,30 @@
           "kind": "field",
           "field_key": "format"
         },
+        "body.background": {
+          "kind": "field",
+          "field_key": "background"
+        },
+        "body.output_compression": {
+          "kind": "field",
+          "field_key": "output_compression"
+        },
+        "body.complexity": {
+          "kind": "field",
+          "field_key": "complexity"
+        },
+        "body.frame_count": {
+          "kind": "field",
+          "field_key": "frame_count"
+        },
+        "body.frame_duration_ms": {
+          "kind": "field",
+          "field_key": "frame_duration_ms"
+        },
+        "body.input_fidelity": {
+          "kind": "field",
+          "field_key": "input_fidelity"
+        },
         "body.moderation": {
           "kind": "field",
           "field_key": "moderation"
@@ -398,6 +578,10 @@
         "size": "auto",
         "quality": "auto",
         "format": "jpeg",
+        "background": "auto",
+        "output_compression": 100,
+        "frame_count": 9,
+        "frame_duration_ms": 200,
         "moderation": "auto",
         "image": []
       },
@@ -585,12 +769,18 @@
             },
             "high": {
               "label": "高"
+            },
+            "xhigh": {
+              "label": "极高"
+            },
+            "max": {
+              "label": "最高"
             }
           }
         },
         "format": {
           "label": "图片格式",
-          "description": "可选 png、jpeg 或 webp，默认 jpeg。",
+          "description": "可选 png、jpeg、webp（默认 jpeg）。若服务商支持 GIF 或 SVG，可在模型的高级参数里把 gif、svg 加入可选值；gif 产出多帧动画，svg 产出矢量图。",
           "options": {
             "png": {
               "label": "PNG"
@@ -600,6 +790,66 @@
             },
             "webp": {
               "label": "WebP"
+            },
+            "gif": {
+              "label": "GIF"
+            },
+            "svg": {
+              "label": "SVG"
+            }
+          }
+        },
+        "background": {
+          "label": "背景",
+          "description": "自动、不透明或透明；透明背景要求输出格式为 PNG 或 WebP。",
+          "options": {
+            "auto": {
+              "label": "自动"
+            },
+            "opaque": {
+              "label": "不透明"
+            },
+            "transparent": {
+              "label": "透明"
+            }
+          }
+        },
+        "output_compression": {
+          "label": "压缩率",
+          "description": "输出压缩率 0–100，仅 JPEG / WebP 生效。"
+        },
+        "complexity": {
+          "label": "复杂程度",
+          "description": "生成前的画面规划强度，越高越慢；仅 2.6 型号支持。",
+          "options": {
+            "low": {
+              "label": "低"
+            },
+            "medium": {
+              "label": "中"
+            },
+            "high": {
+              "label": "高"
+            }
+          }
+        },
+        "frame_count": {
+          "label": "帧数",
+          "description": "GIF 帧数，2–16，默认 9。"
+        },
+        "frame_duration_ms": {
+          "label": "帧间隔",
+          "description": "GIF 每帧时长 20–2000 毫秒，默认 200，按 10 毫秒取整。"
+        },
+        "input_fidelity": {
+          "label": "输入保真",
+          "description": "参考图保真强度；仅 gpt-image-1.5 支持，gpt-image-2 不允许设置。",
+          "options": {
+            "low": {
+              "label": "低"
+            },
+            "high": {
+              "label": "高"
             }
           }
         },
@@ -696,12 +946,18 @@
             },
             "high": {
               "label": "High"
+            },
+            "xhigh": {
+              "label": "Extra high"
+            },
+            "max": {
+              "label": "Max"
             }
           }
         },
         "format": {
           "label": "Image format",
-          "description": "Choose png, jpeg, or webp. Defaults to jpeg.",
+          "description": "Choose png, jpeg, or webp (default jpeg). If your provider supports GIF or SVG, add gif or svg to the model's parameter options in advanced settings; gif produces a multi-frame animation and svg produces a vector image.",
           "options": {
             "png": {
               "label": "PNG"
@@ -711,6 +967,66 @@
             },
             "webp": {
               "label": "WebP"
+            },
+            "gif": {
+              "label": "GIF"
+            },
+            "svg": {
+              "label": "SVG"
+            }
+          }
+        },
+        "background": {
+          "label": "Background",
+          "description": "Auto, opaque, or transparent; transparent requires PNG or WebP output.",
+          "options": {
+            "auto": {
+              "label": "Auto"
+            },
+            "opaque": {
+              "label": "Opaque"
+            },
+            "transparent": {
+              "label": "Transparent"
+            }
+          }
+        },
+        "output_compression": {
+          "label": "Compression",
+          "description": "Output compression 0–100; applies to JPEG / WebP only."
+        },
+        "complexity": {
+          "label": "Complexity",
+          "description": "Planning effort before rendering; higher is slower. 2.6 models only.",
+          "options": {
+            "low": {
+              "label": "Low"
+            },
+            "medium": {
+              "label": "Medium"
+            },
+            "high": {
+              "label": "High"
+            }
+          }
+        },
+        "frame_count": {
+          "label": "Frames",
+          "description": "GIF frame count, 2–16, default 9."
+        },
+        "frame_duration_ms": {
+          "label": "Frame duration",
+          "description": "GIF frame duration 20–2000 ms, default 200, rounded to 10 ms."
+        },
+        "input_fidelity": {
+          "label": "Input fidelity",
+          "description": "Reference-image fidelity; gpt-image-1.5 only, not allowed on gpt-image-2.",
+          "options": {
+            "low": {
+              "label": "Low"
+            },
+            "high": {
+              "label": "High"
             }
           }
         },

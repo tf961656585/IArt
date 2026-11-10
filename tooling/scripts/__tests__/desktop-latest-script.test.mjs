@@ -23,8 +23,10 @@ test('desktop:dev:latest 与默认桌面开发入口同口径', () => {
 
   assert.equal(scripts['build:desktop-static'], 'node ./tooling/build/build-desktop-static.mjs');
   assert.equal(scripts['desktop:dev:latest'], 'pnpm desktop:dev');
-  assert.equal(scripts['desktop:dev'], 'pnpm check:preflight && pnpm desktop:run-built');
-  assert.equal(scripts['desktop:dev:fast'], 'pnpm build:desktop-runtime && pnpm desktop:run-built');
+  // 2026-11-07 拍板：日常 dev 走快速档，交付前自检走 dev:full（预飞），不再保留 dev:fast。
+  assert.equal(scripts['desktop:dev'], 'pnpm check:fast && pnpm desktop:run-built');
+  assert.equal(scripts['desktop:dev:full'], 'pnpm check:preflight && pnpm desktop:run-built');
+  assert.equal(scripts['desktop:dev:fast'], undefined);
 });
 
 test('桌面静态组合构建覆盖 shared 前置、Hub 与 Editor', () => {

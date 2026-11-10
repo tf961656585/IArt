@@ -1,4 +1,4 @@
-import type { BatchIntentSnapshot, ProjectMediaAssets } from '@iart/contracts';
+import type { BatchIntent, BatchIntentSnapshot, ProjectMediaAssets } from '@iart/contracts';
 import type { AssetNodeData } from '@/features/canvas/types/taskNode';
 import { useCanvasStore } from '@/features/canvas/store/canvasStore';
 import { extractFileKeyFromRuntimeMediaUrl } from '@/features/canvas/utils/mediaUrl';
@@ -16,6 +16,10 @@ import type { PromptDockDraft, PromptDockReference } from './PromptDock.types';
  * 2. restoreDraftFromBatchSnapshot 按 batch 快照异步补齐 prompt/参数/参考/任务数。
  * 不回填连接/凭证/部署/执行快照（spec PromptDock生成主链.md）。
  * AssetNode hover 钮（历史入口）与资产节点选中态底栏共用本函数，禁止并立实现。
+ *
+ * 多意图批次（spec 45 §5.1）：素材节点带 `sourceTaskId`，回填必须按它定位产出该素材的
+ * 意图；只传 `sourceBatchId` 会让回填永远落在第一个意图上（用户点第 5 个表情包的「复用」，
+ * 拿到的却是第 1 个提示词）。
  */
 export const reuseAssetToDraft = (asset: AssetNodeData): void => {
   const replaceDraft = usePromptDockStore.getState().replaceDraft;
@@ -32,6 +36,7 @@ export const reuseAssetToDraft = (asset: AssetNodeData): void => {
     batchId: asset.sourceBatchId,
     fallbackModelId: asset.sourceModelId || null,
     restoreTaskCount: true,
+    taskId: asset.sourceTaskId,
   });
 };
 
@@ -42,6 +47,8 @@ export const reuseAssetToDraft = (asset: AssetNodeData): void => {
 export const reuseTaskToDraft = (params: {
   batchId: string | null | undefined;
   modelId: string | null | undefined;
+  /** 触发重试的任务：多意图批次按它定位所属意图，缺省回填第一个意图。 */
+  taskId?: string | null | undefined;
 }): void => {
   const replaceDraft = usePromptDockStore.getState().replaceDraft;
   replaceDraft({
@@ -57,6 +64,7 @@ export const reuseTaskToDraft = (params: {
     batchId: params.batchId,
     fallbackModelId: params.modelId || null,
     restoreTaskCount: false,
+    taskId: params.taskId,
   });
 };
 
@@ -71,6 +79,8 @@ export const restoreDraftFromBatchSnapshot = (params: {
   fallbackModelId: string | null;
   /** 复用回填原批次任务数（产品 spec「复用」段）；重试固定 1，不回填 */
   restoreTaskCount: boolean;
+  /** 回填目标任务：多意图批次按它定位所属意图，缺省回填第一个意图。 */
+  taskId?: string | null | undefined;
 }): void => {
   const draftAtStart = usePromptDockStore.getState().draft;
   void fetchBatchIntentSnapshot(params.batchId ?? '').then((snapshot) => {
@@ -81,29 +91,51 @@ export const restoreDraftFromBatchSnapshot = (params: {
       buildDraftPatchFromSnapshot(snapshot, {
         fallbackModelId: params.fallbackModelId,
         restoreTaskCount: params.restoreTaskCount,
+        taskId: params.taskId,
       }),
     );
   });
 };
 
+/**
+ * 任务所属意图（spec 45 §5.1）：任务按意图顺序连续分配，按 task_ids 位置累积即可定位。
+ * 找不到目标任务时回填第一个意图——单意图批次就是它，多意图批次下这是「整批的主意图」。
+ */
+const resolveIntentForTask = (
+  snapshot: BatchIntentSnapshot,
+  taskId: string | null | undefined,
+): BatchIntent => {
+  const fallback = snapshot.intents[0] ?? { prompt: '', params: {}, task_count: 1 };
+  if (!taskId) return fallback;
+  const taskIndex = snapshot.task_ids.indexOf(taskId);
+  if (taskIndex < 0) return fallback;
+  let offset = 0;
+  for (const intent of snapshot.intents) {
+    offset += intent.task_count;
+    if (taskIndex < offset) return intent;
+  }
+  return fallback;
+};
+
 const buildDraftPatchFromSnapshot = (
   snapshot: BatchIntentSnapshot,
-  opts: { fallbackModelId: string | null; restoreTaskCount: boolean },
+  opts: { fallbackModelId: string | null; restoreTaskCount: boolean; taskId?: string | null | undefined },
 ): Partial<PromptDockDraft> => {
   const modelId = snapshot.model_id || opts.fallbackModelId;
   // model_version 取当前目录投影（能力包版本随分发演进），不回填快照历史值。
   const catalogEntry = modelId
     ? usePromptDockStore.getState().catalog.find((entry) => entry.model_id === modelId) ?? null
     : null;
+  const intent = resolveIntentForTask(snapshot, opts.taskId);
   return {
     modelId: modelId || null,
     modelVersion: catalogEntry?.model_version ?? null,
-    prompt: snapshot.prompt,
-    arguments: { ...snapshot.params },
-    references: buildReferencesFromSnapshot(snapshot, catalogEntry),
+    prompt: intent.prompt,
+    arguments: { ...intent.params },
+    references: buildReferencesFromSnapshot(intent, catalogEntry),
     // 快照回填的是提交时已展开的正文，不含预设 token：清空上一次草稿的 token 快照，避免残留。
     promptPresetSnapshots: undefined,
-    ...(opts.restoreTaskCount ? { taskCount: snapshot.task_count } : {}),
+    ...(opts.restoreTaskCount ? { taskCount: intent.task_count } : {}),
   };
 };
 
@@ -115,11 +147,11 @@ const buildDraftPatchFromSnapshot = (
  * 一次用途——这是 §8 已声明的可接受代价，不在这里按快照历史推断。
  */
 const buildReferencesFromSnapshot = (
-  snapshot: BatchIntentSnapshot,
+  intent: BatchIntent,
   entry: PromptDockCatalogEntry | null,
 ): PromptDockReference[] => {
   const mediaAssets: ProjectMediaAssets = useCanvasStore.getState().mediaAssets ?? {};
-  const assetIds = snapshot.reference_asset_ids ?? resolveAssetIdsFromMediaRefs(snapshot, mediaAssets);
+  const assetIds = intent.reference_asset_ids ?? resolveAssetIdsFromMediaRefs(intent, mediaAssets);
   const graph = useCanvasStore.getState().nodeGraph;
   const references: PromptDockReference[] = [];
   for (const assetId of assetIds) {
@@ -143,10 +175,10 @@ const buildReferencesFromSnapshot = (
 };
 
 const resolveAssetIdsFromMediaRefs = (
-  snapshot: BatchIntentSnapshot,
+  intent: BatchIntent,
   mediaAssets: ProjectMediaAssets,
 ): string[] => {
-  const mediaRefs = snapshot.media_refs ?? [];
+  const mediaRefs = intent.media_refs ?? [];
   // attachment 引用的 value 是提交时资产 original.url（local-media://…fileKey），按 fileKey
   // 反查画布资产注册表；其余 source_kind（url/base64/local_path）不对应画布资产，跳过。
   const fileKeyToAssetId = new Map<string, string>();
@@ -160,7 +192,6 @@ const resolveAssetIdsFromMediaRefs = (
     const assetId = fileKeyToAssetId.get(extractFileKeyFromRuntimeMediaUrl(ref.value) ?? '');
     if (!assetId) {
       console.debug('[assetReuse] media ref not resolvable to canvas asset (skipped)', {
-        batchId: snapshot.batch_id,
         value: ref.value,
       });
       continue;

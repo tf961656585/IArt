@@ -275,7 +275,10 @@ describe('InterfaceFormatEditor：默认值写进草稿', () => {
     const addInput = screen.getByLabelText('第 1 行参数的新可选值');
     fireEvent.change(addInput, { target: { value: '1024x1024' } });
     fireEvent.keyDown(addInput, { key: 'Enter' });
-    expect(screen.getByText('1024x1024')).toBeInTheDocument();
+    // 值同时出现在芯片与「每个可选值的产物形态」声明行上，按芯片的删除钮断言更精确。
+    expect(
+      screen.getByRole('button', { name: '删掉第 1 行参数的可选值「1024x1024」' }),
+    ).toBeInTheDocument();
 
     chooseOption('第 1 行参数默认值', '1024x1024');
     expect(screen.getByRole('combobox', { name: '第 1 行参数默认值' })).toHaveTextContent('1024x1024');

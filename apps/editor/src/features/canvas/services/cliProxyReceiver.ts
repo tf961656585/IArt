@@ -298,6 +298,7 @@ const executeGenerate = async (
         request_id: requestId,
         batch_id: outcome.acceptance.batch_id,
         tasks: outcome.acceptance.tasks,
+        ...(outcome.acceptance.intents !== undefined ? { intents: outcome.acceptance.intents } : {}),
         ...(outcome.acceptance.client_request_id !== undefined
           ? { client_request_id: outcome.acceptance.client_request_id }
           : {}),

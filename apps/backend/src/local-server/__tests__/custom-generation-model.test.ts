@@ -512,6 +512,27 @@ void test('参数覆盖：POST 携带、落盘 round-trip、PUT 缺省不变/出
   assert.match(await readErrorBody(illegalPost), /nope/);
 });
 
+void test('默认关闭的 gif 可在参数覆盖里显式启用（保存期校验看得见 opt_in 取值）', async (t) => {
+  withIsolatedEnv(t);
+  const baseUrl = await startServer(t);
+  const connectionId = await seedConnection(OPENAI_IMAGE_ADAPTER);
+
+  const response = await addGenerationModel(baseUrl, {
+    model_id: 'my-image-gif-opt-in',
+    connection_id: connectionId,
+    family_adapter_id: OPENAI_IMAGE_ADAPTER,
+    parameter_overrides: {
+      official: [{ field_key: 'format', enum_options: ['png', 'jpeg', 'webp', 'gif'] }],
+      custom: [],
+    },
+  });
+  assert.equal(response.status, 200, await readErrorBody(response.clone()));
+  const saved = CustomGenerationModelResponseSchema.parse(await response.json()).model;
+  assert.deepEqual(saved.parameter_overrides.official, [
+    { field_key: 'format', enum_options: ['png', 'jpeg', 'webp', 'gif'] },
+  ]);
+});
+
 void test('接口类型值域 8 个全部可写入记录：素材位按该族模板能力收口（不再人人可勾满）', async (t) => {
   withIsolatedEnv(t);
   const baseUrl = await startServer(t);
@@ -654,7 +675,7 @@ void test('族模板参数描述端点：openai-image-v1 返回官方参数与�
   assert.equal(descriptor.family_adapter_id, OPENAI_IMAGE_ADAPTER);
   assert.deepEqual(
     descriptor.official_fields.map((field) => field.field_key),
-    ['image', 'size', 'quality', 'format', 'moderation'],
+    ['image', 'size', 'quality', 'format', 'background', 'output_compression', 'complexity', 'frame_count', 'frame_duration_ms', 'input_fidelity', 'moderation'],
     '素材位行（image）排在官方参数区最前，且随描述符下发以便编辑器开放改名与张数',
   );
   const mediaField = descriptor.official_fields.find((field) => field.field_key === 'image');

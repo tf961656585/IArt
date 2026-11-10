@@ -15,6 +15,7 @@ import {
 } from './provider-connection/credential-store.cts';
 import { getFetchDispatcher } from './fetch-dispatcher.cts';
 import { appendTaskArchiveEventSafely } from './task-engine-archive.cts';
+import { buildCredentialFailure } from './credential-failure.cts';
 import { readValueByPath } from './task-engine-polling-utils.cts';
 import { patchTaskRecord } from './task-engine-state.cts';
 import { normalizeFixedHeaders, redactSecrets, replaceUrlTemplatePlaceholders, setQueryParamValue } from './request-wire-utils.cts';
@@ -57,6 +58,24 @@ const ACQUISITION_MODE = 'fetch_final_result';
 type AcquisitionFailure = {
   code: string;
   message: string;
+  userMessage?: string;
+  details?: unknown;
+};
+
+/**
+ * 凭证类获取失败 → 统一失败对象（`credential-failure.cts` 是唯一文案 owner）。
+ * 获取失败对象只承载 code/message/userMessage/details，stage 由轮询收口补。
+ */
+const toCredentialAcquisitionFailure = (
+  reason: 'absent' | 'unreadable' | 'version_mismatch',
+): AcquisitionFailure => {
+  const failure = buildCredentialFailure(reason);
+  return {
+    code: failure.code,
+    message: failure.message,
+    userMessage: failure.userMessage,
+    details: failure.details,
+  };
 };
 
 type AcquisitionAuthResult =
@@ -269,10 +288,13 @@ const resolveAuthHeader = async (params: {
 
   const existingLeaseId = normalizeString(readReflectField(params.metadata, 'credentialLeaseId'));
   let credentialValue: string | null = null;
+  let credentialFailureReason: 'absent' | 'unreadable' | 'version_mismatch' = 'unreadable';
   let ownedLeaseId: string | null = null;
   try {
     if (existingLeaseId && getLease(existingLeaseId)) {
-      credentialValue = await readCredentialValue(snapshot.credential_ref);
+      const read = await readCredentialValue(snapshot.credential_ref);
+      if (read.ok) credentialValue = read.value;
+      else credentialFailureReason = read.reason;
     } else {
       const lease = await acquireLease({
         connectionId: snapshot.connection_id,
@@ -280,22 +302,22 @@ const resolveAuthHeader = async (params: {
         credentialVersion: snapshot.credential_version ?? 0,
         connectionRevision: snapshot.connection_revision,
       });
-      if (lease) {
+      if (lease.ok) {
         credentialValue = lease.value;
         ownedLeaseId = lease.lease.leaseId;
+      } else {
+        credentialFailureReason = lease.reason;
       }
     }
     if (!credentialValue) {
-      loggingModule.logDebug('[task-result-acquisition] requires_auth but credential unreadable', {
+      loggingModule.logWarn('[task-result-acquisition] requires_auth but credential unavailable', {
+        credentialRef: snapshot.credential_ref,
         connectionId: snapshot.connection_id,
-        hasLease: Boolean(existingLeaseId),
+        reason: credentialFailureReason,
       });
       return {
         ok: false,
-        failure: {
-          code: 'credential_missing',
-          message: '结果地址需要鉴权，但没能读取到这条连接的凭证，请检查设置后重新提交任务',
-        },
+        failure: toCredentialAcquisitionFailure(credentialFailureReason),
       };
     }
     return { ok: true, injection: buildAdapterAuthInjection(auth, credentialValue) };
@@ -311,17 +333,29 @@ const resolveAuthHeader = async (params: {
 type ResultAcquisitionOutcome =
   | { kind: 'not_applicable' }
   | { kind: 'acquired'; record: unknown }
-  | { kind: 'failed'; record: unknown; code: string; message: string };
+  | {
+      kind: 'failed';
+      record: unknown;
+      code: string;
+      message: string;
+      /** 用户可见人话（凭证类失败由 credential-failure 统一构造）。 */
+      userMessage?: string;
+      /** 失败原因等结构化细节（如 `{ reason: 'unreadable' }`）。 */
+      details?: unknown;
+    };
 
 const failAcquisition = (
   record: unknown,
   code: string,
   message: string,
+  extra?: { userMessage?: string; details?: unknown },
 ): ResultAcquisitionOutcome => ({
   kind: 'failed',
   record,
   code,
   message,
+  ...(extra?.userMessage !== undefined ? { userMessage: extra.userMessage } : {}),
+  ...(extra?.details !== undefined ? { details: extra.details } : {}),
 });
 
 /**
@@ -434,7 +468,10 @@ const maybeRunResultAcquisition = async (
   const requiresAuth = readReflectField(strategy, 'requires_auth') === true;
   const auth = await resolveAuthHeader({ requiresAuth, snapshot, metadata, modelId });
   if (!auth.ok) {
-    return failAcquisition(record, auth.failure.code, auth.failure.message);
+    return failAcquisition(record, auth.failure.code, auth.failure.message, {
+      ...(auth.failure.userMessage !== undefined ? { userMessage: auth.failure.userMessage } : {}),
+      ...(auth.failure.details !== undefined ? { details: auth.failure.details } : {}),
+    });
   }
 
   const headers = new Headers();

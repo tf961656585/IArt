@@ -1,4 +1,9 @@
-import type { ExecutableCatalogParameterField } from '@iart/contracts';
+import {
+  evaluateParameterActivation,
+  type ExecutableCatalogParameterField,
+  type ParameterValueDraftMap,
+  type ParameterValueMap,
+} from '@iart/contracts';
 import type { PromptDockCatalogEntry } from '@/client/api/promptDockApi';
 
 /**
@@ -30,14 +35,44 @@ export const paramFormFields = (
   (entry?.parameter_schema.fields ?? []).filter((f) => !isMediaUploadField(f));
 
 /**
+ * 参数启动条件（`visibleWhen`）求值：条件不成立的字段不进入呈现层。
+ *
+ * 与发送层共用 `@iart/contracts` 的同一个求值器，避免界面与后端两套语义。
+ * 求值到不动点：被隐藏字段若作为其他条件的依赖，后续条件同样按不成立处理。
+ */
+export const activeParamFields = (
+  fields: ExecutableCatalogParameterField[],
+  args: ParameterValueMap,
+): ExecutableCatalogParameterField[] => {
+  const hidden = new Set<string>();
+  const maxRounds = fields.length + 1;
+  for (let round = 0; round < maxRounds; round += 1) {
+    let changed = false;
+    const visibleArgs: ParameterValueDraftMap = { ...args };
+    for (const key of hidden) delete visibleArgs[key];
+    for (const field of fields) {
+      if (hidden.has(field.fieldKey)) continue;
+      const activation = field.visibleWhen;
+      if (activation === undefined) continue;
+      if (evaluateParameterActivation(activation, visibleArgs)) continue;
+      hidden.add(field.fieldKey);
+      changed = true;
+    }
+    if (!changed) break;
+  }
+  return hidden.size === 0 ? fields : fields.filter((field) => !hidden.has(field.fieldKey));
+};
+
+/**
  * inline 层字段：参数表单字段按 schema 顺序取前 4 个（硬上限）。
  * 满足「inline 层必须是完整参数集合的真子集」：字段数 ≤4 时只取 n-1，
  * 至少留 1 项在完整面板（≤1 个字段时无 inline 层，只有 Sheet 承载）。
  */
 export const inlineFields = (
   entry: PromptDockCatalogEntry | null | undefined,
+  args: ParameterValueMap = {},
 ): ExecutableCatalogParameterField[] => {
-  const fields = paramFormFields(entry);
+  const fields = activeParamFields(paramFormFields(entry), args);
   if (fields.length <= INLINE_HARD_LIMIT) {
     return fields.slice(0, Math.max(fields.length - 1, 0));
   }
@@ -178,8 +213,15 @@ export const buildImageSizeChoices = (
   return choices.length > 0 ? choices : null;
 };
 
-/** select 字段的选项解析（值 + 已解析文案）。 */
-export type ParamSelectOption = { value: string; label: string };
+/**
+ * select 字段的选项解析（值 + 已解析文案）。
+ *
+ * 值标签来自目录条目的取值声明；取值不再承载产物形态（spec 48 已退场），参数选项只呈现取值本身。
+ */
+export type ParamSelectOption = {
+  value: string;
+  label: string;
+};
 
 export const buildSelectOptions = (
   field: ExecutableCatalogParameterField,

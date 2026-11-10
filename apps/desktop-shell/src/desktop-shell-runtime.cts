@@ -7,6 +7,7 @@ import {
   resolveDesktopBackendRuntimeBootstrap,
 } from "./utils/backend-runtime-bootstrap.cjs";
 import { attachChildProcessStartupGuard } from "./utils/child-process-startup-guard.cjs";
+import { appendMainLog } from "./main-log.cjs";
 import { appendUpdaterLog } from "./update/app-update-log.cjs";
 import {
   cloneDesktopEnv,
@@ -384,7 +385,7 @@ export const createRuntimeController = (
             if (msg.type === "runtime:credential-crypto-encrypt") {
               const parsed = CredentialCryptoEncryptPayloadSchema.safeParse(msg);
               if (!parsed.success) {
-                console.warn("[desktop-runtime] invalid runtime:credential-crypto-encrypt payload", parsed.error);
+                appendMainLog("warn", "[desktop-runtime] invalid runtime:credential-crypto-encrypt payload", { detail: parsed.error.message });
                 sendResult(
                   typeof msg.transactionId === "string" ? msg.transactionId : "",
                   { success: false, error: "invalid runtime:credential-crypto-encrypt payload" },
@@ -394,7 +395,7 @@ export const createRuntimeController = (
               const payload = parsed.data;
               try {
                 if (!safeStorage.isEncryptionAvailable()) {
-                  console.warn("[desktop-runtime] runtime:credential-crypto-encrypt: safeStorage unavailable");
+                  appendMainLog("warn", "[desktop-runtime] runtime:credential-crypto-encrypt: safeStorage unavailable", undefined);
                   sendResult(payload.transactionId, { success: false, error: "safeStorage unavailable" });
                   return;
                 }
@@ -404,6 +405,7 @@ export const createRuntimeController = (
                   data: { encryptedBase64: encrypted.toString("base64") },
                 });
               } catch (error) {
+                appendMainLog("warn", "[desktop-runtime] runtime:credential-crypto-encrypt failed", { detail: toErrorMessage(error) });
                 sendResult(payload.transactionId, {
                   success: false,
                   error: toErrorMessage(error),
@@ -414,7 +416,7 @@ export const createRuntimeController = (
             if (msg.type === "runtime:credential-crypto-decrypt") {
               const parsed = CredentialCryptoDecryptPayloadSchema.safeParse(msg);
               if (!parsed.success) {
-                console.warn("[desktop-runtime] invalid runtime:credential-crypto-decrypt payload", parsed.error);
+                appendMainLog("warn", "[desktop-runtime] invalid runtime:credential-crypto-decrypt payload", { detail: parsed.error.message });
                 sendResult(
                   typeof msg.transactionId === "string" ? msg.transactionId : "",
                   { success: false, error: "invalid runtime:credential-crypto-decrypt payload" },
@@ -424,7 +426,7 @@ export const createRuntimeController = (
               const payload = parsed.data;
               try {
                 if (!safeStorage.isEncryptionAvailable()) {
-                  console.warn("[desktop-runtime] runtime:credential-crypto-decrypt: safeStorage unavailable");
+                  appendMainLog("warn", "[desktop-runtime] runtime:credential-crypto-decrypt: safeStorage unavailable", undefined);
                   sendResult(payload.transactionId, { success: false, error: "safeStorage unavailable" });
                   return;
                 }
@@ -434,6 +436,9 @@ export const createRuntimeController = (
                   data: { plaintext },
                 });
               } catch (error) {
+                // 钥匙串授权失效/密钥不匹配在这里落地：必须留文件痕迹（打包态 GUI 主进程 console 不可见）。
+                // 只记错误文案，不记 payload（密文属密钥材料形态）。
+                appendMainLog("warn", "[desktop-runtime] runtime:credential-crypto-decrypt failed", { detail: toErrorMessage(error) });
                 sendResult(payload.transactionId, {
                   success: false,
                   error: toErrorMessage(error),
@@ -444,7 +449,7 @@ export const createRuntimeController = (
             if (msg.type === "runtime:credential-crypto-available") {
               const parsed = CredentialCryptoAvailablePayloadSchema.safeParse(msg);
               if (!parsed.success) {
-                console.warn("[desktop-runtime] invalid runtime:credential-crypto-available payload", parsed.error);
+                appendMainLog("warn", "[desktop-runtime] invalid runtime:credential-crypto-available payload", { detail: parsed.error.message });
                 sendResult(
                   typeof msg.transactionId === "string" ? msg.transactionId : "",
                   { success: false, error: "invalid runtime:credential-crypto-available payload" },

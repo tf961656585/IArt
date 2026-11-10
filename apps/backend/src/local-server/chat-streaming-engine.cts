@@ -198,8 +198,9 @@ async function resolveApiConfig(
     credentialVersion: typeof snapshot.credential_version === 'number' ? snapshot.credential_version : 0,
     connectionRevision: snapshot.connection_revision,
   });
-  if (!leaseResult) {
-    throw new Error(`chat model credential is unreadable: ${modelAssetId}`);
+  if (!leaseResult.ok) {
+    // 只暴露失败原因分类，不带底层异常原文（凭证材料形态不得进入错误消息）。
+    throw new Error(`chat model credential unavailable: ${leaseResult.reason}`);
   }
   return {
     apiKey: leaseResult.value,

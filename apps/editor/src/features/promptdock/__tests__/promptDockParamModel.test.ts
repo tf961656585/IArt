@@ -1,3 +1,4 @@
+// 参数选项模型（取值标注已随 spec 48 2.0.0 退场）
 import { describe, expect, it } from 'vitest';
 
 import type { ExecutableCatalogParameterField } from '@iart/contracts';

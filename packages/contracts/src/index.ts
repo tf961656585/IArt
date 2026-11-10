@@ -7,6 +7,7 @@ export * from './custom-interface-format-contract';
 export * from './interface-recipe-contract';
 export * from './promptdock-batch-contract';
 export * from './executable-model-catalog-contract';
+export * from './parameter-activation';
 export * from './task-cancel-contract';
 export * from './task-failure-stage';
 export * from './task-requery-contract';

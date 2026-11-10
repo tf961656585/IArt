@@ -18,6 +18,8 @@ import {
 import { ProviderDetail, StateCard } from './provider-connection/ProviderDetail';
 import type { ModelRow } from './provider-connection/ModelTable';
 import { ProviderNoticeBar, StatusPill, type BindingTone } from './provider-connection/ProviderNoticeBar';
+import { CredentialStatusText } from './provider-connection/CredentialStatusText';
+import { credentialDisplay } from './provider-connection/credentialDisplay';
 import { INTERFACE_FORMAT_CREATE_INTENT_KEY, PROVIDER_ADD_MODEL_HINT_KEY } from './provider-connection/providerHints';
 import { ProviderFormDialog, type ProviderFormPayload } from './provider-connection/ProviderFormDialog';
 import {
@@ -906,6 +908,8 @@ function ProviderCard({
     : connection.has_credential
       ? '已启用'
       : '缺少密钥';
+  // 密钥状态词与详情同一套说法（credentialDisplay）；正常态不在列表复读「密钥已保存」
+  const credential = credentialDisplay(connection);
 
   return (
     <div
@@ -943,6 +947,10 @@ function ProviderCard({
           （docs/hub/hub-information-architecture.md §7.2：摘要是列表扫描时的计数信息，保留） */}
       <div className="flex min-w-0 items-center gap-2 text-2xs text-muted-foreground">
         <span className="min-w-0 flex-1 truncate" title={connection.base_url}>{connection.base_url}</span>
+        {/* 密钥异常 / 弱保护才在这一行出现，且与详情同一套说法；正常态不复读「密钥已保存」 */}
+        {credential.needsReentry || credential.weakProtection ? (
+          <CredentialStatusText credential={credential} />
+        ) : null}
         <span className="shrink-0">已添加 {modelCount} 个模型</span>
       </div>
     </div>

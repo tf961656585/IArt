@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>失败卡几何探针（任务节点 240×160）</title>
+<!--
+  核验对象：任务节点失败卡「两行摘要 + 动作行错误详情入口」的几何与命中。
+  生产事实源：apps/editor/src/app/globals.css（.task-failure 块）与
+  apps/editor/src/features/canvas/components/nodes/TaskNode.tsx 的失败 overlay 结构。
+  同步义务：改生产那两处的类名 / 高度预算 / 内距后，必须同步本页再复量；本页只做
+  几何与命中核验，不参与构建链、不进任何门禁。
+  为什么需要它：jsdom 无语义布局，类型检查与静态门禁都不覆盖 CSS 布局语义
+  （AGENTS.md「布局/尺寸类改动没有机械兜底」）。
+  用法：真实 Chromium 打开（file://）→ 调 __PROBE.measure() 取几何读数；
+  用真实鼠标点「错误详情」→ __PROBE.clicks() 应增长。
+-->
+<style>
+  :root {
+    --radius-sm: 6px; --radius-md: 8px;
+    --card: oklch(1 0 0); --border: oklch(0.922 0 0);
+    --shadow-md: 0 6px 14px -4px oklch(0.21 0.025 277 / 0.12);
+    --muted-foreground: oklch(0.556 0 0); --foreground: oklch(0.145 0 0);
+    --st-failed-text: #b91c1c; --ring: oklch(0.5 0 0);
+    --scrim-70: oklch(0 0 0 / 0.70); --scrim-text: #fff; --scrim-danger-text: #fecaca;
+    --secondary: oklch(0.97 0 0); --secondary-foreground: oklch(0.205 0 0);
+    --media-generating-image: linear-gradient(135deg, #7c3aed, #db2777);
+  }
+  body { margin: 0; padding: 24px; display: flex; gap: 32px; flex-wrap: wrap;
+    font: 12px/1.45 -apple-system, "PingFang SC", system-ui, sans-serif; background: #fbfbfc; }
+  .cell { display: flex; flex-direction: column; gap: 8px; }
+  .caption { font-size: 11px; color: #666; }
+  /* 生产节点外壳：.task-node 240×160 + 媒体面（生成底）+ 失败 veil */
+  .task-node { position: relative; width: 240px; height: 160px; border-radius: var(--radius-md); }
+  .task-surface { position: absolute; inset: 0; border-radius: var(--radius-md); overflow: hidden; }
+  .task-hatch { position: absolute; inset: 0; background: var(--media-generating-image); }
+  .task-hatch::before { content: ""; position: absolute; inset: 0;
+    background: radial-gradient(56% 44% at 50% 42%, color-mix(in srgb, #dc2626 12%, transparent), transparent 70%); }
+
+  /* ==== 以下自 apps/editor/src/app/globals.css 逐条转录（勿改数值） ==== */
+  .task-failure {
+    position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 5;
+    display: flex; flex-direction: column;
+    max-height: calc(100% - 16px);
+    overflow: hidden;
+    border-radius: var(--radius-md);
+    background: var(--scrim-70); color: var(--scrim-text);
+    padding: 6px 10px; font-size: 12px; line-height: 1.45;
+  }
+  .failure-head {
+    flex: none; display: flex; align-items: center; gap: 6px;
+    height: 20px; margin-bottom: 4px;
+  }
+  .task-status-badge { display: inline-flex; align-items: center; gap: 4px; flex: none;
+    border-radius: 9999px; padding: 1px 8px; font-size: 10px; font-weight: 500; white-space: nowrap;
+    background: rgba(255,255,255,.92); color: #b91c1c; }
+  .failure-id {
+    max-width: 104px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 10px; color: rgba(255,255,255,.75);
+  }
+  .failure-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+  .failure-acts { flex: none; }
+  .task-failure .sum { margin: 0; word-break: break-word; line-height: 1.4; }
+  .task-failure .sum-clamp-2 {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, currentColor 58%, transparent 96%);
+    mask-image: linear-gradient(to bottom, currentColor 58%, transparent 96%);
+  }
+  .task-failure .task-failure-detail {
+    margin-left: auto; height: 26px; padding: 0 2px;
+    display: inline-flex; align-items: center; gap: 2px;
+    border: 0; background: transparent; border-radius: var(--radius-sm);
+    color: rgba(255,255,255,.8);
+    font-size: 10.5px; font-weight: 500; line-height: 1; white-space: nowrap;
+    cursor: pointer;
+  }
+  .task-failure .task-failure-detail:hover { color: var(--scrim-text); text-decoration: underline; text-underline-offset: 2px; }
+  .task-failure .task-failure-detail:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+  .task-failure .acts { display: flex; gap: 6px; }
+  .task-failure .acts-primary { margin-top: 6px; flex-wrap: wrap; }
+  .task-failure .acts-danger {
+    margin-top: 6px; padding-top: 6px;
+    border-top: 1px solid color-mix(in srgb, var(--scrim-text) 18%, transparent);
+  }
+  .task-failure .task-failure-action { height: 26px; font-size: 11px; font-weight: 500; padding: 0 10px;
+    border: 0; border-radius: var(--radius-sm); }
+  .task-failure .task-failure-secondary { border: 1px solid rgba(255,255,255,.28); background: transparent; color: var(--scrim-text); }
+  [data-theme='light'] .task-failure .task-failure-secondary {
+    border-color: var(--border); background: var(--secondary); color: var(--secondary-foreground); }
+  /* 共享 Button 的 light 分叉（只取形状与配色，几何以 .task-failure-action 为准） */
+  [data-theme='light'] .task-failure {
+    background: var(--card); color: var(--foreground);
+    border: 1px solid var(--border); box-shadow: var(--shadow-md);
+  }
+  [data-theme='light'] .task-failure .sum { color: var(--st-failed-text); }
+  [data-theme='light'] .task-failure .task-failure-detail { color: var(--muted-foreground); }
+  [data-theme='light'] .task-failure .task-failure-detail:hover { color: var(--foreground); }
+  [data-theme='light'] .failure-id { color: var(--muted-foreground); }
+  [data-theme='light'] .task-failure .acts-danger { border-top-color: var(--border); }
+  [data-theme='light'] .task-status-badge { border: 1px solid var(--border); }
+  [data-theme='light'] .act-primary { background: var(--secondary); color: var(--secondary-foreground);
+    border: 1px solid var(--border); }
+  [data-theme='light'] .act-danger { background: transparent; color: #dc2626; border: 1px solid var(--border); }
+  .act-danger { color: #fff; background: transparent; border: 1px solid rgba(255,255,255,.28); }
+  .act-primary { background: #fff; color: #1a1a1c; }
+  /* ==== 转录结束 ==== */
+</style>
+</head>
+<body>
+<script>
+  window.__PROBE = { clicks: 0, measure: () => null };
+  document.addEventListener('click', (event) => {
+    const target = event.target;
+    if (target && target.closest && target.closest('.task-failure-detail')) window.__PROBE.clicks += 1;
+  });
+</script>
+
+<script>
+  const CASES = [
+    { id: 'long', theme: 'light', index: 4, model: 'gpt-image-1',
+      text: '服务商在等待 107 秒后断开了连接（阶段：提交请求）。若反复出现，可尝试降低图片尺寸或参考图数量后重新提交' },
+    { id: 'short', theme: 'light', index: 5, model: 'grok-imagine-image-2.0', text: '提交失败。' },
+    { id: 'raw', theme: 'light', index: 6, model: 'grok-imagine-image-2.0',
+      text: '提交失败。HTTP 400 Generated image rejected by safety system: policy_violation (request_id=req_9f2a41c7)' },
+    { id: 'query', theme: 'light', index: 8, model: 'gpt-image-1', secondary: true,
+      text: '服务商在等待 107 秒后断开了连接（阶段：提交请求）。若反复出现，可尝试降低图片尺寸或参考图数量后重新提交' },
+    { id: 'dark', theme: 'dark', index: 7, model: 'gpt-image-1',
+      text: '服务商在等待 107 秒后断开了连接（阶段：提交请求）。若反复出现，可尝试降低图片尺寸或参考图数量后重新提交' },
+  ];
+
+  function cardHTML(item) {
+    const theme = item.theme === 'light' ? ' data-theme="light"' : '';
+    const primaryLabel = item.secondary ? '重新查询结果' : '重试';
+    const secondary = item.secondary
+      ? '<button type="button" class="task-failure-action task-failure-secondary">重新生成</button>'
+      : '';
+    return ''
+      + '<div class="cell" data-case="' + item.id + '"' + theme + '>'
+      + '<div class="task-node" data-node="' + item.id + '">'
+      + '<div class="task-surface"><div class="task-hatch"></div>'
+      + '<div class="task-failure" role="group">'
+      + '<div class="failure-head">'
+      + '<span class="task-status-badge">✕ 失败</span>'
+      + '<span class="failure-id">任务 #' + item.index + ' · ' + item.model + '</span>'
+      + '</div>'
+      + '<div class="failure-scroll">'
+      + '<p class="sum sum-clamp-2">' + item.text + '</p>'
+      + '</div>'
+      + '<div class="failure-acts">'
+      + '<div class="acts acts-primary">'
+      + '<button type="button" class="task-failure-action act-primary">' + primaryLabel + '</button>'
+      + secondary
+      + '<button type="button" class="task-failure-detail" aria-haspopup="dialog" aria-label="查看任务的完整错误信息">详情</button>'
+      + '</div>'
+      + '<div class="acts acts-danger">'
+      + '<button type="button" class="task-failure-action act-danger">删除任务</button>'
+      + '</div>'
+      + '</div>'
+      + '</div></div></div>'
+      + '<div class="caption">' + item.id + '</div>'
+      + '</div>';
+  }
+
+  document.body.insertAdjacentHTML('beforeend', CASES.map(cardHTML).join(''));
+
+  window.__PROBE.measure = () => Array.from(document.querySelectorAll('[data-node]')).map((node) => {
+    const scroll = node.querySelector('.failure-scroll');
+    const sum = node.querySelector('.sum');
+    const head = node.querySelector('.failure-head');
+    const entry = node.querySelector('.task-failure-detail');
+    const acts = node.querySelector('.acts-primary');
+    const rect = node.getBoundingClientRect();
+    const sumStyle = getComputedStyle(sum);
+    const lineHeight = parseFloat(sumStyle.lineHeight);
+    const entryRect = entry.getBoundingClientRect();
+    const actsRect = acts.getBoundingClientRect();
+    const entryStyle = getComputedStyle(entry);
+    return {
+      case: node.dataset.node,
+      node: { w: +rect.width.toFixed(1), h: +rect.height.toFixed(1) },
+      summary: {
+        client: sum.clientHeight, scroll: sum.scrollHeight,
+        lineHeight: +lineHeight.toFixed(2),
+        visibleLines: +(sum.clientHeight / lineHeight).toFixed(2),
+        totalLines: +(sum.scrollHeight / lineHeight).toFixed(2),
+        clamped: sum.clientHeight + 1 < sum.scrollHeight,
+        mask: sumStyle.maskImage || sumStyle.webkitMaskImage || 'none',
+      },
+      scrollArea: { client: scroll.clientHeight, scroll: scroll.scrollHeight,
+        hasScrollbar: scroll.scrollHeight > scroll.clientHeight + 1 },
+      head: { client: head.clientWidth, scroll: head.scrollWidth,
+        overflows: head.scrollWidth > head.clientWidth + 1 },
+      entry: { h: +entryRect.height.toFixed(1), w: +entryRect.width.toFixed(1),
+        rightGap: +(actsRect.right - entryRect.right).toFixed(1),
+        color: entryStyle.color },
+      actionsOverflow: acts.scrollWidth > acts.clientWidth + 1,
+    };
+  });
+</script>
+</body>
+</html>

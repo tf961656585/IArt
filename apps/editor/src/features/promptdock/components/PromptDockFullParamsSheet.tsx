@@ -13,6 +13,7 @@ import {
 import { usePromptDockStore } from '../promptDockStore';
 import type { ParamTranslate } from '../promptDockParamModel';
 import {
+  activeParamFields,
   inlineFields,
   paramFormFields,
   resolveParamLabel,
@@ -44,10 +45,11 @@ export function PromptDockFullParamsSheet({
     [t],
   );
 
-  const allFields = useMemo(() => paramFormFields(entry), [entry]);
+  // 条件不成立的字段不进入面板；求值与发送层共用同一个求值器。
+  const allFields = useMemo(() => activeParamFields(paramFormFields(entry), args), [entry, args]);
   const inlineSet = useMemo(
-    () => new Set(inlineFields(entry).map((f) => f.fieldKey)),
-    [entry],
+    () => new Set(inlineFields(entry, args).map((f) => f.fieldKey)),
+    [entry, args],
   );
 
   // 「已改 N」= 与 schema default_value 不一致的字段数（对齐原型 mod-dot 语义）。

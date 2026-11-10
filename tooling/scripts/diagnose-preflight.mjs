@@ -35,6 +35,31 @@ const gates = [
     cascade: '契约归属守卫失败说明共享 DTO 或状态集合可能出现本地重复事实源。',
   },
   {
+    name: 'guard:media-input-source-kind-coverage',
+    command: ['pnpm', 'guard:media-input-source-kind-coverage'],
+    cascade: '媒体输入 source_kind 覆盖守卫失败说明新增枚举值没有在 buildTaskSubmitMediaInputFromUploadItem 里补处理分支。',
+  },
+  {
+    name: 'guard:no-media-input-downgrade',
+    command: ['pnpm', 'guard:no-media-input-downgrade'],
+    cascade: '媒体输入降级日志守卫失败说明降级路径会静默丢素材，排查时看不到丢弃原因。',
+  },
+  {
+    name: 'guard:model-input-modalities',
+    command: ['pnpm', 'guard:model-input-modalities'],
+    cascade: '模型输入模态一致性守卫失败说明参数表里的上传组件与 capability.input_modalities 声明不一致。',
+  },
+  {
+    name: 'guard:no-structural-fields-in-normalized-arguments',
+    command: ['pnpm', 'guard:no-structural-fields-in-normalized-arguments'],
+    cascade: '结构字段剔除守卫失败说明 body/api/meta 可能重新混进 arguments。',
+  },
+  {
+    name: 'guard:nested-formdata-body-handled',
+    command: ['pnpm', 'guard:nested-formdata-body-handled'],
+    cascade: '嵌套 FormData 处理守卫失败说明 SchemaGenerationPayload 路径可能漏提媒体输入。',
+  },
+  {
     name: 'guard:no-runtime-json-leak',
     command: ['pnpm', 'guard:no-runtime-json-leak'],
     cascade: '运行时 JSON 泄漏守卫失败说明 Row 内部 *Json 字段可能重新进入通知、storage read 或 Renderer/Hub 消费层。',

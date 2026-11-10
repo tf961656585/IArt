@@ -14,6 +14,12 @@ import {
 import { cn } from '@/lib/utils';
 import { usePromptDockStore } from '../promptDockStore';
 import { describeDeploymentFailure } from '../deploymentFailureText';
+import {
+  CAPABILITY_UNLABELED_HINT,
+  CAPABILITY_UNLABELED_LABEL,
+  capabilityLabelsOf,
+  hasUnlabeledCapability,
+} from '../promptDockCapabilityLabels';
 import { rejudgeReferencesForModel } from '../referenceSlotModel';
 
 type PromptDockHeaderProps = {
@@ -47,7 +53,12 @@ export function PromptDockHeader({
   const modelOptions = useMemo(
     () =>
       catalog
-        .map((entry) => ({ modelId: entry.model_id }))
+        .map((entry) => ({
+          modelId: entry.model_id,
+          // 列表条目一并带出能力标签（spec 48 §6.2）：选模型时就能看出这个模型产出什么素材，
+          // 不必先提交一次再从档案里推断。
+          labels: capabilityLabelsOf(entry),
+        }))
         .sort((a, b) => a.modelId.localeCompare(b.modelId)),
     [catalog],
   );
@@ -58,76 +69,117 @@ export function PromptDockHeader({
     : describeDeploymentFailure(selectedEntry.deployment.failure_code);
 
   const deployable = selectedEntry?.deployment.deployable ?? null;
+  const selectedLabels = capabilityLabelsOf(selectedEntry);
+  const unlabeled = hasUnlabeledCapability(selectedEntry);
 
   return (
-    <Select
-      value={selectedModelId ?? ''}
-      onValueChange={(modelId) => {
-        const entry = catalog.find((e) => e.model_id === modelId) ?? null;
-        // 模型专属参数重置为新模型默认值；prompt 与引用保留（不兼容引用由校验呈现）。
-        // 用途随模型切换重判一次（设计 §4.5）：同名素材位原样保留、原用途不存在时按新模型的
-        // 默认落位重判、原本未指定的也重判一次。不重判会让「用不了」的用途一路拖到后端才失败。
-        setDraft({
-          modelId,
-          modelVersion: entry?.model_version ?? null,
-          arguments:
-            entry?.parameter_schema.default_values &&
-            Object.keys(entry.parameter_schema.default_values).length > 0
-              ? { ...entry.parameter_schema.default_values }
-              : {},
-          references: rejudgeReferencesForModel(references, entry),
-        });
-      }}
-    >
-      <SelectTrigger
-        size="sm"
-        className="dock-form-content h-7 max-w-[240px] min-w-0 items-center gap-1.5 rounded-lg border border-border bg-secondary px-2 text-xs font-medium text-foreground whitespace-nowrap hover:border-input"
-        title={deployable === false ? failureText : undefined}
-        data-testid="promptdock-model-select"
-        aria-label={t('modelSelector.placeholder', '选择模型')}
+    <>
+      <Select
+        value={selectedModelId ?? ''}
+        onValueChange={(modelId) => {
+          const entry = catalog.find((e) => e.model_id === modelId) ?? null;
+          // 模型专属参数重置为新模型默认值；prompt 与引用保留（不兼容引用由校验呈现）。
+          // 用途随模型切换重判一次（设计 §4.5）：同名素材位原样保留、原用途不存在时按新模型的
+          // 默认落位重判、原本未指定的也重判一次。不重判会让「用不了」的用途一路拖到后端才失败。
+          setDraft({
+            modelId,
+            modelVersion: entry?.model_version ?? null,
+            arguments:
+              entry?.parameter_schema.default_values &&
+              Object.keys(entry.parameter_schema.default_values).length > 0
+                ? { ...entry.parameter_schema.default_values }
+                : {},
+            references: rejudgeReferencesForModel(references, entry),
+          });
+        }}
       >
-        {selectedEntry !== null ? (
-          <span
-            role="img"
-            aria-label={
-              deployable ? t('promptDock.deploymentReady', '可以生成') : failureText
-            }
-            data-testid="promptdock-deployment-status"
-            className={cn(
-              'size-1.5 flex-none rounded-full',
-              deployable ? 'bg-(--pip-configured)' : 'bg-(--pip-invalid)',
-            )}
-          />
-        ) : null}
-        {/* model_id 直显（原型 .model-id：190px 内省略；宽度由 trigger max-w 钳制） */}
-        <span className="min-w-0 truncate">
-          <SelectValue placeholder={t('modelSelector.placeholder', '选择模型')} />
+        <SelectTrigger
+          size="sm"
+          className="dock-form-content h-7 max-w-[240px] min-w-0 items-center gap-1.5 rounded-lg border border-border bg-secondary px-2 text-xs font-medium text-foreground whitespace-nowrap hover:border-input"
+          title={deployable === false ? failureText : undefined}
+          data-testid="promptdock-model-select"
+          aria-label={t('modelSelector.placeholder', '选择模型')}
+        >
+          {selectedEntry !== null ? (
+            <span
+              role="img"
+              aria-label={
+                deployable ? t('promptDock.deploymentReady', '可以生成') : failureText
+              }
+              data-testid="promptdock-deployment-status"
+              className={cn(
+                'size-1.5 flex-none rounded-full',
+                deployable ? 'bg-(--pip-configured)' : 'bg-(--pip-invalid)',
+              )}
+            />
+          ) : null}
+          {/* model_id 直显（原型 .model-id：190px 内省略；宽度由 trigger max-w 钳制）。
+              必须显式给 SelectValue 子节点：Radix 默认把「选中条目」的整块内容投影进 trigger，
+              而条目里带能力标签，不覆写会让标签在 trigger 里再出现一遍（与右侧常驻标签重复）。 */}
+          <span className="min-w-0 truncate">
+            <SelectValue placeholder={t('modelSelector.placeholder', '选择模型')}>
+              {selectedModelId ?? ''}
+            </SelectValue>
+          </span>
+        </SelectTrigger>
+        {/* 弹层口径同原型（composer.js placePopover "up" / composer.css .popover）：
+            Dock 浮于画布底部 → 一律向上弹、左缘贴 trigger、间隙 6px、窗口 8px 内钳制；
+            z-dock-popover 必须高于 Dock 卡片 z-dock，否则弹层与 Dock 重叠区被卡片盖住
+            （docs/editor/elevation-z-model.md）；
+            宽度按原型裁定固定 328px，窄窗口钳制到视口内。 */}
+        <SelectContent
+          side="top"
+          align="start"
+          sideOffset={6}
+          collisionPadding={8}
+          className="z-dock-popover w-[328px] min-w-[8rem] max-w-[calc(100vw-16px)]"
+        >
+          {modelOptions.length === 0 ? (
+            <div className="px-2 py-1.5 text-xs text-muted-foreground">
+              {t('promptDock.noModels', '还没有可用的模型。关掉这个窗口后到主窗口「设置 → 服务商与模型」添加')}
+            </div>
+          ) : (
+            modelOptions.map((option) => (
+              <SelectItem key={option.modelId} value={option.modelId}>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="min-w-0 truncate">{option.modelId}</span>
+                  {option.labels.length === 0 ? (
+                    <span
+                      className="flex-none text-2xs text-muted-foreground"
+                      title={CAPABILITY_UNLABELED_HINT}
+                    >
+                      {CAPABILITY_UNLABELED_LABEL}
+                    </span>
+                  ) : (
+                    <span className="flex-none text-2xs text-muted-foreground">
+                      {option.labels.join('、')}
+                    </span>
+                  )}
+                </span>
+              </SelectItem>
+            ))
+          )}
+        </SelectContent>
+      </Select>
+      {/* 已选模型的能力标签：常驻在模型选择器右侧，说明走原生 title。
+          未标注不阻断提交，因此不给阻断色、不进前置校验 —— 它只回答「这个模型产出什么素材」。
+          （docs/editor/dock-布局规范.md R8：属于上下文组内部信息，不加分隔符。） */}
+      {unlabeled ? (
+        <span
+          className="flex-none rounded border border-border bg-muted/40 px-1.5 py-0.5 text-2xs text-muted-foreground"
+          title={CAPABILITY_UNLABELED_HINT}
+          data-testid="promptdock-capability-unlabeled"
+        >
+          {CAPABILITY_UNLABELED_LABEL}
         </span>
-      </SelectTrigger>
-      {/* 弹层口径同原型（composer.js placePopover "up" / composer.css .popover）：
-          Dock 浮于画布底部 → 一律向上弹、左缘贴 trigger、间隙 6px、窗口 8px 内钳制；
-          z-dock-popover 必须高于 Dock 卡片 z-dock，否则弹层与 Dock 重叠区被卡片盖住
-          （docs/editor/elevation-z-model.md）；
-          宽度按原型裁定固定 328px，窄窗口钳制到视口内。 */}
-      <SelectContent
-        side="top"
-        align="start"
-        sideOffset={6}
-        collisionPadding={8}
-        className="z-dock-popover w-[328px] min-w-[8rem] max-w-[calc(100vw-16px)]"
-      >
-        {modelOptions.length === 0 ? (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">
-            {t('promptDock.noModels', '还没有可用的模型。关掉这个窗口后到主窗口「设置 → 服务商与模型」添加')}
-          </div>
-        ) : (
-          modelOptions.map((option) => (
-            <SelectItem key={option.modelId} value={option.modelId}>
-              {option.modelId}
-            </SelectItem>
-          ))
-        )}
-      </SelectContent>
-    </Select>
+      ) : (
+        <span
+          className="flex-none text-2xs text-muted-foreground"
+          data-testid="promptdock-capability-labels"
+        >
+          {selectedLabels.join('、')}
+        </span>
+      )}
+    </>
   );
 }

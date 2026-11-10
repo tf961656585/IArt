@@ -70,9 +70,7 @@ const acceptanceResponse = (prompt: string): PromptDockBatchSubmitResponse => ({
     batch_id: 'batch_1',
     model_id: 'gpt-image-2',
     model_version: '1.0.0',
-    prompt,
-    params: { size: 'auto' },
-    task_count: 1,
+    intents: [{ prompt, params: { size: 'auto' }, task_count: 1 }],
     task_ids: ['task_1'],
     created_at: '2026-09-08T00:00:00.000Z',
   },
@@ -149,8 +147,8 @@ describe('PromptDock 提交受理后草稿保留（PD-AC-012）', () => {
 
     expect(submitGenerationBatch).toHaveBeenCalledTimes(2);
     const secondRequest = vi.mocked(submitGenerationBatch).mock.calls[1]?.[0];
-    expect(secondRequest?.prompt).toBe('二稿提示词');
-    expect(secondRequest?.task_count).toBe(1);
+    expect(secondRequest?.intents?.[0]?.prompt).toBe('二稿提示词');
+    expect(secondRequest?.intents?.[0]?.task_count).toBe(1);
     expect(usePromptDockStore.getState().draft.prompt).toBe('二稿提示词');
   });
 

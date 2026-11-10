@@ -20,6 +20,7 @@ import type {
   ParameterOverrides,
 } from '@iart/contracts';
 import { FieldLabelRow } from './InfoHint';
+import { CapabilityLabelsField } from './CapabilityLabelsField';
 import { USE_BUILTIN_RECIPE, familyDisplayName } from './GenerationModelForm';
 import type { InterfaceFormatOption } from './useInterfaceFormatOptions';
 import { resolveRecipeReferenceState } from './invalidity';
@@ -61,6 +62,8 @@ const advancedBlockedHint = (advancedOpen: boolean): string =>
 export type GenerationModelEditPayload = {
   /** 整体替换：该模型接受的素材位清单（按该族能力逐项勾选的结果） */
   acceptedMediaSlots: GenerationMediaSlotId[];
+  /** 整体替换：能力标签（spec 48 §4）；空数组 = 清空为未标注 */
+  capabilityLabels: string[];
   /** 出现即整体替换（UpdateBody 契约口径）；保存未改动的覆盖等于原样写回 */
   parameterOverrides: ParameterOverrides;
   /**
@@ -107,6 +110,8 @@ export function GenerationModelEditDialog({
     initialSelected: entry.accepted_media_slots,
   });
   const [busy, setBusy] = useState(false);
+  /** 能力标签回填记录现值：保存时整体替换，所以必须把现有标签原样带上（否则会清空）。 */
+  const [capabilityLabels, setCapabilityLabels] = useState<string[]>(entry.capability_labels);
   const liveMediaSlots = effectiveMediaSlots(mediaSlots);
   const overrides = useGenerationOverridesSection(
     loadParameterTemplate,
@@ -159,6 +164,7 @@ export function GenerationModelEditDialog({
     setBusy(true);
     void onSubmit({
       acceptedMediaSlots: liveMediaSlots,
+      capabilityLabels,
       // 未勾选素材位留下的条目不进请求体：后端按本次勾选的模板校验，带上它必然整次被拒。
       // 弹层状态里仍保留输入，同一次弹层内勾回来还能看到。
       parameterOverrides: pruneOfficialOverridesForLiveMediaSlots(
@@ -236,6 +242,12 @@ export function GenerationModelEditDialog({
           ) : null}
 
           <GenerationMediaSlotChecklist state={mediaSlots} />
+
+          <CapabilityLabelsField
+            id="generation-edit-capability-labels"
+            labels={capabilityLabels}
+            onChange={setCapabilityLabels}
+          />
 
           <GenerationOverridesSection state={overrides} liveMediaSlotIds={liveMediaSlots} />
 

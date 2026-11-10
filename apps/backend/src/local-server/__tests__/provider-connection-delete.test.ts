@@ -212,7 +212,7 @@ void test('删除服务商：有任务正在使用（活跃租约）时先拒绝
     credentialVersion: connection.credential_version ?? 0,
     connectionRevision: connection.revision,
   });
-  assert.ok(lease, 'lease should be acquired');
+  if (!lease.ok) throw new Error(`lease should be acquired: ${lease.reason}`);
 
   const blocked = await fetch(`${baseUrl}/api/provider-connections/${connectionId}`, {
     method: 'DELETE',
