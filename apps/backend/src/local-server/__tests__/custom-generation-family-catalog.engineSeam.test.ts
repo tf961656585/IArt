@@ -130,13 +130,16 @@ const installNotificationCapture = (): {
 };
 
 const waitFor = async (predicate: () => boolean, label: string): Promise<void> => {
-  for (let attempt = 0; attempt < 600; attempt += 1) {
+  // 按真实时间轮询：旧实现是「N 次 setImmediate 空转」，在快机器上够用、在 CI 上几乎不消耗
+  // 墙钟时间，会把「任务还在下载」误判成超时（2026-11-10 发布门禁实证：停在 submitting,downloading）。
+  const deadline = Date.now() + 10_000;
+  for (;;) {
     if (predicate()) return;
+    if (Date.now() > deadline) throw new Error(`waitFor timed out: ${label}`);
     await new Promise<void>((resolve) => {
-      setImmediate(resolve);
+      setTimeout(resolve, 20);
     });
   }
-  throw new Error(`waitFor timed out: ${label}`);
 };
 
 const startServer = async (t: TestContext): Promise<string> => {
