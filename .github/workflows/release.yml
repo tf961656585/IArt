@@ -134,7 +134,9 @@ jobs:
   release-mac:
     name: Build & upload (macOS arm64 + x64)
     needs: prepare-release
-    runs-on: macos-14
+    # macOS 14 镜像已于 2026-11-02 退役（GitHub 公告），钉到 15 的 arm64 镜像；
+    # 双架构仍在本 job 内经两次 electron-builder 调用产出（x64 由下载的 x64 Electron 承担）。
+    runs-on: macos-15
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
